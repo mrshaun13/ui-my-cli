@@ -1,16 +1,3 @@
-/**
- * App — root component. Owns selected session state and orchestrates all panels.
- *
- * Layout (CSS grid via .app-shell):
- *   ┌──────────────────────────────────────┐
- *   │  TopBar (logo, status, filter)       │
- *   ├───────────┬──────────────────────────┤
- *   │  Sidebar  │  Terminal (main area)    │
- *   │           ├──────────────────────────┤
- *   │           │  ControlBar              │
- *   └───────────┴──────────────────────────┘
- */
-
 import { useState, useCallback, useEffect } from 'react'
 import { useStatusFeed } from './hooks/useStatusFeed.js'
 import Sidebar from './components/Sidebar.jsx'
@@ -21,9 +8,8 @@ export default function App() {
   const { sessions, connected, error } = useStatusFeed()
   const [selectedId, setSelectedId] = useState(null)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
-  const [ptyActive, setPtyActive] = useState(false)
 
-  // Auto-select first "needs_you" session if nothing selected
+  // Auto-select first "needs_you" session on first load only
   useEffect(() => {
     if (selectedId || sessions.length === 0) return
     const urgent = sessions.find(s => s.status === 'needs_you')
@@ -38,24 +24,16 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ alias }),
     })
-    // No local state update needed — status feed will push the refresh within 3s
-  }, [])
-
-  const handleKillPty = useCallback(async (id) => {
-    await fetch(`/api/sessions/${id}/kill-pty`, { method: 'POST' })
-    setPtyActive(false)
   }, [])
 
   const handleSelect = useCallback((id) => {
     setSelectedId(id)
-    setPtyActive(true)
   }, [])
 
   const needsYouCount = sessions.filter(s => s.status === 'needs_you').length
 
   return (
     <div className="app-shell">
-      {/* ── Top Bar ─────────────────────────────────────────────────── */}
       <header className="topbar">
         <div className="topbar-logo">
           <div className="topbar-dot" />
@@ -91,7 +69,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* ── Sidebar ─────────────────────────────────────────────────── */}
       <Sidebar
         sessions={sessions}
         selectedId={selectedId}
@@ -101,7 +78,6 @@ export default function App() {
         onToggleFilter={() => setFilterNeedsYou(v => !v)}
       />
 
-      {/* ── Main Area ───────────────────────────────────────────────── */}
       <main className="main-area">
         {error && (
           <div className="error-banner">
@@ -110,10 +86,6 @@ export default function App() {
         )}
 
         {selectedId ? (
-          /*
-           * Key on selectedId forces a full Terminal remount when switching sessions.
-           * This cleanly tears down the old WebSocket + xterm instance and starts fresh.
-           */
           <Terminal key={selectedId} sessionId={selectedId} />
         ) : (
           <div className="main-empty">
@@ -123,11 +95,8 @@ export default function App() {
         )}
       </main>
 
-      {/* ── Control Bar ─────────────────────────────────────────────── */}
       <ControlBar
         session={selectedSession}
-        ptyActive={ptyActive}
-        onKillPty={handleKillPty}
         onRename={handleRename}
       />
     </div>

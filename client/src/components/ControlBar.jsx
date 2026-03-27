@@ -1,14 +1,34 @@
 /**
- * ControlBar — always-visible action strip at the bottom of the UI.
+ * ControlBar — always-visible context strip at the bottom of the UI.
  *
- * Shows context about the active session and provides click-to-act controls.
- * No keybindings to memorize.
+ * Shows:
+ *   - Plain-English status explanation ("Devin finished and is waiting for your reply")
+ *   - Last message snippet — so you immediately know WHAT it needs without scrolling
+ *   - Working directory
+ *   - Rename button
+ *
+ * Removed: "Disconnect PTY" — it was confusing and the auto-reconnect made it a no-op.
  */
 
 import { useState } from 'react'
-import { StatusBadge } from './AgentCard.jsx'
 
-export default function ControlBar({ session, ptyActive, onKillPty, onRename }) {
+const STATUS_EXPLANATION = {
+  needs_you: 'Devin finished and is waiting for your reply',
+  running:   'Devin is actively working',
+  thinking:  'Devin is processing your last message',
+  ready:     'Agent is ready — send a new task',
+  idle:      'No recent activity',
+}
+
+const STATUS_COLOR = {
+  needs_you: 'var(--yellow)',
+  running:   'var(--blue)',
+  thinking:  'var(--purple)',
+  ready:     'var(--accent)',
+  idle:      'var(--text-muted)',
+}
+
+export default function ControlBar({ session, onRename }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState('')
 
@@ -38,17 +58,29 @@ export default function ControlBar({ session, ptyActive, onKillPty, onRename }) 
     if (e.key === 'Escape') setRenaming(false)
   }
 
+  const statusColor = STATUS_COLOR[session.status] || 'var(--text-muted)'
+  const explanation = STATUS_EXPLANATION[session.status] || session.status
+
   return (
     <div className="controlbar">
       <div className="controlbar-session-info">
-        <div className="controlbar-session-id">
-          <StatusBadge status={session.status} />
-          &nbsp;&nbsp;
-          <code style={{ color: 'var(--accent-dim)', fontSize: '10px' }}>
+        {/* Status line — plain English so you know what's happening */}
+        <div className="controlbar-status-line">
+          <span className="controlbar-status-dot" style={{ background: statusColor }} />
+          <span style={{ color: statusColor, fontSize: '11px', fontWeight: 600 }}>
+            {explanation}
+          </span>
+          {session.snippet && session.status === 'needs_you' && (
+            <span className="controlbar-snippet" title={session.snippet}>
+              — "{session.snippet}"
+            </span>
+          )}
+        </div>
+        {/* Secondary line: path + session ID */}
+        <div className="controlbar-session-path" title={session.workingDir}>
+          <code style={{ color: 'var(--accent-dim)', marginRight: '8px' }}>
             {session.id.slice(0, 8)}
           </code>
-        </div>
-        <div className="controlbar-session-path" title={session.workingDir}>
           {session.workingDir}
         </div>
       </div>
@@ -58,17 +90,7 @@ export default function ControlBar({ session, ptyActive, onKillPty, onRename }) 
           <>
             <input
               autoFocus
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '11px',
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--accent-dim)',
-                borderRadius: '4px',
-                color: 'var(--text-primary)',
-                padding: '4px 8px',
-                outline: 'none',
-                width: '180px',
-              }}
+              className="controlbar-rename-input"
               value={nameValue}
               onChange={e => setNameValue(e.target.value)}
               onBlur={commitRename}
@@ -78,20 +100,9 @@ export default function ControlBar({ session, ptyActive, onKillPty, onRename }) 
             <button className="btn" onClick={() => setRenaming(false)}>Cancel</button>
           </>
         ) : (
-          <>
-            <button className="btn" onClick={startRename} title="Rename this session (also double-click in sidebar)">
-              ✎ Rename
-            </button>
-            {ptyActive && (
-              <button
-                className="btn btn-warn"
-                onClick={() => onKillPty(session.id)}
-                title="Disconnect the terminal (does not kill the Devin session)"
-              >
-                ⏹ Disconnect PTY
-              </button>
-            )}
-          </>
+          <button className="btn" onClick={startRename} title="Rename this session (also double-click in sidebar)">
+            ✎ Rename
+          </button>
         )}
       </div>
     </div>

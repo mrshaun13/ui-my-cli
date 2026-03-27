@@ -1,11 +1,14 @@
 /**
- * Terminal — renders an xterm.js terminal connected to the server PTY via WebSocket.
+ * Terminal — xterm.js terminal connected to the server PTY via WebSocket.
  *
- * Reconnect strategy:
- *   On any WebSocket close (server restart, network blip, etc.) the terminal
- *   automatically attempts to reconnect with exponential back-off.
- *   The xterm instance is preserved across reconnects so scroll history survives.
- *   Only a deliberate session switch (new sessionId prop) fully remounts.
+ * Design constraints:
+ *   - xterm instance is created ONCE per sessionId and never recreated on reconnect.
+ *     This preserves scrollback history across connection drops.
+ *   - onData (keyboard → PTY) is registered ONCE on xterm, held in a ref.
+ *     The ref always points at the current live WebSocket so we never leak listeners.
+ *   - WebSocket is torn down and rebuilt on reconnect without touching xterm.
+ *   - key={sessionId} on this component in App.jsx guarantees a full remount
+ *     when switching sessions, so there is no cross-session state bleed.
  *
  * WebSocket protocol:
  *   Client → Server: { type: 'input', data } | { type: 'resize', cols, rows }
@@ -26,45 +29,39 @@ const XTERM_THEME = {
   cursor:        '#00ffa3',
   cursorAccent:  '#020507',
   selectionBackground: 'rgba(0,255,163,0.15)',
-  black:         '#0d1117',
-  brightBlack:   '#3d5470',
-  red:           '#ff4d6a',
-  brightRed:     '#ff7088',
-  green:         '#00ffa3',
-  brightGreen:   '#4dffc4',
-  yellow:        '#f5c542',
-  brightYellow:  '#ffd766',
-  blue:          '#4d9fff',
-  brightBlue:    '#80baff',
-  magenta:       '#9d6fff',
-  brightMagenta: '#bf9fff',
-  cyan:          '#00d4e8',
-  brightCyan:    '#40e8f8',
-  white:         '#b0c8e0',
-  brightWhite:   '#e2e8f0',
+  black:         '#0d1117',  brightBlack:   '#3d5470',
+  red:           '#ff4d6a',  brightRed:     '#ff7088',
+  green:         '#00ffa3',  brightGreen:   '#4dffc4',
+  yellow:        '#f5c542',  brightYellow:  '#ffd766',
+  blue:          '#4d9fff',  brightBlue:    '#80baff',
+  magenta:       '#9d6fff',  brightMagenta: '#bf9fff',
+  cyan:          '#00d4e8',  brightCyan:    '#40e8f8',
+  white:         '#b0c8e0',  brightWhite:   '#e2e8f0',
 }
 
-const RECONNECT_DELAYS = [500, 1000, 2000, 4000, 8000] // ms, capped at last value
+const RECONNECT_DELAYS = [500, 1000, 2000, 4000, 8000]
 
 export default function Terminal({ sessionId }) {
-  const containerRef   = useRef(null)
-  const xtermRef       = useRef(null)
-  const fitAddonRef    = useRef(null)
-  const wsRef          = useRef(null)
-  const retryRef       = useRef(null)
-  const retryCountRef  = useRef(0)
-  const destroyedRef   = useRef(false)  // true when component is unmounting
+  const containerRef  = useRef(null)
+  const xtermRef      = useRef(null)
+  const fitAddonRef   = useRef(null)
+  // wsRef always points at the CURRENT live WebSocket.
+  // onData reads this ref — no listener rebinding needed on reconnect.
+  const wsRef         = useRef(null)
+  const retryRef      = useRef(null)
+  const retryCountRef = useRef(0)
+  const mountedRef    = useRef(true)  // false after unmount
 
-  const [wsState, setWsState] = useState('connecting') // 'connecting' | 'open' | 'reconnecting' | 'exited'
+  const [wsState, setWsState]   = useState('connecting')
   const [exitCode, setExitCode] = useState(null)
 
-  // ── xterm setup (once per sessionId) ────────────────────────────────────────
+  // ── Create xterm once per sessionId ──────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current) return
-    destroyedRef.current = false
+    mountedRef.current    = true
     retryCountRef.current = 0
 
-    const xterm = new XTerm({
+    const xterm    = new XTerm({
       theme: XTERM_THEME,
       fontFamily: '"Berkeley Mono", "Cascadia Code", "Fira Code", monospace',
       fontSize: 13,
@@ -80,39 +77,52 @@ export default function Terminal({ sessionId }) {
     xterm.open(containerRef.current)
     fitAddon.fit()
 
-    xtermRef.current   = xterm
+    xtermRef.current    = xterm
     fitAddonRef.current = fitAddon
 
-    // Resize observer — debounced to avoid storms
+    // Register onData ONCE. It writes to wsRef.current so it always uses
+    // the live socket without ever being re-registered.
+    xterm.onData(data => {
+      const ws = wsRef.current
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'input', data }))
+      }
+    })
+
+    // Resize observer — debounced
     const observer = new ResizeObserver(() => {
       clearTimeout(observer._t)
       observer._t = setTimeout(() => {
         if (!fitAddonRef.current || !xtermRef.current) return
-        fitAddonRef.current.fit()
+        try { fitAddonRef.current.fit() } catch { return }
         const ws = wsRef.current
         if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', cols: xtermRef.current.cols, rows: xtermRef.current.rows }))
+          ws.send(JSON.stringify({
+            type: 'resize',
+            cols: xtermRef.current.cols,
+            rows: xtermRef.current.rows,
+          }))
         }
       }, 60)
     })
     observer.observe(containerRef.current)
 
     return () => {
-      destroyedRef.current = true
+      mountedRef.current = false
       clearTimeout(retryRef.current)
       observer.disconnect()
+      // Close socket cleanly — onclose will fire but mountedRef guards the retry
       wsRef.current?.close()
+      wsRef.current = null
       xterm.dispose()
-      xtermRef.current   = null
+      xtermRef.current    = null
       fitAddonRef.current = null
-      wsRef.current      = null
     }
-  }, [sessionId])
+  }, [sessionId]) // full remount on session switch — guaranteed by key={sessionId} in App
 
-  // ── WebSocket connect / reconnect ────────────────────────────────────────────
+  // ── WebSocket connect / auto-reconnect ───────────────────────────────────
   const connect = useCallback(() => {
-    if (destroyedRef.current) return
-
+    if (!mountedRef.current) return
     const xterm    = xtermRef.current
     const fitAddon = fitAddonRef.current
     if (!xterm || !fitAddon) return
@@ -124,58 +134,46 @@ export default function Terminal({ sessionId }) {
       rows: String(xterm.rows),
     })
     const ws = new WebSocket(`${WS_BASE}/ws/terminal/${sessionId}?${params}`)
-    wsRef.current = ws
+    wsRef.current = ws  // point the ref at the new socket immediately
 
     ws.onopen = () => {
-      if (destroyedRef.current) { ws.close(); return }
+      if (!mountedRef.current) { ws.close(); return }
       retryCountRef.current = 0
       setWsState('open')
       setExitCode(null)
       xterm.focus()
     }
 
-    ws.onmessage = (evt) => {
+    ws.onmessage = ({ data: raw }) => {
       try {
-        const msg = JSON.parse(evt.data)
+        const msg = JSON.parse(raw)
         if (msg.type === 'output') xterm.write(msg.data)
         if (msg.type === 'exit')   { setExitCode(msg.exitCode); setWsState('exited') }
       } catch {
-        xterm.write(evt.data)
+        xterm.write(raw)
       }
     }
 
-    ws.onerror = () => {
-      // onerror always fires before onclose — nothing to do here, onclose handles it
-    }
-
-    ws.onclose = (evt) => {
-      if (destroyedRef.current) return
-
-      // Normal PTY exit — don't reconnect
-      if (wsState === 'exited') return
+    ws.onclose = () => {
+      if (!mountedRef.current) return
+      // wsRef might already point at a newer socket if we reconnected quickly
+      if (wsRef.current !== ws) return
 
       const delay = RECONNECT_DELAYS[Math.min(retryCountRef.current, RECONNECT_DELAYS.length - 1)]
       retryCountRef.current++
-
-      xterm.writeln(`\r\n\x1b[33m[disconnected — reconnecting in ${delay / 1000}s…]\x1b[0m`)
       setWsState('reconnecting')
+      xterm.writeln(`\r\n\x1b[33m[connection lost — retrying in ${delay / 1000}s]\x1b[0m`)
 
       retryRef.current = setTimeout(() => {
-        if (!destroyedRef.current) connect()
+        if (mountedRef.current) connect()
       }, delay)
     }
 
-    // Forward keystrokes to PTY
-    xterm.onData(data => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'input', data }))
-      }
-    })
-  }, [sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+    ws.onerror = () => { /* onclose always follows — handled there */ }
+  }, [sessionId])
 
-  // Kick off initial connection after xterm is mounted
+  // Start connection after xterm is mounted (next tick)
   useEffect(() => {
-    // Wait one tick so the xterm useEffect above runs first
     const t = setTimeout(connect, 0)
     return () => clearTimeout(t)
   }, [connect])
@@ -183,17 +181,16 @@ export default function Terminal({ sessionId }) {
   const manualReconnect = () => {
     clearTimeout(retryRef.current)
     retryCountRef.current = 0
-    wsRef.current?.close()
-    connect()
+    setWsState('connecting')
+    const old = wsRef.current
+    wsRef.current = null
+    old?.close()
+    setTimeout(connect, 50)
   }
-
-  const isConnecting   = wsState === 'connecting'
-  const isReconnecting = wsState === 'reconnecting'
-  const isExited       = wsState === 'exited'
 
   return (
     <div className="terminal-wrap">
-      {isConnecting && (
+      {wsState === 'connecting' && (
         <div className="terminal-loading">
           <div className="spinner" />
           Connecting to agent…
@@ -202,18 +199,18 @@ export default function Terminal({ sessionId }) {
 
       <div
         ref={containerRef}
-        style={{ width: '100%', height: '100%', display: isConnecting ? 'none' : 'block' }}
+        style={{ width: '100%', height: '100%', visibility: wsState === 'connecting' ? 'hidden' : 'visible' }}
       />
 
-      {(isReconnecting || isExited) && (
+      {(wsState === 'reconnecting' || wsState === 'exited') && (
         <div className="terminal-overlay-badge">
-          {isExited
-            ? `Session exited (code ${exitCode ?? '?'})`
-            : `Reconnecting…`
+          {wsState === 'exited'
+            ? `Process exited (code ${exitCode ?? '?'})`
+            : 'Connection lost — retrying…'
           }
           <button
             className="btn btn-primary"
-            style={{ padding: '3px 10px', fontSize: '10px' }}
+            style={{ padding: '3px 10px', fontSize: '10px', marginLeft: '8px' }}
             onClick={manualReconnect}
           >
             Reconnect now
