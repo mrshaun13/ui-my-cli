@@ -6,7 +6,7 @@
  *   - Last message snippet — so you immediately know WHAT it needs without scrolling
  *   - Working directory
  *   - Rename button
- *   - Remove session button (hides from dashboard, kills PTY)
+ *   - Archive session button (hides from dashboard, kills PTY — reversible via sidebar drawer)
  */
 
 import { useState } from 'react'
@@ -56,7 +56,7 @@ export default function ControlBar({ session, onRename, onRemove }) {
     if (e.key === 'Escape') setRenaming(false)
   }
 
-  const handleRemove = () => {
+  const handleArchive = () => {
     if (!confirming) { setConfirming(true); return }
     setConfirming(false)
     onRemove(session.id)
@@ -68,7 +68,6 @@ export default function ControlBar({ session, onRename, onRemove }) {
   return (
     <div className="controlbar">
       <div className="controlbar-session-info">
-        {/* Status line — plain English so you know what's happening */}
         <div className="controlbar-status-line">
           <span className="controlbar-status-dot" style={{ background: statusColor }} />
           <span style={{ color: statusColor, fontSize: '11px', fontWeight: 600 }}>
@@ -80,7 +79,6 @@ export default function ControlBar({ session, onRename, onRemove }) {
             </span>
           )}
         </div>
-        {/* Secondary line: path + session ID */}
         <div className="controlbar-session-path" title={session.workingDir}>
           <code style={{ color: 'var(--accent-dim)', marginRight: '8px' }}>
             {session.id.slice(0, 8)}
@@ -110,11 +108,11 @@ export default function ControlBar({ session, onRename, onRemove }) {
             </button>
             <button
               className={`btn ${confirming ? 'btn-danger' : ''}`}
-              onClick={handleRemove}
+              onClick={handleArchive}
               onBlur={() => setConfirming(false)}
-              title="Remove session from dashboard"
+              title="Archive session — hides it from the dashboard (reversible via sidebar)"
             >
-              {confirming ? '⚠ Confirm remove' : '✕ Remove'}
+              {confirming ? '⚠ Confirm archive' : '⊘ Archive'}
             </button>
           </>
         )}
@@ -122,3 +120,4 @@ export default function ControlBar({ session, onRename, onRemove }) {
     </div>
   )
 }
+

@@ -1,21 +1,113 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStatusFeed } from './hooks/useStatusFeed.js'
 import Sidebar from './components/Sidebar.jsx'
 import Terminal from './components/Terminal.jsx'
 import ControlBar from './components/ControlBar.jsx'
 import DashboardSplash from './components/DashboardSplash.jsx'
+import SessionPreview from './components/SessionPreview.jsx'
+
+// Fetch just the env config fields (MCP servers, skills, plugins) for the topbar.
+// Runs once on mount — these are global config, not session-specific.
+function useEnv() {
+  const [env, setEnv] = useState(null)
+  useEffect(() => {
+    fetch('/api/stats')
+      .then(r => r.json())
+      .then(d => setEnv({ mcpServers: d.mcpServers || [], skills: d.skills || [], plugins: d.plugins || [] }))
+      .catch(() => {})
+  }, [])
+  return env
+}
+
+function EnvChips({ mcpServers, skills, plugins }) {
+  return (
+    <div className="topbar-env">
+      {mcpServers.length > 0 && (
+        <div className="topbar-env-group">
+          <span className="topbar-env-label">MCP</span>
+          <div className="topbar-env-chips">
+            {mcpServers.map(s => (
+              <span key={s.name} className="topbar-chip topbar-chip-mcp" title={s.url || s.type}>{s.name}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {skills.length > 0 && (
+        <div className="topbar-env-group">
+          <span className="topbar-env-label">skills</span>
+          <div className="topbar-env-chips">
+            {skills.map(s => (
+              <span key={s.name} className="topbar-chip topbar-chip-skill" title={s.description || s.name}>/{s.name}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {plugins.length > 0 && (
+        <div className="topbar-env-group">
+          <span className="topbar-env-label">plugins</span>
+          <div className="topbar-env-chips">
+            {plugins.map(p => (
+              <span key={p.name}
+                className={`topbar-chip ${p.missing ? 'topbar-chip-missing' : 'topbar-chip-plugin'}`}
+                title={p.description || p.dir}
+              >{p.name}</span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Prompt strip — pinned first user prompt for the active session ───────────
+
+function PromptStrip({ prompt }) {
+  const [expanded, setExpanded] = useState(false)
+  const prevPromptRef = useRef(prompt)
+
+  // Collapse back to single-line whenever the session changes (new prompt text)
+  useEffect(() => {
+    if (prevPromptRef.current !== prompt) {
+      setExpanded(false)
+      prevPromptRef.current = prompt
+    }
+  }, [prompt])
+
+  if (!prompt) return null
+
+  const isLong = prompt.length > 120
+
+  return (
+    <div
+      className={`prompt-strip${expanded ? ' expanded' : ''}`}
+      onClick={isLong ? () => setExpanded(v => !v) : undefined}
+      title={isLong && !expanded ? 'Click to expand' : undefined}
+      style={{ cursor: isLong ? 'pointer' : 'default' }}
+    >
+      <span className="prompt-strip-label">prompt</span>
+      <span className="prompt-strip-text">{prompt}</span>
+      {isLong && (
+        <span className="prompt-strip-toggle">{expanded ? '▲' : '▼'}</span>
+      )}
+    </div>
+  )
+}
 
 export default function App() {
-  const { sessions, connected, error } = useStatusFeed()
+  const { sessions, connected, error, latestPrompt, viewedAt, markViewed } = useStatusFeed()
   const [selectedId, setSelectedId] = useState(null)
+  const [previewId,  setPreviewId]  = useState(null)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
+  const env = useEnv()
 
-  // If the selected session disappears (was removed), go back to splash
+  const goHome = () => { setSelectedId(null); setPreviewId(null) }
+
+  // If the selected/previewed session disappears, go back to splash
   useEffect(() => {
-    if (selectedId && sessions.length > 0 && !sessions.find(s => s.id === selectedId)) {
-      setSelectedId(null)
-    }
-  }, [sessions, selectedId])
+    if (sessions.length === 0) return
+    if (selectedId && !sessions.find(s => s.id === selectedId)) setSelectedId(null)
+    if (previewId  && !sessions.find(s => s.id === previewId))  setPreviewId(null)
+  }, [sessions, selectedId, previewId])
 
   const selectedSession = sessions.find(s => s.id === selectedId) || null
 
@@ -28,73 +120,91 @@ export default function App() {
   }, [])
 
   const handleRemove = useCallback(async (id) => {
-    setSelectedId(null)
+    if (selectedId === id) setSelectedId(null)
+    if (previewId  === id) setPreviewId(null)
     await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+  }, [selectedId, previewId])
+
+  const handleRestore = useCallback(async (id) => {
+    await fetch(`/api/sessions/${id}/restore`, { method: 'POST' })
   }, [])
 
   const handleSelect = useCallback((id) => {
     setSelectedId(id)
+    setPreviewId(null)   // close preview when going live
+    markViewed && markViewed(id)
+  }, [markViewed])
+
+  const handlePreview = useCallback((id) => {
+    setPreviewId(id)
+    setSelectedId(null)  // close live terminal when previewing
   }, [])
 
+  // Resume from preview → open live terminal
+  const handleResume = useCallback((id) => {
+    setPreviewId(null)
+    setSelectedId(id)
+    markViewed && markViewed(id)
+  }, [markViewed])
+
   const needsYouCount = sessions.filter(s => s.status === 'needs_you').length
+
+  // What to show in the main area
+  const mainView = selectedId ? 'terminal' : previewId ? 'preview' : 'splash'
 
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="topbar-logo">
+        <div className="topbar-logo" onClick={goHome} style={{ cursor: 'pointer' }} title="Go to dashboard">
           <div className="topbar-dot" />
           Devin <span className="accent">Dashboard</span>
         </div>
 
         <div className="topbar-divider" />
 
-        <div className="topbar-meta">
-          {connected
-            ? <><span>{sessions.length}</span> sessions</>
-            : 'connecting…'
-          }
-        </div>
+        {selectedSession
+          ? <PromptStrip prompt={selectedSession.firstUserPrompt} />
+          : env && (env.mcpServers.length > 0 || env.skills.length > 0 || env.plugins.length > 0) && (
+              <EnvChips mcpServers={env.mcpServers} skills={env.skills} plugins={env.plugins} />
+            )
+        }
 
         {needsYouCount > 0 && (
-          <>
-            <div className="topbar-divider" />
-            <div className="topbar-meta">
-              <span style={{ color: 'var(--yellow)' }}>⚡ {needsYouCount}</span> waiting for you
-            </div>
-          </>
+          <div className="topbar-meta" style={{ marginLeft: 'auto' }}>
+            <span style={{ color: 'var(--yellow)' }}>⚡ {needsYouCount}</span> waiting
+          </div>
         )}
-
-        <div className="topbar-filter">
-          <button
-            className={`filter-btn ${filterNeedsYou ? 'active' : ''}`}
-            onClick={() => setFilterNeedsYou(v => !v)}
-            title="Show only sessions that need your attention"
-          >
-            {filterNeedsYou ? '⚡ Waiting only' : 'All sessions'}
-          </button>
-        </div>
       </header>
 
       <Sidebar
         sessions={sessions}
         selectedId={selectedId}
+        previewId={previewId}
         onSelect={handleSelect}
+        onPreview={handlePreview}
         onRename={handleRename}
         onRemove={handleRemove}
+        onRestore={handleRestore}
         filterNeedsYou={filterNeedsYou}
         onToggleFilter={() => setFilterNeedsYou(v => !v)}
       />
 
       <main className="main-area">
         {error && (
-          <div className="error-banner">
-            <span>⚠</span> {error}
-          </div>
+          <div className="error-banner"><span>⚠</span> {error}</div>
         )}
 
-        {selectedId ? (
+        {mainView === 'terminal' && (
           <Terminal key={selectedId} sessionId={selectedId} />
-        ) : (
+        )}
+        {mainView === 'preview' && (
+          <SessionPreview
+            sessionId={previewId}
+            onResume={handleResume}
+            onArchive={handleRemove}
+          />
+        )}
+        {mainView === 'splash' && (
           <DashboardSplash sessions={sessions} connected={connected} />
         )}
       </main>

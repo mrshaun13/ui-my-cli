@@ -1,22 +1,16 @@
 /**
- * DashboardSplash — shown in the main area when no session is selected.
+ * DashboardSplash — shown when no session is selected.
  *
- * Panels:
- *   - Activity summary (24h / 48h / 72h / older buckets)
- *   - Sessions created per day (14-day sparkline)
- *   - Project breakdown (sessions + messages per repo)
- *   - Activity by hour heatmap (last 7 days)
- *   - Tool leaderboard
- *   - Model usage
- *   - MCP servers
- *   - Skills
- *   - Plugins
- *   - Recent prompts
+ * Layout:
+ *   Top: latest-prompt live banner
+ *   Two-column body:
+ *     Left:  tabbed activity chart (24h / 48h / 7-day) · project breakdown
+ *     Right: tool call bar chart · model usage
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-function useStats() {
+export function useStats() {
   const [stats, setStats] = useState(null)
   const [error, setError] = useState(null)
 
@@ -32,72 +26,484 @@ function useStats() {
   return { stats, error }
 }
 
-/** Mini bar — width as % of max */
-function Bar({ value, max, color = 'var(--accent)' }) {
-  const pct = max > 0 ? Math.round((value / max) * 100) : 0
+// ── Latest prompt — polls every 5 s ─────────────────────────────────────────
+// NOTE: Dead code — prompt strip is now session-scoped in App.jsx (lastUserPrompt).
+// Kept only to avoid removing InfoTip which is still used below.
+
+// A small ⓘ circle that shows a tooltip on hover.
+
+function InfoTip({ text }) {
+  const [show, setShow] = useState(false)
   return (
-    <div className="splash-bar-track">
-      <div className="splash-bar-fill" style={{ width: pct + '%', background: color }} />
+    <span className="info-tip-wrap"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}>
+      <span className="info-tip-icon">ⓘ</span>
+      {show && <span className="info-tip-bubble">{text}</span>}
+    </span>
+  )
+}
+
+// ── Latest prompt banner — prop-driven, no polling ───────────────────────────
+
+function LatestPromptBanner({ prompt }) {
+  if (!prompt) return null
+  const secs = Math.floor(Date.now() / 1000) - prompt.timestamp
+  const ago = secs < 60 ? `${secs}s ago` : secs < 3600 ? `${Math.floor(secs / 60)}m ago` : `${Math.floor(secs / 3600)}h ago`
+  return (
+    <div className="latest-prompt-banner">
+      <span className="latest-prompt-label">last prompt</span>
+      <span className="latest-prompt-text">{prompt.content}</span>
+      <span className="latest-prompt-age">{ago}</span>
     </div>
   )
 }
 
-/** Tiny sparkline for sessions-per-day */
-function Sparkline({ data }) {
-  const values = Object.values(data)
-  const max = Math.max(...values, 1)
-  const labels = Object.keys(data)
+// ── Shared chart constants ────────────────────────────────────────────────────
+
+const CHART_H = 72
+const CHART_W = 420
+
+const HOUR_LABELS = [0, 3, 6, 9, 12, 15, 18, 21].map(h => ({
+  h,
+  x: ((h / 23) * (CHART_W - 8) + 4).toFixed(1),
+  label: h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`,
+}))
+
+function fmtHour(h) {
+  if (h === 0)  return '12am'
+  if (h < 12)  return `${h}am`
+  if (h === 12) return '12pm'
+  return `${h - 12}pm`
+}
+
+// ── 24h / 48h line chart ──────────────────────────────────────────────────────
+
+function HourLineChart({ series, color, label }) {
+  const max = Math.max(...series, 1)
+  const [hover, setHover] = useState(null)
+
+  const pts = series.map((v, i) => {
+    const x = (i / 23) * (CHART_W - 8) + 4
+    const y = CHART_H - 4 - (v / max) * (CHART_H - 8)
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+
   return (
-    <div className="sparkline">
-      {values.map((v, i) => (
-        <div key={i} className="sparkline-col" title={`${labels[i]}: ${v} session${v !== 1 ? 's' : ''}`}>
-          <div
-            className="sparkline-bar"
-            style={{ height: Math.max(2, Math.round((v / max) * 40)) + 'px', opacity: v > 0 ? 1 : 0.15 }}
-          />
+    <div className="activity-chart-wrap">
+      <svg
+        viewBox={`0 0 ${CHART_W} ${CHART_H + 16}`}
+        preserveAspectRatio="none"
+        className="activity-chart-svg"
+      >
+        {[0.25, 0.5, 0.75, 1].map(f => {
+          const y = (CHART_H - 4 - f * (CHART_H - 8)).toFixed(1)
+          return <line key={f} x1="4" x2={CHART_W - 4} y1={y} y2={y}
+            stroke="var(--border)" strokeWidth="0.5" />
+        })}
+
+        {HOUR_LABELS.map(({ h, x, label: lbl }) => (
+          <text key={h} x={x} y={CHART_H + 13} textAnchor="middle"
+            fill="var(--text-muted)" fontSize="7" fontFamily="var(--font-mono)">
+            {lbl}
+          </text>
+        ))}
+
+        <polyline points={pts} fill="none" stroke={color}
+          strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+
+        {series.map((v, i) => {
+          const x = (i / 23) * (CHART_W - 8) + 4
+          const y = CHART_H - 4 - (v / max) * (CHART_H - 8)
+          const tipW = 110
+          const tipX = Math.max(4, Math.min(x - tipW / 2, CHART_W - tipW - 4))
+          return (
+            <g key={i}
+              onMouseEnter={() => setHover({ i, v, x, y })}
+              onMouseLeave={() => setHover(null)}
+              style={{ cursor: 'default' }}>
+              <rect x={x - 7} y={0} width={14} height={CHART_H + 2} fill="transparent" />
+              {hover?.i === i && (
+                <>
+                  <line x1={x} x2={x} y1={4} y2={CHART_H - 4}
+                    stroke={color} strokeWidth="0.8" strokeDasharray="2,2" opacity="0.5" />
+                  {v > 0 && <circle cx={x} cy={y} r={3} fill={color} />}
+                  <rect x={tipX} y={2} width={tipW} height={15} rx={3}
+                    fill="var(--bg-elevated)" stroke="var(--border-bright)" strokeWidth="0.8" />
+                  <text x={tipX + tipW / 2} y={13} textAnchor="middle"
+                    fill="var(--text-primary)" fontSize="8" fontFamily="var(--font-mono)">
+                    {fmtHour(i)}–{fmtHour((i + 1) % 24)}: {v} AI turns
+                  </text>
+                </>
+              )}
+            </g>
+          )
+        })}
+      </svg>
+      <div className="activity-chart-legend">
+        <span className="legend-dot" style={{ background: color }} />
+        <span className="legend-label">{label} · hover for counts</span>
+      </div>
+    </div>
+  )
+}
+
+// ── 7-day heatmap (hour × day grid) ──────────────────────────────────────────
+
+function WeekHeatmap({ days }) {
+  const [hover, setHover] = useState(null)
+  const allVals = days.flatMap(d => d.hours)
+  const maxVal = Math.max(...allVals, 1)
+
+  const CELL_W = 15
+  const CELL_H = 9
+  const LABEL_W = 26
+  const HOUR_HEADER = 12
+  const GRID_W = 24 * CELL_W
+
+  const hourLabelIdxs = [0, 3, 6, 9, 12, 15, 18, 21]
+
+  function cellColor(v) {
+    if (v === 0) return 'var(--bg-elevated)'
+    const intensity = v / maxVal
+    const alpha = 0.12 + intensity * 0.88
+    return `rgba(56, 217, 169, ${alpha.toFixed(2)})`
+  }
+
+  return (
+    <div className="activity-chart-wrap" style={{ position: 'relative' }}>
+      <svg
+        viewBox={`0 0 ${LABEL_W + GRID_W + 4} ${HOUR_HEADER + 7 * CELL_H + 2}`}
+        className="activity-chart-svg"
+        style={{ height: '92px' }}
+      >
+        {hourLabelIdxs.map(h => {
+          const x = LABEL_W + h * CELL_W + CELL_W / 2
+          const lbl = h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`
+          return (
+            <text key={h} x={x} y={9} textAnchor="middle"
+              fill="var(--text-muted)" fontSize="6.5" fontFamily="var(--font-mono)">
+              {lbl}
+            </text>
+          )
+        })}
+
+        {days.map((day, di) => {
+          const y = HOUR_HEADER + di * CELL_H
+          return (
+            <g key={day.date}>
+              <text x={LABEL_W - 4} y={y + CELL_H * 0.72} textAnchor="end"
+                fill="var(--text-muted)" fontSize="6.5" fontFamily="var(--font-mono)">
+                {day.label}
+              </text>
+              {day.hours.map((v, hi) => {
+                const cx = LABEL_W + hi * CELL_W
+                const isHov = hover?.di === di && hover?.hi === hi
+                return (
+                  <g key={hi}
+                    onMouseEnter={(e) => {
+                      const rect = e.currentTarget.closest('svg').getBoundingClientRect()
+                      const wrap = e.currentTarget.closest('.activity-chart-wrap').getBoundingClientRect()
+                      setHover({
+                        di, hi, v, day,
+                        px: e.clientX - wrap.left + 8,
+                        py: e.clientY - wrap.top - 36,
+                      })
+                    }}
+                    onMouseLeave={() => setHover(null)}
+                    style={{ cursor: 'default' }}>
+                    <rect
+                      x={cx + 0.5} y={y + 0.5}
+                      width={CELL_W - 1} height={CELL_H - 1}
+                      rx={1}
+                      fill={cellColor(v)}
+                      stroke={isHov ? 'var(--accent)' : 'transparent'}
+                      strokeWidth="0.8"
+                    />
+                  </g>
+                )
+              })}
+            </g>
+          )
+        })}
+
+      </svg>
+
+      {/* HTML tooltip — rendered outside SVG so it's never clipped */}
+      {hover && (
+        <div className="heatmap-tooltip" style={{ left: hover.px, top: hover.py }}>
+          <span className="heatmap-tooltip-day">{hover.day.label} {hover.day.date.slice(5)}</span>
+          <span className="heatmap-tooltip-sep">·</span>
+          <span>{fmtHour(hover.hi)}–{fmtHour((hover.hi + 1) % 24)}</span>
+          <span className="heatmap-tooltip-sep">·</span>
+          <span className="heatmap-tooltip-count">{hover.v} turn{hover.v !== 1 ? 's' : ''}</span>
         </div>
-      ))}
+      )}
+
+      <div className="activity-chart-legend">
+        <span className="legend-label" style={{ color: 'var(--text-muted)' }}>
+          last 7 days · darker = more activity · hover for counts
+        </span>
+      </div>
     </div>
   )
 }
 
-/** 24-slot hour heatmap */
-function HourHeatmap({ data }) {
-  const max = Math.max(...data, 1)
-  const hours = data.map((v, i) => {
-    const intensity = v / max
-    const bg = intensity === 0
-      ? 'var(--bg-elevated)'
-      : `rgba(0, 255, 163, ${0.08 + intensity * 0.85})`
-    const label = i === 0 ? '12a' : i < 12 ? `${i}a` : i === 12 ? '12p' : `${i - 12}p`
-    return { v, bg, label }
-  })
+// ── Tabbed Activity Chart container ──────────────────────────────────────────
+
+const ACTIVITY_TABS = [
+  { key: '24h', label: 'Last 24h' },
+  { key: '48h', label: '24–48h' },
+  { key: '7d',  label: '7-day grid' },
+]
+
+const ACTIVITY_TIP =
+  'An "AI turn" is one message node in a Devin conversation — every assistant reply, ' +
+  'tool call, or tool result counts as one turn. A single prompt you type may generate ' +
+  '10–50 turns as the agent reasons and uses tools. High counts = heavy activity.'
+
+function ActivityChart({ data }) {
+  const [tab, setTab] = useState('24h')
+  const { b24, b48, b7d } = data
+
   return (
-    <div className="hour-heatmap">
-      {hours.map((h, i) => (
-        <div key={i} className="hour-cell" style={{ background: h.bg }} title={`${h.label}: ${h.v.toLocaleString()} events`}>
-          <span className="hour-label">{h.label}</span>
-        </div>
-      ))}
+    <div className="act-tabs-wrap">
+      <div className="act-tabs">
+        {ACTIVITY_TABS.map(t => (
+          <button
+            key={t.key}
+            className={`act-tab${tab === t.key ? ' active' : ''}`}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === '24h' && <HourLineChart series={b24} color="var(--accent)" label="last 24 h" />}
+      {tab === '48h' && <HourLineChart series={b48} color="var(--blue)" label="24–48 h ago" />}
+      {tab === '7d'  && <WeekHeatmap days={b7d} />}
     </div>
   )
 }
 
-function StatCard({ label, value, sub, color }) {
+// ── Tool bar chart ────────────────────────────────────────────────────────────
+
+const TOOL_COLORS = {
+  exec:              'var(--yellow)',
+  read:              'var(--blue)',
+  edit:              'var(--accent)',
+  grep:              'var(--purple)',
+  write:             'var(--accent)',
+  todo_write:        'var(--text-secondary)',
+  get_output:        'var(--blue)',
+  webfetch:          'var(--purple)',
+  find_file_by_name: 'var(--blue)',
+  mcp_call_tool:     'var(--yellow)',
+}
+
+const TOOL_TIP =
+  'Total number of times Devin called each tool across all sessions ever recorded. ' +
+  '"exec" runs shell commands, "read" reads files, "edit" rewrites file content, ' +
+  '"grep" searches code, "mcp_call_tool" calls external MCP integrations, etc.'
+
+function ToolBarChart({ tools }) {
+  const [hover, setHover] = useState(null)
+  if (!tools.length) return <div className="splash-empty-note">No tool data yet.</div>
+
+  const maxCalls = tools[0].calls
+  const BAR_H = 12
+  const GAP = 5
+  const LABEL_W = 100
+  const COUNT_W = 44
+  const BAR_AREA = 80
+  const ROW_H = BAR_H + GAP
+  const totalH = tools.length * ROW_H - GAP
+
   return (
-    <div className="splash-stat-card">
-      <div className="splash-stat-value" style={{ color: color || 'var(--text-primary)' }}>{value}</div>
-      <div className="splash-stat-label">{label}</div>
-      {sub && <div className="splash-stat-sub">{sub}</div>}
+    <div style={{ position: 'relative' }}>
+      <svg
+        viewBox={`0 0 ${LABEL_W + COUNT_W + BAR_AREA} ${totalH}`}
+        style={{ width: '100%', height: `${totalH + 2}px`, display: 'block', overflow: 'visible' }}
+      >
+        {tools.map((t, i) => {
+          const y = i * ROW_H
+          const barW = Math.max(2, Math.round((t.calls / maxCalls) * BAR_AREA))
+          const color = TOOL_COLORS[t.name] || 'var(--border-bright)'
+          const isHov = hover === i
+          return (
+            <g key={t.name}
+              onMouseEnter={() => setHover(i)}
+              onMouseLeave={() => setHover(null)}
+              style={{ cursor: 'default' }}>
+              <text x={LABEL_W - 4} y={y + BAR_H * 0.78} textAnchor="end"
+                fill={isHov ? color : 'var(--text-secondary)'}
+                fontSize="9.5" fontFamily="var(--font-mono)">
+                {t.name}
+              </text>
+              <text x={LABEL_W + COUNT_W - 2} y={y + BAR_H * 0.78} textAnchor="end"
+                fill={isHov ? 'var(--text-secondary)' : 'var(--text-muted)'}
+                fontSize="8.5" fontFamily="var(--font-mono)">
+                {t.calls.toLocaleString()}
+              </text>
+              <rect x={LABEL_W + COUNT_W} y={y + 2} width={BAR_AREA} height={BAR_H - 4}
+                rx={2} fill="var(--bg-elevated)" />
+              <rect x={LABEL_W + COUNT_W} y={y + 2} width={barW} height={BAR_H - 4}
+                rx={2} fill={color} opacity={isHov ? 1 : 0.7} />
+            </g>
+          )
+        })}
+      </svg>
+      <div className="activity-chart-legend" style={{ marginTop: 4 }}>
+        <span className="legend-label" style={{ color: 'var(--text-muted)' }}>
+          cumulative calls · all sessions
+        </span>
+      </div>
     </div>
   )
 }
 
-function Section({ title, children }) {
+// ── BarRow — labeled horizontal bar for project / session breakdowns ──────────
+
+/**
+ * BarRow renders a single labeled bar in a breakdown list.
+ *
+ * Props:
+ *   label      — left-side text (repo name, model name, etc.)
+ *   countLabel — right-side secondary text ("3 sessions · 412 turns")
+ *   pctOf      — [value, max] tuple; bar fill = value/max * 100%
+ *   color      — CSS color string for the filled portion
+ */
+function BarRow({ label, countLabel, pctOf, color = 'var(--accent)' }) {
+  const [value, max] = pctOf
+  const pct = Math.max(2, Math.min(100, (value / (max || 1)) * 100))
+  return (
+    <div className="bar-row">
+      <div className="bar-row-header">
+        <span className="bar-row-label">{label}</span>
+        <span className="bar-row-count">{countLabel}</span>
+      </div>
+      <div className="bar-row-track">
+        <div className="bar-row-fill" style={{ width: pct + '%', background: color }} />
+      </div>
+    </div>
+  )
+}
+
+// ── Section wrapper ───────────────────────────────────────────────────────────
+
+function Section({ title, tip, children }) {
   return (
     <div className="splash-section">
-      <div className="splash-section-title">{title}</div>
+      <div className="splash-section-title">
+        {title}
+        {tip && <InfoTip text={tip} />}
+      </div>
       {children}
+    </div>
+  )
+}
+
+// ── Model usage ───────────────────────────────────────────────────────────────
+
+function fmtTokens(n) {
+  if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B'
+  if (n >= 1_000_000)     return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000)         return (n / 1_000).toFixed(0) + 'K'
+  return String(n)
+}
+
+function friendlyModel(raw) {
+  return raw
+    .replace('MODEL_PRIVATE_2',       'Private Preview')
+    .replace('MODEL_CLAUDE_4_SONNET', 'Sonnet 4 (early)')
+    .replace('claude-sonnet-4-6-thinking', 'Sonnet 4.6 ✦')
+    .replace('claude-opus-4-6-thinking',   'Opus 4.6 ✦')
+    .replace('claude-sonnet-4-6',          'Sonnet 4.6')
+    .replace('claude-opus-4-6',            'Opus 4.6')
+}
+
+/**
+ * ModelUsageTable — shows real per-model token consumption.
+ *
+ * Primary metric: output tokens (proxy for "how much the model did").
+ * Bar: stacked output / input / cache_write / cache_read — each bucket
+ *      drawn proportionally so the relative cost structure is visible.
+ * Numbers: output tokens headline, calls secondary.
+ */
+function ModelUsageTable({ models }) {
+  const [hovered, setHovered] = useState(null)
+
+  if (!models || models.length === 0) {
+    return <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>No token data yet.</div>
+  }
+
+  // Scale bars by output tokens — the "work done" axis
+  const maxOutput = models[0]?.outputTokens || 1
+
+  return (
+    <div className="model-usage-table">
+      {models.map(m => {
+        const total = m.inputTokens + m.outputTokens + m.cacheWriteTokens + m.cacheReadTokens
+        // Each bar segment as % of output-max (so all bars are relative to top model)
+        const outPct   = Math.max(2, (m.outputTokens     / maxOutput) * 100)
+        const inPct    = (m.inputTokens      / maxOutput) * 100
+        const cwPct    = (m.cacheWriteTokens / maxOutput) * 100
+        const crPct    = (m.cacheReadTokens  / maxOutput) * 8  // scale down — very large, less costly
+
+        const isHov = hovered === m.model
+        return (
+          <div
+            key={m.model}
+            className="model-usage-row"
+            onMouseEnter={() => setHovered(m.model)}
+            onMouseLeave={() => setHovered(null)}
+          >
+            <div className="model-usage-header">
+              <span className="model-usage-name" style={{ color: MODEL_COLORS[m.model] || 'var(--text-secondary)' }}>
+                {friendlyModel(m.model)}
+              </span>
+              <span className="model-usage-out">
+                {fmtTokens(m.outputTokens)} out
+              </span>
+              <span className="model-usage-calls">
+                {m.calls.toLocaleString()} calls
+              </span>
+            </div>
+
+            {/* Stacked bar: output | input | cache_write | cache_read */}
+            <div className="model-usage-bar-track" title={
+              `Output: ${m.outputTokens.toLocaleString()}\n` +
+              `Input: ${m.inputTokens.toLocaleString()}\n` +
+              `Cache write: ${m.cacheWriteTokens.toLocaleString()}\n` +
+              `Cache read: ${m.cacheReadTokens.toLocaleString()}\n` +
+              `Total API calls: ${m.calls.toLocaleString()}`
+            }>
+              <div className="model-bar-seg model-bar-output"   style={{ width: outPct + '%' }} />
+              <div className="model-bar-seg model-bar-input"    style={{ width: inPct  + '%' }} />
+              <div className="model-bar-seg model-bar-cwrite"   style={{ width: cwPct  + '%' }} />
+              <div className="model-bar-seg model-bar-cread"    style={{ width: crPct  + '%' }} />
+            </div>
+
+            {/* Expanded detail on hover */}
+            {isHov && (
+              <div className="model-usage-detail">
+                <span><span className="model-detail-dot model-bar-output" />Output <b>{m.outputTokens.toLocaleString()}</b></span>
+                <span><span className="model-detail-dot model-bar-input" />Input <b>{m.inputTokens.toLocaleString()}</b></span>
+                <span><span className="model-detail-dot model-bar-cwrite" />Cache write <b>{m.cacheWriteTokens.toLocaleString()}</b></span>
+                <span><span className="model-detail-dot model-bar-cread" />Cache read <b>{m.cacheReadTokens.toLocaleString()}</b></span>
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {/* Legend */}
+      <div className="model-usage-legend">
+        <span><span className="model-detail-dot model-bar-output" />output</span>
+        <span><span className="model-detail-dot model-bar-input" />input</span>
+        <span><span className="model-detail-dot model-bar-cwrite" />cache write</span>
+        <span><span className="model-detail-dot model-bar-cread" />cache read</span>
+      </div>
     </div>
   )
 }
@@ -106,192 +512,76 @@ const MODEL_COLORS = {
   'claude-sonnet-4-6-thinking': 'var(--blue)',
   'claude-opus-4-6-thinking':   'var(--purple)',
   'claude-opus-4-6':            'var(--accent)',
-  'claude-sonnet-4-6':          'var(--blue)',
+  'claude-sonnet-4-6':          '#4db8ff',
   'MODEL_PRIVATE_2':            'var(--yellow)',
-  'MODEL_CLAUDE_4_SONNET':      'var(--blue)',
+  'MODEL_CLAUDE_4_SONNET':      '#7ab8ff',
 }
 
-const TOOL_COLORS = {
-  exec:           'var(--yellow)',
-  read:           'var(--blue)',
-  edit:           'var(--accent)',
-  grep:           'var(--purple)',
-  write:          'var(--accent)',
-  todo_write:     'var(--text-secondary)',
-  get_output:     'var(--blue)',
-  webfetch:       'var(--purple)',
-  find_file_by_name: 'var(--blue)',
-  mcp_call_tool:  'var(--yellow)',
-}
+const MODEL_TIP =
+  'Real token consumption per model, read from each API call recorded in your ' +
+  'local sessions database. Output = tokens generated. Input = fresh context. ' +
+  'Cache write = prompt cache creation (1.25× input rate). ' +
+  'Cache read = cache hits (0.1× input rate). Hover a row for exact counts.'
 
-function relTime(ts) {
-  const s = Math.floor(Date.now() / 1000) - ts
-  if (s < 60) return `${s}s ago`
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
-  return `${Math.floor(s / 86400)}d ago`
-}
+const PROJECT_TIP =
+  'Breakdown by working directory (folder name). "Sessions" = how many Devin runs ' +
+  'were started in that project. "Turns" = total AI message nodes (assistant replies, ' +
+  'tool calls, tool results) — a rough proxy for how much work was done there.'
 
-export default function DashboardSplash({ sessions, connected }) {
+// ── Main component ────────────────────────────────────────────────────────────
+
+export default function DashboardSplash({ connected, latestPrompt }) {
   const { stats, error } = useStats()
 
-  if (!connected) {
-    return (
-      <div className="splash-loading">
-        <div className="spinner" />
-        Connecting…
-      </div>
-    )
-  }
+  if (!connected) return (
+    <div className="splash-loading"><div className="spinner" />Connecting…</div>
+  )
+  if (error) return (
+    <div className="splash-loading" style={{ color: 'var(--red)' }}>Stats error: {error}</div>
+  )
+  if (!stats) return (
+    <div className="splash-loading"><div className="spinner" />Loading…</div>
+  )
 
-  if (error) {
-    return <div className="splash-loading" style={{ color: 'var(--red)' }}>Failed to load stats: {error}</div>
-  }
+  const { projects, tools, activityByHour, models } = stats
 
-  if (!stats) {
-    return (
-      <div className="splash-loading">
-        <div className="spinner" />
-        Loading dashboard…
-      </div>
-    )
-  }
-
-  const { activity, sessionsByDay, projects, tools, activityByHour, models, recentPrompts, mcpServers, skills, plugins, model } = stats
-  const toolMax = tools[0]?.calls || 1
   const projMax = projects[0]?.messages || 1
-  const modelMax = models[0]?.sessions || 1
 
   return (
     <div className="splash">
-      {/* ── Top stat row ─────────────────────────────────────────────── */}
-      <div className="splash-stat-row">
-        <StatCard label="Active 24h"  value={activity.h24}    color="var(--accent)" />
-        <StatCard label="Active 48h"  value={activity.h48}    color="var(--blue)" />
-        <StatCard label="Active 72h"  value={activity.h72}    color="var(--text-secondary)" />
-        <StatCard label="Older"       value={activity.older}  color="var(--text-muted)" />
-        <StatCard label="Projects"    value={projects.length} color="var(--purple)" />
-        <StatCard label="Total Sessions" value={activity.total} />
-        {model && <StatCard label="Default Model" value={model.replace('claude-', '').replace('-thinking', ' ✦')} color="var(--yellow)" />}
-      </div>
-
+      <LatestPromptBanner prompt={latestPrompt} />
       <div className="splash-body">
-        {/* ── Left column ──────────────────────────────────────────────── */}
+
+        {/* ── Left column ──────────────────────────────────────────── */}
         <div className="splash-col">
 
-          {/* Sessions per day */}
-          <Section title="Sessions Created · Last 14 Days">
-            <Sparkline data={sessionsByDay} />
-            <div className="splash-spark-labels">
-              <span>{Object.keys(sessionsByDay)[0]?.slice(5)}</span>
-              <span>{Object.keys(sessionsByDay)[13]?.slice(5)}</span>
-            </div>
+          <Section title="AI Activity by Hour" tip={ACTIVITY_TIP}>
+            <ActivityChart data={activityByHour} />
           </Section>
 
-          {/* Activity by hour */}
-          <Section title="Activity by Hour · Last 7 Days">
-            <HourHeatmap data={activityByHour} />
-            <div className="splash-heat-sub">message events · local time</div>
-          </Section>
-
-          {/* Project breakdown */}
-          <Section title="Projects">
+          <Section title="Projects" tip={PROJECT_TIP}>
             {projects.map(p => (
-              <div key={p.name} className="splash-row">
-                <span className="splash-row-label">{p.name}</span>
-                <span className="splash-row-count">{p.sessions}s · {p.messages.toLocaleString()} msgs</span>
-                <Bar value={p.messages} max={projMax} color="var(--purple)" />
-              </div>
-            ))}
-          </Section>
-
-          {/* Model usage */}
-          <Section title="Models Used">
-            {models.map(m => (
-              <div key={m.model} className="splash-row">
-                <span className="splash-row-label" style={{ color: MODEL_COLORS[m.model] || 'var(--text-secondary)' }}>
-                  {m.model.replace('MODEL_PRIVATE_2', 'Private Preview').replace('MODEL_CLAUDE_4_SONNET', 'Sonnet 4')}
-                </span>
-                <span className="splash-row-count">{m.sessions} session{m.sessions !== 1 ? 's' : ''}</span>
-                <Bar value={m.sessions} max={modelMax} color={MODEL_COLORS[m.model] || 'var(--text-secondary)'} />
-              </div>
+              <BarRow key={p.name}
+                label={p.name}
+                countLabel={`${p.sessions} sessions · ${p.messages.toLocaleString()} turns`}
+                pctOf={[p.messages, projMax]}
+                color="var(--purple)"
+              />
             ))}
           </Section>
 
         </div>
 
-        {/* ── Right column ─────────────────────────────────────────────── */}
+        {/* ── Right column ─────────────────────────────────────────── */}
         <div className="splash-col">
 
-          {/* Tool leaderboard */}
-          <Section title="Tool Leaderboard · All Sessions">
-            {tools.map(t => (
-              <div key={t.name} className="splash-row">
-                <span className="splash-row-label" style={{ fontFamily: 'var(--font-mono)', color: TOOL_COLORS[t.name] || 'var(--text-secondary)' }}>
-                  {t.name}
-                </span>
-                <span className="splash-row-count">{t.calls.toLocaleString()}</span>
-                <Bar value={t.calls} max={toolMax} color={TOOL_COLORS[t.name] || 'var(--border-bright)'} />
-              </div>
-            ))}
+          <Section title="Tool Calls" tip={TOOL_TIP}>
+            <ToolBarChart tools={tools} />
           </Section>
 
-          {/* Recent prompts */}
-          <Section title="Recent Prompts">
-            {recentPrompts.map((p, i) => (
-              <div key={i} className="splash-prompt-row">
-                <span className="splash-prompt-time">{relTime(p.timestamp)}</span>
-                <span className="splash-prompt-text">{p.content.slice(0, 100)}{p.content.length > 100 ? '…' : ''}</span>
-              </div>
-            ))}
+          <Section title="Model Token Usage" tip={MODEL_TIP}>
+            <ModelUsageTable models={models} />
           </Section>
-
-          {/* MCP Servers */}
-          <Section title={`MCP Servers · ${mcpServers.length} configured`}>
-            {mcpServers.length === 0
-              ? <div className="splash-empty-note">None configured</div>
-              : mcpServers.map(s => (
-                  <div key={s.name} className="splash-chip-row">
-                    <span className="splash-chip splash-chip-mcp">{s.name}</span>
-                    <span className="splash-chip-meta">{s.type}{s.url ? ` · ${new URL(s.url).hostname}` : ''}</span>
-                  </div>
-                ))
-            }
-          </Section>
-
-          {/* Skills */}
-          <Section title={`Skills · ${skills.length} installed`}>
-            {skills.length === 0
-              ? <div className="splash-empty-note">No skills found</div>
-              : skills.map(s => (
-                  <div key={s.name} className="splash-chip-row">
-                    <span className="splash-chip splash-chip-skill">/{s.name}</span>
-                    {s.description && (
-                      <span className="splash-chip-meta" title={s.description}>
-                        {s.description.slice(0, 60)}{s.description.length > 60 ? '…' : ''}
-                      </span>
-                    )}
-                  </div>
-                ))
-            }
-          </Section>
-
-          {/* Plugins */}
-          {plugins.length > 0 && (
-            <Section title={`Plugins · ${plugins.length} configured`}>
-              {plugins.map(p => (
-                <div key={p.name} className="splash-chip-row">
-                  <span className={`splash-chip ${p.missing ? 'splash-chip-missing' : 'splash-chip-plugin'}`}>{p.name}</span>
-                  {p.missing
-                    ? <span className="splash-chip-meta" style={{ color: 'var(--red)' }}>path not found</span>
-                    : p.description
-                      ? <span className="splash-chip-meta">{p.description.slice(0, 60)}</span>
-                      : null
-                  }
-                </div>
-              ))}
-            </Section>
-          )}
 
         </div>
       </div>

@@ -80,6 +80,35 @@ export default function Terminal({ sessionId }) {
     xtermRef.current    = xterm
     fitAddonRef.current = fitAddon
 
+    // Smart Ctrl+C / Ctrl+V — mirrors WSL terminal behaviour:
+    //   Ctrl+C with selection → copy to clipboard, swallow the keypress
+    //   Ctrl+C without selection → pass \x03 (SIGINT) through to PTY
+    //   Ctrl+V → paste clipboard text into PTY
+    xterm.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown') return true
+
+      if (e.ctrlKey && e.key === 'c') {
+        const sel = xterm.getSelection()
+        if (sel) {
+          navigator.clipboard.writeText(sel).catch(() => {})
+          xterm.clearSelection()
+          return false  // swallow — don't send \x03 to PTY
+        }
+        return true  // no selection — let SIGINT through normally
+      }
+
+      if (e.ctrlKey && e.key === 'v') {
+        navigator.clipboard.readText().then(text => {
+          if (text && wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'input', data: text }))
+          }
+        }).catch(() => {})
+        return false  // swallow — we handle the paste ourselves
+      }
+
+      return true
+    })
+
     // Register onData ONCE. It writes to wsRef.current so it always uses
     // the live socket without ever being re-registered.
     xterm.onData(data => {

@@ -21,6 +21,15 @@ function getDb() {
   return db;
 }
 
+/** Open a fresh read-only connection for queries that must see the latest writes.
+ *  better-sqlite3 caches pages internally on long-lived connections, so the
+ *  singleton `db` can serve stale data for rows written by the Devin CLI process.
+ *  For cheap single-row lookups (latest-prompt) we open + immediately close.
+ */
+function freshDb() {
+  return new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
+}
+
 function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -97,27 +106,86 @@ function topTools(db) {
     .map(([name, calls]) => ({ name, calls }));
 }
 
-/** Message node activity by hour-of-day, last 7 days */
+/** Message node activity by hour-of-day, split into 3 time buckets */
 function activityByHour(db) {
-  const cutoff = Math.floor(Date.now() / 1000) - 7 * 86400;
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - 7 * 86400;
   const rows = db.prepare('SELECT created_at FROM message_nodes WHERE created_at > ?').all(cutoff);
-  const byHour = new Array(24).fill(0);
-  for (const r of rows) {
-    byHour[new Date(r.created_at * 1000).getHours()]++;
+
+  const b24  = new Array(24).fill(0);  // last 24 h, indexed by hour-of-day
+  const b48  = new Array(24).fill(0);  // 24–48 h ago, indexed by hour-of-day
+
+  // b7d: per-day rows for the past 7 days (days[0]=6 days ago ... days[6]=today)
+  // Each entry is { date: 'YYYY-MM-DD', label: 'Mon', hours: [24 ints] }
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400 * 1000);
+    const dateStr = d.toISOString().slice(0, 10);
+    const label = d.toLocaleDateString('en-US', { weekday: 'short' });
+    days.push({ date: dateStr, label, hours: new Array(24).fill(0) });
   }
-  return byHour;
+  const dayMap = {};
+  for (const d of days) dayMap[d.date] = d.hours;
+
+  for (const r of rows) {
+    const age = now - r.created_at;
+    const h   = new Date(r.created_at * 1000).getHours();
+    const dateStr = new Date(r.created_at * 1000).toISOString().slice(0, 10);
+    if      (age < 86400)  b24[h]++;
+    else if (age < 172800) b48[h]++;
+    if (dayMap[dateStr]) dayMap[dateStr][h]++;
+  }
+
+  return { b24, b48, b7d: days };
 }
 
-/** Model usage breakdown */
-function modelBreakdown(sessions) {
-  const counts = {};
-  for (const s of sessions) {
-    const m = s.model || 'unknown';
-    counts[m] = (counts[m] || 0) + 1;
+/**
+ * Real token usage breakdown per model, aggregated from message_node metadata.
+ *
+ * Each assistant message stores a `metadata.metrics` object with:
+ *   input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
+ * and a `metadata.generation_model` field — the *actual* model used for
+ * that API call, which may differ from session.model if the config changed.
+ *
+ * Token buckets:
+ *   input         — fresh input context tokens (most expensive)
+ *   output        — generated output tokens
+ *   cache_read    — prompt cache hits (cheap, ~0.1× input rate)
+ *   cache_write   — prompt cache writes (~1.25× input rate, one-time)
+ *   calls         — number of LLM API calls (useful to sanity-check)
+ */
+function modelTokenBreakdown(db) {
+  const rows = db.prepare(
+    "SELECT chat_message FROM message_nodes WHERE chat_message LIKE '%generation_model%'"
+  ).all();
+
+  const byModel = {};
+
+  for (const r of rows) {
+    let msg;
+    try { msg = JSON.parse(r.chat_message); } catch { continue; }
+    if (msg?.role !== 'assistant') continue;
+
+    const meta    = msg.metadata || {};
+    const model   = meta.generation_model;
+    const metrics = meta.metrics;
+    if (!model || !metrics) continue;
+
+    if (!byModel[model]) {
+      byModel[model] = { model, calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    }
+    const s = byModel[model];
+    s.calls            += 1;
+    s.inputTokens      += metrics.input_tokens         || 0;
+    s.outputTokens     += metrics.output_tokens        || 0;
+    s.cacheReadTokens  += metrics.cache_read_tokens    || 0;
+    s.cacheWriteTokens += metrics.cache_creation_tokens || 0;
   }
-  return Object.entries(counts)
-    .sort((a, b) => b[1] - a[1])
-    .map(([model, sessions]) => ({ model, sessions }));
+
+  // Sort by output tokens descending — output is the clearest proxy for "how much work"
+  return Object.values(byModel)
+    .sort((a, b) => b.outputTokens - a.outputTokens);
 }
 
 /** Most recent user prompts from prompt_history */
@@ -129,6 +197,15 @@ function recentPrompts(db, limit = 8) {
     timestamp: r.timestamp,
     isShell: !!r.is_shell,
   }));
+}
+
+/** Single most-recent prompt — cheap, safe to poll frequently */
+function latestPrompt(db) {
+  const row = db.prepare(
+    'SELECT content, timestamp, is_shell FROM prompt_history ORDER BY timestamp DESC LIMIT 1'
+  ).get();
+  if (!row) return null;
+  return { content: row.content, timestamp: row.timestamp, isShell: !!row.is_shell };
 }
 
 /** MCP servers from config.json mcpServers block */
@@ -207,7 +284,7 @@ function getStats() {
     projects:    projectBreakdown(db, sessions),
     tools:       topTools(db),
     activityByHour: activityByHour(db),
-    models:      modelBreakdown(sessions),
+    models:      modelTokenBreakdown(db),
     recentPrompts: recentPrompts(db),
     mcpServers:  mcpServers(config),
     skills:      installedSkills(),
@@ -218,4 +295,13 @@ function getStats() {
   };
 }
 
-module.exports = { getStats };
+function getLatestPrompt() {
+  const fdb = freshDb();
+  try {
+    return latestPrompt(fdb);
+  } finally {
+    fdb.close();
+  }
+}
+
+module.exports = { getStats, getLatestPrompt };

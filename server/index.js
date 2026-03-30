@@ -19,14 +19,15 @@
 
 const http = require('http');
 const path = require('path');
+const fs   = require('fs');
 const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const url = require('url');
 
-const { listSessions, getSession, renameSession, hideSession } = require('./sessions');
+const { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession } = require('./sessions');
 const { attachClient, killPty, isPtyActive, activePtySessions } = require('./pty-manager');
-const { getStats } = require('./stats');
+const { getStats, getLatestPrompt } = require('./stats');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
 const IS_DEV = process.env.NODE_ENV !== 'production';
@@ -66,11 +67,41 @@ app.get('/api/stats', (_req, res) => {
   }
 });
 
+app.get('/api/latest-prompt', (_req, res) => {
+  try {
+    res.json(getLatestPrompt() || {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/sessions', (_req, res) => {
   try {
     res.json(listSessions());
   } catch (err) {
     console.error('[sessions] list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// NOTE: /archived and /preview/:id must come before /:id so Express doesn't
+// swallow literal strings as a session ID parameter.
+app.get('/api/sessions/archived', (_req, res) => {
+  try {
+    res.json(listArchivedSessions());
+  } catch (err) {
+    console.error('[sessions] archived list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/sessions/:id/preview', (req, res) => {
+  try {
+    const preview = getSessionPreview(req.params.id);
+    if (!preview) return res.status(404).json({ error: 'Session not found' });
+    res.json(preview);
+  } catch (err) {
+    console.error('[sessions] preview error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -109,7 +140,17 @@ app.delete('/api/sessions/:id', (req, res) => {
   try {
     // Kill any running PTY first so the process doesn't linger
     killPty(req.params.id);
-    hideSession(req.params.id);
+    hideSession(req.params.id);  // "archive" in user-facing terms
+    broadcastSessions();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/sessions/:id/restore', (req, res) => {
+  try {
+    restoreSession(req.params.id);
     broadcastSessions();
     res.json({ ok: true });
   } catch (err) {
@@ -144,6 +185,47 @@ function broadcastSessions() {
   }
   for (const client of statusClients) {
     if (client.readyState === 1) client.send(payload);
+  }
+}
+
+function broadcastLatestPrompt() {
+  if (statusClients.size === 0) return;
+  let payload;
+  try {
+    const p = getLatestPrompt();
+    if (!p) return;
+    payload = JSON.stringify({ type: 'latest-prompt', data: p });
+  } catch {
+    return;
+  }
+  for (const client of statusClients) {
+    if (client.readyState === 1) client.send(payload);
+  }
+}
+
+// Watch the SQLite WAL file — the Devin CLI writes here every time a prompt
+// is submitted. Debounce 120ms to avoid double-fires on WAL + SHM updates.
+function watchDbForPrompts() {
+  const { resolveDbPath } = require('./db-path');
+  const dbPath = resolveDbPath();
+  const walPath = dbPath + '-wal';
+
+  // Watch both the main DB and WAL — depending on SQLite journal mode either
+  // one may be the first file to change after a write.
+  let debounceTimer = null;
+  function onDbChange() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(broadcastLatestPrompt, 120);
+  }
+
+  for (const p of [dbPath, walPath]) {
+    if (fs.existsSync(p)) {
+      try {
+        fs.watch(p, onDbChange);
+      } catch (e) {
+        console.warn(`[prompt-watch] could not watch ${p}:`, e.message);
+      }
+    }
   }
 }
 
@@ -187,6 +269,15 @@ wss.on('connection', (ws, req) => {
     push(); // Send immediately on connect
     const interval = setInterval(push, 3000);
 
+    // Also send the latest prompt immediately so the client doesn't wait for
+    // the next DB write event.
+    try {
+      const p = getLatestPrompt();
+      if (p && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'latest-prompt', data: p }));
+      }
+    } catch { /* ignore */ }
+
     const cleanup = () => {
       clearInterval(interval);
       statusClients.delete(ws);
@@ -208,6 +299,7 @@ server.listen(PORT, '127.0.0.1', () => {
     console.log(`Client dev server: http://localhost:5173`);
   }
   console.log(`Press Ctrl+C to stop.\n`);
+  watchDbForPrompts();
 });
 
 server.on('error', err => {

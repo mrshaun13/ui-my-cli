@@ -1,15 +1,14 @@
 /**
  * AgentCard — one row in the sidebar representing a Devin session.
  *
- * Features:
- *  - Status icon with color-coded state (needs_you, running, thinking, idle, ready)
- *  - Project/repo name always visible below the title
- *  - Double-click title to rename inline
- *  - Shows last-message snippet and relative time
- *  - Optional label chip: shown if session.label is set and is NOT a status marker
+ * Click targets:
+ *   Status icon (left square)  → onPreview(id)  — opens read-only preview, no PTY
+ *   Rest of card               → onClick(id)    — opens live terminal (existing behavior)
  *
- * Note: ThinkingDots are used by the status icon (and re-exported for StatusBadge)
- * but intentionally NOT shown in the snippet area to avoid flicker on status changes.
+ * Props:
+ *   isOld     — true when idle + older than cold threshold. Dims card, shows Archive btn.
+ *   onArchive — called with session.id to archive the session.
+ *   onPreview — called with session.id to open the read-only preview panel.
  */
 
 import { useState, useRef, useEffect } from 'react'
@@ -47,14 +46,16 @@ export function StatusBadge({ status }) {
   )
 }
 
-export default function AgentCard({ session, isActive, onClick, onRename, onRemove }) {
+export default function AgentCard({ session, isActive, isPreview, isOld, onClick, onPreview, onRename, onArchive }) {
   const [renaming, setRenaming] = useState(false)
-  const [nameValue, setNameValue] = useState(session.title)
+  const [nameValue, setNameValue] = useState(session.alias || session.title)
   const inputRef = useRef(null)
 
+  const displayName = session.alias || session.title
+
   useEffect(() => {
-    if (!renaming) setNameValue(session.title)
-  }, [session.title, renaming])
+    if (!renaming) setNameValue(displayName)
+  }, [displayName, renaming])
 
   useEffect(() => {
     if (renaming) inputRef.current?.select()
@@ -78,13 +79,26 @@ export default function AgentCard({ session, isActive, onClick, onRename, onRemo
     e.stopPropagation()
   }
 
+  const cardClasses = [
+    'agent-card',
+    isActive   ? 'active'           : '',
+    isPreview  ? 'previewing'       : '',
+    session.status,
+    isOld      ? 'agent-card-old'   : '',
+  ].filter(Boolean).join(' ')
+
   return (
     <div
-      className={`agent-card ${isActive ? 'active' : ''} ${session.status}`}
+      className={cardClasses}
       onClick={onClick}
       title={session.workingDir}
     >
-      <div className={`agent-status-icon ${session.status}`}>
+      {/* ── Status icon — click = preview, no PTY spawn ─────────── */}
+      <div
+        className={`agent-status-icon ${session.status}${isPreview ? ' previewing' : ''}`}
+        onClick={e => { e.stopPropagation(); onPreview && onPreview(session.id) }}
+        title="Click to preview session (read-only, no PTY)"
+      >
         {STATUS_ICON[session.status] ?? '·'}
       </div>
 
@@ -105,32 +119,38 @@ export default function AgentCard({ session, isActive, onClick, onRename, onRemo
             onDoubleClick={startRename}
             title="Double-click to rename"
           >
-            {session.title}
+            {displayName}
           </span>
-        )}
-        {session.label && (
-          <span className="agent-label-chip">{session.label}</span>
         )}
         <span className="agent-time">{session.lastActivityAgo}</span>
       </div>
 
-      {/* Project/repo — always visible so you know which repo before clicking */}
       <div className="agent-project">
         <span className="agent-project-icon">▶</span>
         {session.project}
       </div>
 
-      {/* Snippet: always show last message text — never animated dots */}
       <div className="agent-snippet">
         {session.snippet || session.workingDir}
       </div>
 
-      {/* Remove button — visible on hover */}
-      <button
-        className="agent-remove-btn"
-        title="Remove session"
-        onClick={e => { e.stopPropagation(); onRemove(session.id) }}
-      >✕</button>
+      {/* Old+idle: one-click archive button (no confirm — reversible) */}
+      {isOld ? (
+        <button
+          className="agent-archive-btn agent-archive-btn-old"
+          title="Archive session (reversible)"
+          onClick={e => { e.stopPropagation(); onArchive(session.id) }}
+        >
+          ⊘ Archive
+        </button>
+      ) : (
+        <button
+          className="agent-remove-btn"
+          title="Archive session"
+          onClick={e => { e.stopPropagation(); onArchive(session.id) }}
+        >✕</button>
+      )}
     </div>
   )
 }
+
