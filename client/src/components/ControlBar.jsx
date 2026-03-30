@@ -13,16 +13,16 @@ import { useState } from 'react'
 
 const STATUS_EXPLANATION = {
   question: 'Devin finished and is waiting for your reply',
-  running:   'Devin is actively working',
-  thinking:  'Devin is processing your last message',
-  idle:      'No recent activity',
+  active:   'Devin is actively working',
+  finished: 'Devin has finished — no reply needed',
+  idle:     'No recent activity',
 }
 
 const STATUS_COLOR = {
   question: 'var(--yellow)',
-  running:   'var(--blue)',
-  thinking:  'var(--purple)',
-  idle:      'var(--text-muted)',
+  active:   'var(--blue)',
+  finished: 'var(--accent)',
+  idle:     'var(--text-muted)',
 }
 
 export default function ControlBar({ session, onRename, onRemove }) {

@@ -15,33 +15,23 @@ import { useState, useRef, useEffect } from 'react'
 
 const STATUS_ICON = {
   question: '⚡',
-  running:   '⚙',
-  thinking:  '◎',
-  idle:      '·',
+  active:   '⚙',
+  finished: '✓',
+  idle:     '·',
 }
 
 const STATUS_LABEL = {
   question: 'needs you',
-  running:   'running',
-  thinking:  'thinking',
-  idle:      'idle',
-}
-
-export function ThinkingDots() {
-  return (
-    <span style={{ display: 'inline-flex', gap: '2px', alignItems: 'center' }}>
-      <span className="thinking-dot" />
-      <span className="thinking-dot" />
-      <span className="thinking-dot" />
-    </span>
-  )
+  active:   'running',
+  finished: 'finished',
+  idle:     'idle',
 }
 
 export function StatusBadge({ status }) {
   return (
     <span className={`status-badge ${status}`}>
       {STATUS_ICON[status] ?? '·'}
-      {status === 'thinking' ? <ThinkingDots /> : (STATUS_LABEL[status] ?? status)}
+      {STATUS_LABEL[status] ?? status}
     </span>
   )
 }

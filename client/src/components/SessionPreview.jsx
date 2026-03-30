@@ -16,18 +16,18 @@ import { useEffect, useRef, useState } from 'react'
 
 const STATUS_LABEL = {
   question: 'Needs your input',
-  running:   'Running',
-  thinking:  'Thinking',
-  idle:      'Idle',
-  archived:  'Archived',
+  active:   'Running',
+  finished: 'Finished',
+  idle:     'Idle',
+  archived: 'Archived',
 }
 
 const STATUS_COLOR = {
   question: 'var(--yellow)',
-  running:   'var(--blue)',
-  thinking:  'var(--purple)',
-  idle:      'var(--text-muted)',
-  archived:  'var(--text-muted)',
+  active:   'var(--blue)',
+  finished: 'var(--accent)',
+  idle:     'var(--text-muted)',
+  archived: 'var(--text-muted)',
 }
 
 const TOOL_COLORS = {
