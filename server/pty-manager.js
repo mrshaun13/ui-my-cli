@@ -8,13 +8,22 @@
  *
  * On WSL: we need to ensure the shell environment is properly inherited
  * so the devin binary is on PATH.
+ *
+ * Output buffering:
+ *   Each PTY keeps a rolling byte buffer (SCROLLBACK_BYTES) of recent output.
+ *   New WebSocket clients receive the buffered output immediately on connect,
+ *   so switching sessions and coming back shows the terminal in its last state
+ *   rather than a blank screen.
  */
 
 const os = require('os');
 const fs = require('fs');
 const { spawn } = require('node-pty');
 
-// Map of sessionId -> { pty, clients: Set<WebSocket> }
+// ~256 KB of scrollback replay per session — enough for a full screen + history
+const SCROLLBACK_BYTES = 256 * 1024;
+
+// Map of sessionId -> { pty, clients: Set<WebSocket>, scrollback: Buffer[] }
 const ptys = new Map();
 
 /**
@@ -39,15 +48,44 @@ function getShellArgs(sessionId) {
 }
 
 /**
- * Spawns a new PTY for the given session, or returns the existing one.
+ * Appends data to a session's scrollback ring buffer.
+ * Keeps total stored bytes under SCROLLBACK_BYTES by dropping oldest chunks.
+ */
+function appendScrollback(entry, data) {
+  entry.scrollback.push(data);
+  entry.scrollbackSize += data.length;
+  while (entry.scrollbackSize > SCROLLBACK_BYTES && entry.scrollback.length > 1) {
+    const dropped = entry.scrollback.shift();
+    entry.scrollbackSize -= dropped.length;
+  }
+}
+
+/**
+ * Sends all buffered scrollback to a single WebSocket client as one replay message.
+ * We send it as output chunks (same protocol as live data) so the client handles
+ * it identically to live output.
+ */
+function replayScrollback(entry, ws) {
+  if (!entry.scrollback.length) return;
+  const combined = entry.scrollback.join('');
+  if (combined.length === 0) return;
+  if (ws.readyState === 1 /* OPEN */) {
+    ws.send(JSON.stringify({ type: 'output', data: combined }));
+  }
+}
+
+/**
+ * Spawns a new PTY for the given session, or attaches to existing one.
  * workingDir: the session's working_directory from the DB — used as PTY cwd
  * so Devin doesn't show the workspace trust prompt.
  * ws: initial WebSocket client to attach.
  */
 function spawnPty(sessionId, workingDir, ws, cols = 220, rows = 50) {
   if (ptys.has(sessionId)) {
-    // Attach new client to existing PTY
+    // Attach new client to existing PTY — replay scrollback so the terminal
+    // isn't blank after a session switch.
     const entry = ptys.get(sessionId);
+    replayScrollback(entry, ws);
     entry.clients.add(ws);
     return entry.pty;
   }
@@ -73,11 +111,17 @@ function spawnPty(sessionId, workingDir, ws, cols = 220, rows = 50) {
     },
   });
 
-  const entry = { pty, clients: new Set([ws]) };
+  const entry = {
+    pty,
+    clients: new Set([ws]),
+    scrollback: [],
+    scrollbackSize: 0,
+  };
   ptys.set(sessionId, entry);
 
-  // Broadcast PTY output to all attached clients
+  // Broadcast PTY output to all attached clients and accumulate scrollback
   pty.onData(data => {
+    appendScrollback(entry, data);
     const dead = [];
     for (const client of entry.clients) {
       if (client.readyState === 1 /* OPEN */) {
