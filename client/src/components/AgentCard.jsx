@@ -6,6 +6,10 @@
  *  - Project/repo name always visible below the title
  *  - Double-click title to rename inline
  *  - Shows last-message snippet and relative time
+ *  - Optional label chip: shown if session.label is set and is NOT a status marker
+ *
+ * Note: ThinkingDots are used by the status icon (and re-exported for StatusBadge)
+ * but intentionally NOT shown in the snippet area to avoid flicker on status changes.
  */
 
 import { useState, useRef, useEffect } from 'react'
@@ -43,6 +47,13 @@ export function StatusBadge({ status }) {
       {status === 'thinking' ? <ThinkingDots /> : (STATUS_LABEL[status] ?? status)}
     </span>
   )
+}
+
+// Returns true if the label string looks like a status marker rather than a
+// user-assigned rename (e.g. "ready for work", "waiting", "done").
+const isStatusLabel = (s) => {
+  const lower = s.toLowerCase()
+  return lower.includes('ready') || lower.includes('waiting') || lower.includes('done')
 }
 
 export default function AgentCard({ session, isActive, onClick, onRename }) {
@@ -106,6 +117,9 @@ export default function AgentCard({ session, isActive, onClick, onRename }) {
             {session.title}
           </span>
         )}
+        {session.label && !isStatusLabel(session.label) && (
+          <span className="agent-label-chip">{session.label}</span>
+        )}
         <span className="agent-time">{session.lastActivityAgo}</span>
       </div>
 
@@ -115,12 +129,9 @@ export default function AgentCard({ session, isActive, onClick, onRename }) {
         {session.project}
       </div>
 
+      {/* Snippet: always show last message text — never animated dots */}
       <div className="agent-snippet">
-        {session.status === 'thinking' ? (
-          <ThinkingDots />
-        ) : (
-          session.snippet || session.workingDir
-        )}
+        {session.snippet || session.workingDir}
       </div>
     </div>
   )

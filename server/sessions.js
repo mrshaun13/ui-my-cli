@@ -90,7 +90,18 @@ function deriveStatus(nodes, lastActivityAt, manualStatus) {
   const hasToolCalls = Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0;
   const isToolResult = role === 'tool';
 
-  if (role === 'assistant' && !hasToolCalls && idleSec >= 30) return 'needs_you';
+  if (role === 'assistant' && !hasToolCalls && idleSec >= 30) {
+    // Only return needs_you if the assistant message has actual readable text content.
+    // Devin often leaves a final empty assistant message after completing work; that
+    // should resolve to idle, not needs_you.
+    const rawContent = msg?.content;
+    const content = Array.isArray(rawContent)
+      ? rawContent.find(c => c.type === 'text')?.text
+      : typeof rawContent === 'string' ? rawContent : null;
+    const hasContent = content && content.trim().length > 10;
+    if (!hasContent) return 'idle';
+    return 'needs_you';
+  }
   if (role === 'assistant' && hasToolCalls) return 'running';
   if (isToolResult || (role === 'user' && idleSec < 30)) return 'thinking';
 
@@ -170,8 +181,10 @@ function listSessions() {
 
     return {
       id: session.id,
-      // Display priority: alias > DB title > short ID
-      title: alias || session.title || session.id.slice(0, 8),
+      // title always comes from the DB so it stays stable across /clear continuations.
+      // alias is the short user label (e.g. "ready for work"); shown separately as label.
+      title: session.title || session.id.slice(0, 8),
+      label: alias,
       alias,
       workingDir: session.working_directory,
       project: projectName(session.working_directory),

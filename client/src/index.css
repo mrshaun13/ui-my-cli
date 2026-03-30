@@ -657,3 +657,56 @@ html, body, #root {
   align-items: center;
   gap: 8px;
 }
+
+/* ─── Sidebar repo filter chips ────────────────────────────────────── */
+.sidebar-repo-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.repo-chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+
+.repo-chip.on {
+  background: var(--accent-glow);
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.repo-chip.off {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.repo-chip:hover { opacity: 1; }
+
+/* ─── Agent label chip (user alias that's a rename, not a status) ─── */
+.agent-label-chip {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
