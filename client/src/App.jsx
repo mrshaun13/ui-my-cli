@@ -3,6 +3,7 @@ import { useStatusFeed } from './hooks/useStatusFeed.js'
 import Sidebar from './components/Sidebar.jsx'
 import Terminal from './components/Terminal.jsx'
 import ControlBar from './components/ControlBar.jsx'
+import DashboardSplash from './components/DashboardSplash.jsx'
 
 export default function App() {
   const { sessions, connected, error } = useStatusFeed()
@@ -16,6 +17,13 @@ export default function App() {
     setSelectedId((urgent || sessions[0])?.id || null)
   }, [sessions, selectedId])
 
+  // If the selected session disappears (was removed), go back to splash
+  useEffect(() => {
+    if (selectedId && sessions.length > 0 && !sessions.find(s => s.id === selectedId)) {
+      setSelectedId(null)
+    }
+  }, [sessions, selectedId])
+
   const selectedSession = sessions.find(s => s.id === selectedId) || null
 
   const handleRename = useCallback(async (id, alias) => {
@@ -24,6 +32,11 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ alias }),
     })
+  }, [])
+
+  const handleRemove = useCallback(async (id) => {
+    setSelectedId(null)
+    await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
   }, [])
 
   const handleSelect = useCallback((id) => {
@@ -88,16 +101,14 @@ export default function App() {
         {selectedId ? (
           <Terminal key={selectedId} sessionId={selectedId} />
         ) : (
-          <div className="main-empty">
-            <div className="main-empty-glyph">D/</div>
-            <div className="main-empty-label">Select an agent from the sidebar</div>
-          </div>
+          <DashboardSplash sessions={sessions} connected={connected} />
         )}
       </main>
 
       <ControlBar
         session={selectedSession}
         onRename={handleRename}
+        onRemove={handleRemove}
       />
     </div>
   )

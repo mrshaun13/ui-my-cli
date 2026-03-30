@@ -18,7 +18,6 @@ const STATUS_ICON = {
   needs_you: '⚡',
   running:   '⚙',
   thinking:  '◎',
-  ready:     '✓',
   idle:      '·',
 }
 
@@ -26,7 +25,6 @@ const STATUS_LABEL = {
   needs_you: 'needs you',
   running:   'running',
   thinking:  'thinking',
-  ready:     'ready',
   idle:      'idle',
 }
 
@@ -47,13 +45,6 @@ export function StatusBadge({ status }) {
       {status === 'thinking' ? <ThinkingDots /> : (STATUS_LABEL[status] ?? status)}
     </span>
   )
-}
-
-// Returns true if the label string looks like a status marker rather than a
-// user-assigned rename (e.g. "ready for work", "waiting", "done").
-const isStatusLabel = (s) => {
-  const lower = s.toLowerCase()
-  return lower.includes('ready') || lower.includes('waiting') || lower.includes('done')
 }
 
 export default function AgentCard({ session, isActive, onClick, onRename }) {
@@ -117,7 +108,7 @@ export default function AgentCard({ session, isActive, onClick, onRename }) {
             {session.title}
           </span>
         )}
-        {session.label && !isStatusLabel(session.label) && (
+        {session.label && (
           <span className="agent-label-chip">{session.label}</span>
         )}
         <span className="agent-time">{session.lastActivityAgo}</span>

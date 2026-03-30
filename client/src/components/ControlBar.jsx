@@ -6,8 +6,7 @@
  *   - Last message snippet — so you immediately know WHAT it needs without scrolling
  *   - Working directory
  *   - Rename button
- *
- * Removed: "Disconnect PTY" — it was confusing and the auto-reconnect made it a no-op.
+ *   - Remove session button (hides from dashboard, kills PTY)
  */
 
 import { useState } from 'react'
@@ -16,7 +15,6 @@ const STATUS_EXPLANATION = {
   needs_you: 'Devin finished and is waiting for your reply',
   running:   'Devin is actively working',
   thinking:  'Devin is processing your last message',
-  ready:     'Agent is ready — send a new task',
   idle:      'No recent activity',
 }
 
@@ -24,13 +22,13 @@ const STATUS_COLOR = {
   needs_you: 'var(--yellow)',
   running:   'var(--blue)',
   thinking:  'var(--purple)',
-  ready:     'var(--accent)',
   idle:      'var(--text-muted)',
 }
 
-export default function ControlBar({ session, onRename }) {
+export default function ControlBar({ session, onRename, onRemove }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState('')
+  const [confirming, setConfirming] = useState(false)
 
   if (!session) {
     return (
@@ -56,6 +54,12 @@ export default function ControlBar({ session, onRename }) {
   const onKeyDown = (e) => {
     if (e.key === 'Enter') commitRename()
     if (e.key === 'Escape') setRenaming(false)
+  }
+
+  const handleRemove = () => {
+    if (!confirming) { setConfirming(true); return }
+    setConfirming(false)
+    onRemove(session.id)
   }
 
   const statusColor = STATUS_COLOR[session.status] || 'var(--text-muted)'
@@ -100,9 +104,19 @@ export default function ControlBar({ session, onRename }) {
             <button className="btn" onClick={() => setRenaming(false)}>Cancel</button>
           </>
         ) : (
-          <button className="btn" onClick={startRename} title="Rename this session (also double-click in sidebar)">
-            ✎ Rename
-          </button>
+          <>
+            <button className="btn" onClick={startRename} title="Rename this session (also double-click in sidebar)">
+              ✎ Rename
+            </button>
+            <button
+              className={`btn ${confirming ? 'btn-danger' : ''}`}
+              onClick={handleRemove}
+              onBlur={() => setConfirming(false)}
+              title="Remove session from dashboard"
+            >
+              {confirming ? '⚠ Confirm remove' : '✕ Remove'}
+            </button>
+          </>
         )}
       </div>
     </div>

@@ -24,8 +24,9 @@ const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const url = require('url');
 
-const { listSessions, getSession, renameSession } = require('./sessions');
+const { listSessions, getSession, renameSession, hideSession } = require('./sessions');
 const { attachClient, killPty, isPtyActive, activePtySessions } = require('./pty-manager');
+const { getStats } = require('./stats');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
 const IS_DEV = process.env.NODE_ENV !== 'production';
@@ -54,6 +55,15 @@ app.get('/api/status', (_req, res) => {
     activePtys: activePtySessions().length,
     uptime: Math.floor(process.uptime()),
   });
+});
+
+app.get('/api/stats', (_req, res) => {
+  try {
+    res.json(getStats());
+  } catch (err) {
+    console.error('[stats] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/sessions', (_req, res) => {
@@ -93,6 +103,18 @@ app.post('/api/sessions/:id/rename', (req, res) => {
 app.post('/api/sessions/:id/kill-pty', (req, res) => {
   const killed = killPty(req.params.id);
   res.json({ killed });
+});
+
+app.delete('/api/sessions/:id', (req, res) => {
+  try {
+    // Kill any running PTY first so the process doesn't linger
+    killPty(req.params.id);
+    hideSession(req.params.id);
+    broadcastSessions();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── Static (production) ──────────────────────────────────────────────────────

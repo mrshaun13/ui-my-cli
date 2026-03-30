@@ -233,10 +233,6 @@ html, body, #root {
   border-left-color: var(--yellow);
 }
 
-.agent-card.ready {
-  border-left-color: var(--accent);
-}
-
 .agent-card.active.needs_you {
   border-left-color: var(--yellow);
 }
@@ -258,7 +254,6 @@ html, body, #root {
 .agent-status-icon.needs_you { background: var(--yellow-dim); }
 .agent-status-icon.running   { background: var(--blue-dim); }
 .agent-status-icon.thinking  { background: var(--purple-dim); }
-.agent-status-icon.ready     { background: var(--accent-glow); }
 .agent-status-icon.idle      { background: var(--bg-elevated); }
 
 .agent-title-row {
@@ -355,7 +350,6 @@ html, body, #root {
 .status-badge.needs_you { color: var(--yellow); background: var(--yellow-dim); }
 .status-badge.running   { color: var(--blue);   background: var(--blue-dim); }
 .status-badge.thinking  { color: var(--purple);  background: var(--purple-dim); }
-.status-badge.ready     { color: var(--accent);  background: var(--accent-glow); }
 .status-badge.idle      { color: var(--text-muted); background: var(--bg-elevated); }
 
 /* ─── Main Area ─────────────────────────────────────────────────────── */
@@ -694,6 +688,273 @@ html, body, #root {
 }
 
 .repo-chip:hover { opacity: 1; }
+
+/* ─── Dashboard Splash ──────────────────────────────────────────────── */
+.splash {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.splash-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+/* ── Stat card row ───────────────────────────────────────────── */
+.splash-stat-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.splash-stat-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  min-width: 90px;
+  flex: 1;
+}
+
+.splash-stat-value {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--text-primary);
+}
+
+.splash-stat-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 4px;
+}
+
+.splash-stat-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ── Two-column body ─────────────────────────────────────────── */
+.splash-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.splash-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Section ─────────────────────────────────────────────────── */
+.splash-section {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.splash-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+/* ── Bar rows ────────────────────────────────────────────────── */
+.splash-row {
+  display: grid;
+  grid-template-columns: 1fr auto 80px;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+}
+
+.splash-row-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.splash-row-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  text-align: right;
+}
+
+.splash-bar-track {
+  height: 4px;
+  background: var(--bg-elevated);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.splash-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+/* ── Sparkline ───────────────────────────────────────────────── */
+.sparkline {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 44px;
+}
+
+.sparkline-col {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  cursor: default;
+}
+
+.sparkline-bar {
+  width: 100%;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  transition: opacity 0.2s;
+}
+
+.sparkline-col:hover .sparkline-bar { opacity: 0.7; }
+
+.splash-spark-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  margin-top: 2px;
+}
+
+/* ── Hour heatmap ────────────────────────────────────────────── */
+.hour-heatmap {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  gap: 2px;
+}
+
+.hour-cell {
+  height: 28px;
+  border-radius: 3px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  cursor: default;
+  transition: opacity 0.15s;
+}
+
+.hour-cell:hover { opacity: 0.8; }
+
+.hour-label {
+  font-size: 7px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  padding-bottom: 2px;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.splash-heat-sub {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: right;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+/* ── Recent prompts ──────────────────────────────────────────── */
+.splash-prompt-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+
+.splash-prompt-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+.splash-prompt-time {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.splash-prompt-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Chip rows (MCP / skills / plugins) ──────────────────────── */
+.splash-chip-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 20px;
+}
+
+.splash-chip {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.splash-chip-mcp    { background: var(--blue-dim);   color: var(--blue); }
+.splash-chip-skill  { background: var(--accent-glow); color: var(--accent); }
+.splash-chip-plugin { background: var(--purple-dim);  color: var(--purple); }
+.splash-chip-missing { background: var(--red-dim);   color: var(--red); }
+
+.splash-chip-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.splash-empty-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
 
 /* ─── Agent label chip (user alias that's a rename, not a status) ─── */
 .agent-label-chip {
