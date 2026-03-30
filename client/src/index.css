@@ -956,6 +956,37 @@ html, body, #root {
   font-style: italic;
 }
 
+/* Remove button — top-right corner, shown on card hover */
+.agent-remove-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+  padding: 0;
+  line-height: 1;
+}
+
+.agent-card:hover .agent-remove-btn {
+  opacity: 1;
+}
+
+.agent-remove-btn:hover {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
 /* ─── Agent label chip (user alias that's a rename, not a status) ─── */
 .agent-label-chip {
   font-size: 9px;

@@ -47,7 +47,7 @@ export function StatusBadge({ status }) {
   )
 }
 
-export default function AgentCard({ session, isActive, onClick, onRename }) {
+export default function AgentCard({ session, isActive, onClick, onRename, onRemove }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState(session.title)
   const inputRef = useRef(null)
@@ -124,6 +124,13 @@ export default function AgentCard({ session, isActive, onClick, onRename }) {
       <div className="agent-snippet">
         {session.snippet || session.workingDir}
       </div>
+
+      {/* Remove button — visible on hover */}
+      <button
+        className="agent-remove-btn"
+        title="Remove session"
+        onClick={e => { e.stopPropagation(); onRemove(session.id) }}
+      >✕</button>
     </div>
   )
 }

@@ -10,13 +10,6 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
 
-  // Auto-select first "needs_you" session on first load only
-  useEffect(() => {
-    if (selectedId || sessions.length === 0) return
-    const urgent = sessions.find(s => s.status === 'needs_you')
-    setSelectedId((urgent || sessions[0])?.id || null)
-  }, [sessions, selectedId])
-
   // If the selected session disappears (was removed), go back to splash
   useEffect(() => {
     if (selectedId && sessions.length > 0 && !sessions.find(s => s.id === selectedId)) {
@@ -87,6 +80,7 @@ export default function App() {
         selectedId={selectedId}
         onSelect={handleSelect}
         onRename={handleRename}
+        onRemove={handleRemove}
         filterNeedsYou={filterNeedsYou}
         onToggleFilter={() => setFilterNeedsYou(v => !v)}
       />

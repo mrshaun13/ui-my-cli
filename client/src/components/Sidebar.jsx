@@ -11,7 +11,7 @@
 import { useState, useMemo } from 'react'
 import AgentCard from './AgentCard.jsx'
 
-export default function Sidebar({ sessions, selectedId, onSelect, onRename, filterNeedsYou, onToggleFilter }) {
+export default function Sidebar({ sessions, selectedId, onSelect, onRename, onRemove, filterNeedsYou, onToggleFilter }) {
   // hiddenRepos: set of project names the user has toggled OFF
   const [hiddenRepos, setHiddenRepos] = useState(new Set())
 
@@ -104,6 +104,7 @@ export default function Sidebar({ sessions, selectedId, onSelect, onRename, filt
           isActive={session.id === selectedId}
           onClick={() => onSelect(session.id)}
           onRename={onRename}
+          onRemove={onRemove}
         />
       ))}
     </aside>
