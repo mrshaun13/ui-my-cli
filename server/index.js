@@ -4,7 +4,7 @@
  * REST endpoints:
  *   GET  /api/sessions              — list all sessions with status
  *   GET  /api/sessions/:id          — single session detail
- *   POST /api/sessions/:id/rename   — update alias (body: { alias })
+ *   POST /api/sessions/:id/rename   — update title (body: { title })
  *   POST /api/sessions/:id/kill-pty — kill the active PTY (not the session)
  *   GET  /api/status                — server health + active PTY count
  *
@@ -118,11 +118,11 @@ app.get('/api/sessions/:id', (req, res) => {
 
 app.post('/api/sessions/:id/rename', (req, res) => {
   try {
-    const { alias } = req.body;
-    if (typeof alias !== 'string' && alias !== null) {
-      return res.status(400).json({ error: 'alias must be a string or null' });
+    const { title } = req.body;
+    if (typeof title !== 'string' && title !== null) {
+      return res.status(400).json({ error: 'title must be a string or null' });
     }
-    const result = renameSession(req.params.id, alias);
+    const result = renameSession(req.params.id, title);
     // Push updated session list immediately to all status feed clients
     broadcastSessions();
     res.json(result);

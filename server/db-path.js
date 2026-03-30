@@ -1,12 +1,16 @@
 /**
- * Resolves the Devin CLI SQLite database path across platforms.
+ * Resolves Devin-related database paths across platforms.
  *
- * Platform paths:
+ * sessions.db  — Devin CLI database (read-only; title renames are the only writes)
+ * dashboard.db — Dashboard-specific metadata (archives, etc.); lives alongside sessions.db
+ *
+ * Platform paths for sessions.db:
  *   Linux / WSL:  ~/.local/share/devin/cli/sessions.db
  *   macOS:        ~/Library/Application Support/devin/cli/sessions.db
  *   Windows:      %APPDATA%\devin\cli\sessions.db  (native, rarely used)
  *
  * Can be overridden with DEVIN_DB_PATH environment variable.
+ * DEVIN_DASHBOARD_DB_PATH overrides the dashboard.db path independently.
  */
 
 const os = require('os');
@@ -42,4 +46,19 @@ function resolveDbPath() {
   return candidate;
 }
 
-module.exports = { resolveDbPath };
+/**
+ * Returns the path to the dashboard's own SQLite database.
+ *
+ * Defaults to dashboard.db in the same directory as sessions.db.
+ * Can be overridden with DEVIN_DASHBOARD_DB_PATH environment variable.
+ * The file does not need to exist — it will be created on first use.
+ */
+function resolveDashboardDbPath() {
+  if (process.env.DEVIN_DASHBOARD_DB_PATH) {
+    return process.env.DEVIN_DASHBOARD_DB_PATH;
+  }
+  const sessionsDir = path.dirname(resolveDbPath());
+  return path.join(sessionsDir, 'dashboard.db');
+}
+
+module.exports = { resolveDbPath, resolveDashboardDbPath };

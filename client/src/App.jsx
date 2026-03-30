@@ -111,11 +111,11 @@ export default function App() {
 
   const selectedSession = sessions.find(s => s.id === selectedId) || null
 
-  const handleRename = useCallback(async (id, alias) => {
+  const handleRename = useCallback(async (id, title) => {
     await fetch(`/api/sessions/${id}/rename`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ alias }),
+      body: JSON.stringify({ title }),
     })
   }, [])
 
@@ -147,7 +147,7 @@ export default function App() {
     markViewed && markViewed(id)
   }, [markViewed])
 
-  const needsYouCount = sessions.filter(s => s.status === 'needs_you').length
+  const needsYouCount = sessions.filter(s => s.status === 'question').length
 
   // What to show in the main area
   const mainView = selectedId ? 'terminal' : previewId ? 'preview' : 'splash'
@@ -202,6 +202,7 @@ export default function App() {
             sessionId={previewId}
             onResume={handleResume}
             onArchive={handleRemove}
+            onRename={handleRename}
           />
         )}
         {mainView === 'splash' && (

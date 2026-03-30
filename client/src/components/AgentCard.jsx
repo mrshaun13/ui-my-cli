@@ -14,14 +14,14 @@
 import { useState, useRef, useEffect } from 'react'
 
 const STATUS_ICON = {
-  needs_you: '⚡',
+  question: '⚡',
   running:   '⚙',
   thinking:  '◎',
   idle:      '·',
 }
 
 const STATUS_LABEL = {
-  needs_you: 'needs you',
+  question: 'needs you',
   running:   'running',
   thinking:  'thinking',
   idle:      'idle',
@@ -48,14 +48,12 @@ export function StatusBadge({ status }) {
 
 export default function AgentCard({ session, isActive, isPreview, isOld, onClick, onPreview, onRename, onArchive }) {
   const [renaming, setRenaming] = useState(false)
-  const [nameValue, setNameValue] = useState(session.alias || session.title)
+  const [nameValue, setNameValue] = useState(session.title)
   const inputRef = useRef(null)
 
-  const displayName = session.alias || session.title
-
   useEffect(() => {
-    if (!renaming) setNameValue(displayName)
-  }, [displayName, renaming])
+    if (!renaming) setNameValue(session.title)
+  }, [session.title, renaming])
 
   useEffect(() => {
     if (renaming) inputRef.current?.select()
@@ -63,7 +61,7 @@ export default function AgentCard({ session, isActive, isPreview, isOld, onClick
 
   const startRename = (e) => {
     e.stopPropagation()
-    setNameValue(session.alias || session.title)
+    setNameValue(session.title)
     setRenaming(true)
   }
 
@@ -119,7 +117,7 @@ export default function AgentCard({ session, isActive, isPreview, isOld, onClick
             onDoubleClick={startRename}
             title="Double-click to rename"
           >
-            {displayName}
+            {session.title}
           </span>
         )}
         <span className="agent-time">{session.lastActivityAgo}</span>
@@ -128,10 +126,6 @@ export default function AgentCard({ session, isActive, isPreview, isOld, onClick
       <div className="agent-project">
         <span className="agent-project-icon">▶</span>
         {session.project}
-      </div>
-
-      <div className="agent-snippet">
-        {session.snippet || session.workingDir}
       </div>
 
       {/* Old+idle: one-click archive button (no confirm — reversible) */}

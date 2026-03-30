@@ -12,14 +12,14 @@
 import { useState } from 'react'
 
 const STATUS_EXPLANATION = {
-  needs_you: 'Devin finished and is waiting for your reply',
+  question: 'Devin finished and is waiting for your reply',
   running:   'Devin is actively working',
   thinking:  'Devin is processing your last message',
   idle:      'No recent activity',
 }
 
 const STATUS_COLOR = {
-  needs_you: 'var(--yellow)',
+  question: 'var(--yellow)',
   running:   'var(--blue)',
   thinking:  'var(--purple)',
   idle:      'var(--text-muted)',
@@ -41,7 +41,7 @@ export default function ControlBar({ session, onRename, onRemove }) {
   }
 
   const startRename = () => {
-    setNameValue(session.alias || session.title)
+    setNameValue(session.title)
     setRenaming(true)
   }
 
@@ -73,7 +73,7 @@ export default function ControlBar({ session, onRename, onRemove }) {
           <span style={{ color: statusColor, fontSize: '11px', fontWeight: 600 }}>
             {explanation}
           </span>
-          {session.snippet && session.status === 'needs_you' && (
+          {session.snippet && session.status === 'question' && (
             <span className="controlbar-snippet" title={session.snippet}>
               — "{session.snippet}"
             </span>

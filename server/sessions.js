@@ -1,51 +1,113 @@
 /**
- * Sessions module — reads Devin CLI SQLite database.
+ * Sessions module — reads (and selectively writes) the Devin CLI SQLite database.
  *
- * Opens the DB in read-only mode so we never corrupt live session data.
- * Status detection mirrors the Devin CLI's own logic derived from message_nodes.
+ * Two connections to the Devin CLI sessions.db:
+ *   readDb  — readonly, used for all queries (safe concurrent reads via WAL mode)
+ *   writeDb — read-write, used only for session renames (UPDATE sessions SET title)
  *
- * Hidden sessions: stored in hidden-sessions.json sidecar. Sessions listed
- * there are excluded from all API responses — this is how "rm-session" works
- * since the DB is read-only.
+ * This means renames are visible everywhere the Devin CLI reads — `devin list`,
+ * `/ls` inside a session, and this dashboard all show the same title.
+ *
+ * Archive state (hidden sessions) is stored in a separate dashboard.db SQLite
+ * database alongside sessions.db. Using SQLite instead of a JSON sidecar gives
+ * safe concurrent writes from multiple browser tabs (no read-modify-write races).
+ * An in-memory Set cache eliminates redundant disk reads on the 3s poll loop.
  */
 
 const Database = require('better-sqlite3');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { resolveDbPath } = require('./db-path');
+const { resolveDbPath, resolveDashboardDbPath } = require('./db-path');
 
-const ALIAS_FILE  = path.join(os.homedir(), '.config', 'devin', 'session-aliases.json');
-const HIDDEN_FILE = path.join(os.homedir(), '.config', 'devin', 'hidden-sessions.json');
+// ── Devin CLI sessions.db ──────────────────────────────────────────────────────
 
-let db;
+let readDb;
+let writeDb;
 
-function getDb() {
-  if (!db) {
-    const dbPath = resolveDbPath();
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+function getReadDb() {
+  if (!readDb) {
+    readDb = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
   }
-  return db;
+  return readDb;
 }
 
-function loadAliases() {
+function getWriteDb() {
+  if (!writeDb) {
+    // WAL mode + busy_timeout already set by the CLI process; we inherit them.
+    // Opening without readonly gives us write access on the same WAL file safely.
+    writeDb = new Database(resolveDbPath(), { fileMustExist: true });
+    writeDb.pragma('busy_timeout = 5000');
+  }
+  return writeDb;
+}
+
+// ── Dashboard metadata DB (hidden_sessions) ───────────────────────────────────
+
+// Legacy JSON sidecar path — read once during migration, then renamed.
+const LEGACY_HIDDEN_FILE = path.join(os.homedir(), '.config', 'devin', 'hidden-sessions.json');
+
+let _dashDb = null;
+
+/** Returns (lazily initialised) the dashboard.db connection, creating schema + migrating if needed. */
+function getDashDb() {
+  if (_dashDb) return _dashDb;
+
+  const dbPath = resolveDashboardDbPath();
+  _dashDb = new Database(dbPath);
+  _dashDb.pragma('journal_mode = WAL');
+  _dashDb.pragma('busy_timeout = 5000');
+  _dashDb.exec(`
+    CREATE TABLE IF NOT EXISTS hidden_sessions (
+      session_id TEXT PRIMARY KEY
+    )
+  `);
+
+  // One-time migration from legacy hidden-sessions.json sidecar
+  _migrateLegacyHidden(_dashDb);
+
+  return _dashDb;
+}
+
+/** Migrates archive state from the JSON sidecar to dashboard.db (runs once). */
+function _migrateLegacyHidden(db) {
+  if (!fs.existsSync(LEGACY_HIDDEN_FILE)) return;
   try {
-    if (fs.existsSync(ALIAS_FILE)) return JSON.parse(fs.readFileSync(ALIAS_FILE, 'utf8'));
-  } catch { /* malformed — ignore */ }
-  return {};
+    const ids = JSON.parse(fs.readFileSync(LEGACY_HIDDEN_FILE, 'utf8'));
+    if (!Array.isArray(ids) || ids.length === 0) {
+      fs.renameSync(LEGACY_HIDDEN_FILE, LEGACY_HIDDEN_FILE + '.migrated');
+      return;
+    }
+    const insert = db.prepare('INSERT OR IGNORE INTO hidden_sessions (session_id) VALUES (?)');
+    db.transaction(list => { for (const id of list) insert.run(id); })(ids);
+    fs.renameSync(LEGACY_HIDDEN_FILE, LEGACY_HIDDEN_FILE + '.migrated');
+    console.log(`[dashboard] Migrated ${ids.length} archived session(s) from JSON sidecar to dashboard.db`);
+  } catch (err) {
+    console.error('[dashboard] Migration warning (non-fatal):', err.message);
+  }
 }
 
+// In-memory cache — eliminates disk reads on the 3s poll loop
+let _hiddenCache = null;
+
+/** Returns the Set of hidden session IDs, using the in-memory cache when available. */
 function loadHidden() {
-  try {
-    if (fs.existsSync(HIDDEN_FILE)) return new Set(JSON.parse(fs.readFileSync(HIDDEN_FILE, 'utf8')));
-  } catch { /* malformed — ignore */ }
-  return new Set();
+  if (_hiddenCache) return _hiddenCache;
+  const rows = getDashDb().prepare('SELECT session_id FROM hidden_sessions').all();
+  _hiddenCache = new Set(rows.map(r => r.session_id));
+  return _hiddenCache;
 }
 
-function saveHidden(hiddenSet) {
-  const dir = path.dirname(HIDDEN_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(HIDDEN_FILE, JSON.stringify([...hiddenSet], null, 2));
+/** Adds a session ID to the hidden set in both SQLite and the in-memory cache. */
+function _addHidden(id) {
+  getDashDb().prepare('INSERT OR IGNORE INTO hidden_sessions (session_id) VALUES (?)').run(id);
+  if (_hiddenCache) _hiddenCache.add(id);
+}
+
+/** Removes a session ID from the hidden set in both SQLite and the in-memory cache. */
+function _removeHidden(id) {
+  getDashDb().prepare('DELETE FROM hidden_sessions WHERE session_id = ?').run(id);
+  if (_hiddenCache) _hiddenCache.delete(id);
 }
 
 /**
@@ -224,12 +286,12 @@ function projectName(workingDir) {
 }
 
 /**
- * Returns all sessions enriched with status, alias, and last-message info.
- * Hidden sessions are excluded.
+ * Returns all sessions enriched with status and last-message info.
+ * Hidden (archived) sessions are excluded.
+ * Title comes directly from sessions.title — the single source of truth.
  */
 function listSessions() {
-  const db = getDb();
-  const aliases = loadAliases();
+  const db = getReadDb();
   const hidden = loadHidden();
 
   const sessions = db.prepare(`
@@ -249,15 +311,12 @@ function listSessions() {
 
       const status = deriveStatus(nodes, session.last_activity_at);
       const snippet = extractSnippet(nodes);
-      const alias = aliases[session.id] || null;
       const firstUserPrompt = extractFirstUserPrompt(db, session.id);
       const lastUserPrompt  = extractLastUserPrompt(db, session.id);
 
       return {
         id: session.id,
         title: session.title || session.id.slice(0, 8),
-        label: alias,
-        alias,
         workingDir: session.working_directory,
         project: projectName(session.working_directory),
         model: session.model,
@@ -273,41 +332,75 @@ function listSessions() {
 }
 
 function getSession(id) {
-  return listSessions().find(s => s.id === id) || null;
-}
+  const hidden = loadHidden();
+  if (hidden.has(id)) return null;
 
-function renameSession(id, alias) {
-  const aliases = loadAliases();
-  if (alias && alias.trim()) {
-    aliases[id] = alias.trim();
-  } else {
-    delete aliases[id];
-  }
-  const dir = path.dirname(ALIAS_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(ALIAS_FILE, JSON.stringify(aliases, null, 2));
-  return { id, alias: aliases[id] || null };
+  const db = getReadDb();
+
+  const session = db.prepare(`
+    SELECT id, working_directory, model, created_at, last_activity_at, title
+    FROM sessions
+    WHERE id = ?
+  `).get(id);
+
+  if (!session) return null;
+
+  const nodes = db.prepare(`
+    SELECT chat_message FROM message_nodes
+    WHERE session_id = ?
+    ORDER BY row_id DESC LIMIT 5
+  `).all(session.id).reverse();
+
+  const status = deriveStatus(nodes, session.last_activity_at);
+  const snippet = extractSnippet(nodes);
+  const firstUserPrompt = extractFirstUserPrompt(db, session.id);
+  const lastUserPrompt  = extractLastUserPrompt(db, session.id);
+
+  return {
+    id: session.id,
+    title: session.title || session.id.slice(0, 8),
+    workingDir: session.working_directory,
+    project: projectName(session.working_directory),
+    model: session.model,
+    status,
+    snippet,
+    firstUserPrompt,
+    lastUserPrompt,
+    lastActivityAt: session.last_activity_at,
+    lastActivityAgo: relativeTime(session.last_activity_at),
+    createdAt: session.created_at,
+  };
 }
 
 /**
- * Archives a session by adding it to hidden-sessions.json.
- * The session record in the SQLite DB is untouched (DB is read-only).
+ * Renames a session by writing directly to sessions.title in the SQLite DB.
+ * Uses the write connection (WAL mode handles concurrent CLI access safely).
+ * The new title will be visible in `devin list`, /ls inside a session, and
+ * this dashboard — single source of truth, no JSON sidecar needed.
+ */
+function renameSession(id, title) {
+  const db = getWriteDb();
+  const trimmed = (title || '').trim();
+  if (!trimmed) return { id, title: null };
+  db.prepare('UPDATE sessions SET title = ? WHERE id = ?').run(trimmed, id);
+  return { id, title: trimmed };
+}
+
+/**
+ * Archives a session by adding it to dashboard.db's hidden_sessions table.
+ * The session record in the Devin CLI SQLite DB is untouched.
  * "Archive" is the user-facing term; "hidden" is the internal mechanism.
  */
 function hideSession(id) {
-  const hidden = loadHidden();
-  hidden.add(id);
-  saveHidden(hidden);
+  _addHidden(id);
   return { id, archived: true };
 }
 
 /**
- * Restores a previously archived session by removing it from hidden-sessions.json.
+ * Restores a previously archived session by removing it from dashboard.db.
  */
 function restoreSession(id) {
-  const hidden = loadHidden();
-  hidden.delete(id);
-  saveHidden(hidden);
+  _removeHidden(id);
   return { id, archived: false };
 }
 
@@ -316,8 +409,7 @@ function restoreSession(id) {
  * Mirrors listSessions() but reads from the hidden set instead of excluding it.
  */
 function listArchivedSessions() {
-  const db = getDb();
-  const aliases = loadAliases();
+  const db = getReadDb();
   const hidden = loadHidden();
 
   if (hidden.size === 0) return [];
@@ -331,13 +423,10 @@ function listArchivedSessions() {
   `).all(...hidden);
 
   return sessions.map(session => {
-    const alias = aliases[session.id] || null;
     const firstUserPrompt = extractFirstUserPrompt(db, session.id);
     return {
       id: session.id,
       title: session.title || session.id.slice(0, 8),
-      label: alias,
-      alias,
       workingDir: session.working_directory,
       project: projectName(session.working_directory),
       model: session.model,
@@ -357,15 +446,30 @@ function listArchivedSessions() {
  * affecting last_activity_at.
  */
 function getSessionPreview(id) {
-  const db = getDb();
-  const aliases = loadAliases();
+  const db = getReadDb();
 
   const session = db.prepare(
     'SELECT id, working_directory, model, created_at, last_activity_at, title, permission_mode, backend_type, cogs_json FROM sessions WHERE id = ?'
   ).get(id);
   if (!session) return null;
 
-  const alias = aliases[id] || null;
+  // ── Model: starting model (from sessions.model) vs current model (from cogs) ──
+  const startingModel = session.model;
+  let currentModel = startingModel;
+  try {
+    const cogs = JSON.parse(session.cogs_json || '[]');
+    const modelCog = cogs.find(c => c.lifetime && c.lifetime.Unique === 'core/model');
+    if (modelCog && modelCog.model) currentModel = modelCog.model;
+  } catch { /* ignore */ }
+
+  // ── Model switch history from prompt_history ──────────────────────────────
+  const switchRows = db.prepare(
+    "SELECT content, timestamp FROM prompt_history WHERE session_id = ? AND content LIKE '/model%' ORDER BY timestamp ASC"
+  ).all(id);
+  const modelSwitches = switchRows.map(r => ({
+    model: r.content.replace('/model', '').trim(),
+    timestamp: r.timestamp,
+  }));
 
   // ── Single pass over all message_nodes for this session ──────────────────
   const allNodes = db.prepare(
@@ -486,10 +590,12 @@ function getSessionPreview(id) {
   return {
     id: session.id,
     title: session.title || session.id.slice(0, 8),
-    alias,
     workingDir: session.working_directory,
     project: projectName(session.working_directory),
     model: session.model,
+    startingModel,
+    currentModel,
+    modelSwitches,
     permissionMode: session.permission_mode,
     backendType: session.backend_type,
     status: deriveStatus(

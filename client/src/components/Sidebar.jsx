@@ -87,7 +87,7 @@ function ArchiveDrawer({ onRestore }) {
           {!loading && sessions?.map(s => (
             <div key={s.id} className="archive-row">
               <div className="archive-row-info">
-                <span className="archive-row-title">{s.alias || s.title}</span>
+                <span className="archive-row-title">{s.title}</span>
                 <span className="archive-row-meta">{s.project} · {s.lastActivityAgo}</span>
                 {s.firstUserPrompt && (
                   <span className="archive-row-prompt">{s.firstUserPrompt.slice(0, 80)}</span>
