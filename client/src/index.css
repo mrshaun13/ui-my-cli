@@ -391,19 +391,19 @@ html, body, #root {
 
 .agent-card.active {
   background: var(--bg-active);
-  border-left-color: var(--accent);
+  border-left-color: var(--blue);
 }
 
 .agent-card.question {
   border-left-color: var(--yellow);
 }
 
-.agent-card.unread {
-  border-left-color: var(--red);
+.agent-card.finished {
+  border-left-color: var(--accent);
 }
 
-.agent-card.active {
-  border-left-color: var(--blue);
+.agent-card.unread {
+  border-left-color: var(--red);
 }
 
 .agent-status-icon {
@@ -421,13 +421,15 @@ html, body, #root {
 }
 
 /* question = yellow (blocked, needs answer) */
-.agent-status-icon.question { background: var(--yellow-dim); color: var(--yellow); font-weight: 700; }
+.agent-status-icon.question  { background: var(--yellow-dim); color: var(--yellow); font-weight: 700; }
 /* unread = red dot (finished, not yet viewed) */
-.agent-status-icon.unread   { background: var(--red-dim);    color: var(--red); font-size: 10px; }
+.agent-status-icon.unread    { background: var(--red-dim);    color: var(--red); font-size: 10px; }
 /* active = blue gear (working) */
-.agent-status-icon.active   { background: var(--blue-dim);   color: var(--blue); }
+.agent-status-icon.active    { background: var(--blue-dim);   color: var(--blue); }
+/* finished = accent checkmark (done, no reply needed) */
+.agent-status-icon.finished  { background: var(--bg-elevated); color: var(--accent); }
 /* read = muted dot (seen, quiet) */
-.agent-status-icon.read     { background: var(--bg-elevated); color: var(--text-muted); font-size: 10px; }
+.agent-status-icon.read      { background: var(--bg-elevated); color: var(--text-muted); font-size: 10px; }
 
 .agent-title-row {
   grid-column: 2;
@@ -522,6 +524,7 @@ html, body, #root {
 
 .status-badge.question { color: var(--yellow);     background: var(--yellow-dim); }
 .status-badge.active   { color: var(--blue);       background: var(--blue-dim); }
+.status-badge.finished { color: var(--accent);     background: var(--bg-elevated); }
 .status-badge.unread   { color: var(--red);        background: var(--red-dim); }
 .status-badge.read     { color: var(--text-muted); background: var(--bg-elevated); }
 
