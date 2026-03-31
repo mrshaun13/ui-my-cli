@@ -18,6 +18,8 @@ A browser-based dashboard for managing multiple Devin CLI agent sessions. Replac
 - `npm run postinstall` — `cd client && npm install`
 - `npm run docs` — `node scripts/generate-docs.js`
 - `npm run docs:check` — `node scripts/generate-docs.js --check`
+- `npm run test` — `npx playwright test`
+- `npm run test:smoke` — `npx playwright test tests/smoke.spec.js`
 - `npm run prepare` — `husky`
 
 ## Dev Workflow
@@ -111,3 +113,64 @@ To update docs:
 
 The pre-commit hook runs `npm run docs:check` and blocks the commit if any
 generated doc is out of sync with the current source.
+
+## Testing (Playwright E2E)
+
+E2E tests use **Playwright** (Chromium only) and run against the **live PM2-managed server** on port 7575. There is no `webServer` block in the Playwright config — tests expect the dashboard to already be running. This matches the real production setup and avoids port conflicts with PM2.
+
+### Prerequisites
+
+- Dashboard running via PM2: `npm run pm2:start` (or confirm with `pm2 list`)
+- At least one Devin CLI session must exist (run `devin` once) — tests interact with session cards
+- Playwright browsers installed: `npx playwright install chromium` (one-time setup)
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm test` | Run the full Playwright test suite |
+| `npm run test:smoke` | Run only the smoke tests (fastest sanity check) |
+| `npx playwright test <file>` | Run a single test file |
+| `npx playwright test --ui` | Open the interactive Playwright UI |
+| `npx playwright show-report` | Open the last HTML test report |
+
+### Gotchas & Pitfalls
+
+- **Server must be running first.** Tests do NOT start the server — they hit `localhost:7575` served by PM2. If the server is down, tests fail with a clear message: "Dashboard not reachable... Start it first: npm run pm2:start".
+- **Session cards arrive via WebSocket**, not in the initial HTML. The sidebar renders "No sessions found" until the `/ws/status` WebSocket delivers the first `sessions` message (up to 3 seconds). Use `waitForSessions(page)` from `tests/helpers.js` instead of a bare `page.goto("/")` when you need session cards.
+- **After server code changes**, run `npm run pm2:restart` (not just `npm run build`). PM2 keeps the old process in memory.
+- **Port override:** Set `PORT=XXXX` before running tests if the server is on a non-default port. The Playwright config and helpers both read `process.env.PORT`.
+- **Chromium only.** Firefox and WebKit are not installed. The Playwright config has a single `chromium` project. Run `npx playwright install` to add other browsers.
+
+### Writing New Tests
+
+- Put test files in `tests/` with the `.spec.js` extension.
+- Import helpers: `import { ensureServerRunning, waitForSessions, SELECTORS } from './helpers.js'`
+- Always call `test.beforeAll(ensureServerRunning)` — it validates the server is reachable and fails fast with a helpful message instead of cryptic connection timeouts.
+- Use `waitForSessions(page)` to navigate and wait for session cards to appear (handles the WebSocket timing automatically).
+- Use `SELECTORS` from helpers for consistent CSS selectors across all tests. If you add a new UI element, add its selector to `SELECTORS` so other tests can use it.
+- Failure screenshots are saved automatically to `test-results/` (gitignored).
+
+### Test File Inventory
+
+| File | Description |
+|------|-------------|
+| `playwright.config.js` | Playwright config — baseURL, reporter, project (Chromium) |
+| `tests/helpers.js` | Shared test utilities — `ensureServerRunning`, `waitForSessions`, `SELECTORS` |
+| `tests/smoke.spec.js` | Smoke tests — server health, sidebar rendering, terminal open, search |
+
+### Ad-Hoc Visual Testing
+
+For quick visual checks without writing a spec file, you can use Playwright's API directly via a one-off Node.js script. This is useful for debugging UI issues:
+
+```js
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage();
+await page.goto('http://localhost:7575');
+await page.waitForSelector('.agent-card', { timeout: 15000 });
+await page.screenshot({ path: '/tmp/dashboard.png', fullPage: true });
+await browser.close();
+```
+
+Save as a `.mjs` file and run with `node script.mjs`. Playwright is installed as a project devDependency so `import 'playwright'` resolves correctly.

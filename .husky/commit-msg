@@ -1,0 +1,30 @@
+#!/bin/sh
+# Strip Devin AI attribution lines from commit messages
+# Removes:
+#   "Generated with [Devin](...)"  (markdown link form)
+#   "Generated with Devin (...)"   (plain text form)
+#   "Co-Authored-By: Devin <...>"
+#   Any blank lines left dangling at the end
+
+COMMIT_MSG_FILE="$1"
+
+python3 - "$COMMIT_MSG_FILE" <<'PYEOF'
+import sys, re
+
+path = sys.argv[1]
+with open(path, 'r') as f:
+    msg = f.read()
+
+# Markdown link variant: Generated with [Devin](url)
+msg = re.sub(r'\nGenerated with \[Devin\]\([^)]*\)\n?', '', msg)
+# Plain text variant: Generated with Devin (url)
+msg = re.sub(r'\nGenerated with Devin \([^)]*\)\n?', '', msg)
+# Co-author line
+msg = re.sub(r'\nCo-Authored-By: Devin <[^>]*>\n?', '', msg)
+
+# Strip trailing blank lines
+msg = msg.rstrip('\n') + '\n'
+
+with open(path, 'w') as f:
+    f.write(msg)
+PYEOF

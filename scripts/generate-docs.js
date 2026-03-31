@@ -577,6 +577,18 @@ function buildAgentsMd(d) {
 
   const conventionList = prose.conventions.map(c => `- ${c}`).join('\n');
 
+  // ── Testing section ────────────────────────────────────────────────────────
+  const t = prose.testing || {};
+  const testPrereqs = (t.prerequisites || []).map(p => `- ${p}`).join('\n');
+  const testCommands = Object.entries(t.commands || {})
+    .map(([cmd, desc]) => `| \`${cmd}\` | ${desc} |`)
+    .join('\n');
+  const testGotchas = (t.gotchas || []).map(g => `- ${g}`).join('\n');
+  const testWriting = (t.writing_tests || []).map(w => `- ${w}`).join('\n');
+  const testFiles = Object.entries(t.file_inventory || {})
+    .map(([f, desc]) => `| \`${f}\` | ${desc} |`)
+    .join('\n');
+
   return `\
 # AGENTS.md — Contributor & AI Agent Guide
 
@@ -676,6 +688,38 @@ To update docs:
 
 The pre-commit hook runs \`npm run docs:check\` and blocks the commit if any
 generated doc is out of sync with the current source.
+
+## Testing (Playwright E2E)
+
+${t.overview || ''}
+
+### Prerequisites
+
+${testPrereqs}
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+${testCommands}
+
+### Gotchas & Pitfalls
+
+${testGotchas}
+
+### Writing New Tests
+
+${testWriting}
+
+### Test File Inventory
+
+| File | Description |
+|------|-------------|
+${testFiles}
+
+### Ad-Hoc Visual Testing
+
+${t.ad_hoc_testing || ''}
 `;
 }
 

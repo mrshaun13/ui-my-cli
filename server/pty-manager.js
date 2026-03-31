@@ -281,6 +281,7 @@ function spawnPty(sessionId, workingDir, ws, cols = 220, rows = 50) {
 
   entry.clients.add(ws);
   ptys.set(sessionId, entry);
+  // Wire events immediately after map insertion so no PTY output is lost
   wirePtyEvents(entry, sessionId);
 
   return entry.pty;

@@ -119,6 +119,13 @@ export default function Terminal({ sessionId }) {
     xterm.loadAddon(fitAddon)
     xterm.loadAddon(new WebLinksAddon())
     xterm.open(containerRef.current)
+    // Force a synchronous layout reflow before measuring. Without this,
+    // fitAddon.fit() can run before sibling elements (e.g. PromptStrip)
+    // have been laid out, calculating rows for a taller container than the
+    // terminal actually ends up with. Reading clientHeight is the standard
+    // way to flush pending layout — the browser must compute geometry to
+    // answer the query.  This ensures fit() sees the final container size.
+    void containerRef.current.clientHeight
     fitAddon.fit()
 
     xtermRef.current    = xterm
