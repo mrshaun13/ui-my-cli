@@ -104,7 +104,7 @@ app.get('/api/repos', (_req, res) => {
   }
 });
 
-app.post('/api/sessions/create', async (req, res) => {
+app.post('/api/sessions/create', (req, res) => {
   const { workingDir } = req.body;
   if (!workingDir || typeof workingDir !== 'string') {
     return res.status(400).json({ error: 'workingDir is required' });
@@ -114,36 +114,38 @@ app.post('/api/sessions/create', async (req, res) => {
   }
 
   try {
-    // Snapshot current session IDs before spawning
+    // Snapshot current session IDs so the background re-key poller can detect the new one
     const before = listSessionIds();
     const tempKey = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     spawnNewSession(tempKey, workingDir);
-    console.log(`[create] spawned new session in ${workingDir} (temp key: ${tempKey.slice(0, 16)}…)`);
+    console.log(`[create] spawned new session in ${workingDir} (key: ${tempKey})`);
 
-    // Poll for the new session ID (the Devin CLI writes it to SQLite on start)
-    const POLL_INTERVAL = 300;
-    const MAX_WAIT = 10000;
-    let elapsed = 0;
+    // Return immediately — the client connects its terminal to the temp key.
+    // The Devin CLI only writes a session record to SQLite after the user types
+    // their first prompt, so we poll in the background to re-key the PTY entry
+    // once the real session ID appears. This prevents a duplicate PTY from being
+    // spawned if the user clicks the sidebar card for the new session.
+    const POLL_INTERVAL = 2000;
+    const MAX_POLLS = 90;  // ~3 minutes of polling
+    let polls = 0;
 
-    const poll = () => new Promise((resolve, reject) => {
-      const tick = () => {
-        const newId = findNewSessionInDir(workingDir, before);
-        if (newId) return resolve(newId);
-        elapsed += POLL_INTERVAL;
-        if (elapsed >= MAX_WAIT) return reject(new Error('Timed out waiting for new session'));
-        setTimeout(tick, POLL_INTERVAL);
-      };
-      // First poll after a short initial delay — the CLI needs a moment
-      setTimeout(tick, POLL_INTERVAL);
-    });
+    const bgPoll = setInterval(() => {
+      polls++;
+      const realId = findNewSessionInDir(workingDir, before);
+      if (realId) {
+        clearInterval(bgPoll);
+        if (rekeyPty(tempKey, realId)) {
+          console.log(`[create] re-keyed ${tempKey.slice(0, 20)}… → ${realId.slice(0, 8)}…`);
+        }
+        broadcastSessions();
+      } else if (polls >= MAX_POLLS) {
+        clearInterval(bgPoll);
+        console.warn(`[create] gave up re-keying ${tempKey.slice(0, 20)}… after ${MAX_POLLS} polls`);
+      }
+    }, POLL_INTERVAL);
 
-    const sessionId = await poll();
-    rekeyPty(tempKey, sessionId);
-    console.log(`[create] detected session ${sessionId.slice(0, 8)}… — PTY re-keyed`);
-
-    broadcastSessions();
-    res.json({ sessionId });
+    res.json({ tempKey });
   } catch (err) {
     console.error('[create] error:', err.message);
     res.status(500).json({ error: err.message });
@@ -298,12 +300,14 @@ wss.on('connection', (ws, req) => {
     const cols = parseInt(params.get('cols') || '220', 10);
     const rows = parseInt(params.get('rows') || '50', 10);
 
-    // Look up the session's working directory so the PTY starts there.
-    // This prevents Devin from showing the workspace trust prompt.
-    const session = getSession(sessionId);
+    // For pending sessions (from "New Session"), the PTY already exists in the
+    // map under the temp key — attachClient will find it and attach the WS client.
+    // For regular sessions, look up the working directory from the DB.
+    const isPending = sessionId.startsWith('pending-');
+    const session = isPending ? null : getSession(sessionId);
     const workingDir = session?.workingDir || null;
 
-    console.log(`[pty] attaching to session ${sessionId.slice(0, 8)}… (${cols}x${rows}) cwd=${workingDir || '~'}`);
+    console.log(`[pty] attaching to ${isPending ? 'pending' : 'session'} ${sessionId.slice(0, 20)}… (${cols}x${rows})`);
     attachClient(sessionId, workingDir, ws, cols, rows);
     return;
   }

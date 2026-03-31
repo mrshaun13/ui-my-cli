@@ -102,10 +102,11 @@ export default function App() {
 
   const goHome = () => { setSelectedId(null); setPreviewId(null) }
 
-  // If the selected/previewed session disappears, go back to splash
+  // If the selected/previewed session disappears, go back to splash.
+  // Skip this check for pending sessions (not yet in the DB).
   useEffect(() => {
     if (sessions.length === 0) return
-    if (selectedId && !sessions.find(s => s.id === selectedId)) setSelectedId(null)
+    if (selectedId && !selectedId.startsWith('pending-') && !sessions.find(s => s.id === selectedId)) setSelectedId(null)
     if (previewId  && !sessions.find(s => s.id === previewId))  setPreviewId(null)
   }, [sessions, selectedId, previewId])
 
@@ -139,11 +140,15 @@ export default function App() {
       const data = await res.json().catch(() => ({}))
       throw new Error(data.error || 'Failed to create session')
     }
-    const { sessionId } = await res.json()
-    setSelectedId(sessionId)
+    const { tempKey } = await res.json()
+    // Use the temp key as the selectedId — Terminal.jsx will connect to
+    // /ws/terminal/<tempKey> where the PTY is already waiting.
+    // Once the user types their first prompt, the Devin CLI writes a session
+    // record. The server re-keys the PTY in the background, and the session
+    // appears in the sidebar via the 3s status poll.
+    setSelectedId(tempKey)
     setPreviewId(null)
-    markViewed && markViewed(sessionId)
-  }, [markViewed])
+  }, [])
 
   const handleSelect = useCallback((id) => {
     setSelectedId(id)
