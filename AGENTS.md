@@ -82,6 +82,7 @@ list" but is not stored in the database.
 - Archive state is stored in `dashboard.db` (a separate SQLite database in the same directory as sessions.db), not in the Devin CLI's SQLite database. If a legacy `hidden-sessions.json` sidecar exists it is migrated automatically on first start.
 - Production: `npm start` — must run `npm run build` first.
 - Development: `node --watch server/index.js` + `cd client && npm run dev`.
+- **PM2 caveat** — PM2 keeps the old process in memory until explicitly restarted. After any server-side code change, always run `npm run pm2:restart` (which rebuilds the client and restarts the process). A bare `npm run build` is **not enough** — the running Node process still executes the old code.
 
 ## Adding a New REST Endpoint
 

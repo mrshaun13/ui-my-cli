@@ -621,6 +621,75 @@ function getSessionPreview(id) {
 }
 
 /**
+ * Searches sessions by title, working directory, prompt history, and user-role
+ * message content. Returns the same shape as listSessions() so AgentCard renders
+ * without any changes.
+ *
+ * Uses correlated EXISTS subqueries so a session matching in multiple rows of
+ * prompt_history or message_nodes is deduplicated at the SQL level.
+ *
+ * @param {string}  query           - The search term (case-insensitive, substring)
+ * @param {boolean} includeArchived - When true, archived sessions are included
+ */
+function searchSessions(query, includeArchived) {
+  const db = getReadDb();
+  const hidden = loadHidden();
+  const term = `%${query}%`;
+
+  const rows = db.prepare(`
+    SELECT DISTINCT s.id, s.working_directory, s.model, s.created_at, s.last_activity_at, s.title
+    FROM sessions s
+    WHERE (
+      s.title LIKE ? COLLATE NOCASE
+      OR s.working_directory LIKE ? COLLATE NOCASE
+      OR EXISTS (
+        SELECT 1 FROM prompt_history ph
+        WHERE ph.session_id = s.id AND ph.content LIKE ? COLLATE NOCASE
+      )
+      OR EXISTS (
+        SELECT 1 FROM message_nodes mn
+        WHERE mn.session_id = s.id
+          AND mn.chat_message LIKE ? COLLATE NOCASE
+          AND mn.chat_message LIKE '%"role":"user"%'
+      )
+    )
+    ORDER BY s.last_activity_at DESC
+  `).all(term, term, term, term);
+
+  const filtered = includeArchived
+    ? rows
+    : rows.filter(s => !hidden.has(s.id));
+
+  return filtered.map(session => {
+    const nodes = db.prepare(`
+      SELECT chat_message FROM message_nodes
+      WHERE session_id = ?
+      ORDER BY row_id DESC LIMIT 5
+    `).all(session.id).reverse();
+
+    const status = deriveStatus(nodes, session.last_activity_at);
+    const snippet = extractSnippet(nodes);
+    const firstUserPrompt = extractFirstUserPrompt(db, session.id);
+    const lastUserPrompt  = extractLastUserPrompt(db, session.id);
+
+    return {
+      id: session.id,
+      title: session.title || session.id.slice(0, 8),
+      workingDir: session.working_directory,
+      project: projectName(session.working_directory),
+      model: session.model,
+      status,
+      snippet,
+      firstUserPrompt,
+      lastUserPrompt,
+      lastActivityAt: session.last_activity_at,
+      lastActivityAgo: relativeTime(session.last_activity_at),
+      createdAt: session.created_at,
+    };
+  });
+}
+
+/**
  * Returns all unique working directories (repos) seen across all sessions —
  * including archived ones. Used by the "New Session" feature to let the user
  * pick from known repos.
@@ -677,4 +746,4 @@ function findNewSessionInDir(workingDir, excludeIds) {
   }
 }
 
-module.exports = { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir };
+module.exports = { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };

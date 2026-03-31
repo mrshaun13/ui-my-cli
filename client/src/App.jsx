@@ -94,7 +94,7 @@ function PromptStrip({ prompt }) {
 }
 
 export default function App() {
-  const { sessions, connected, error, latestPrompt, viewedAt, markViewed } = useStatusFeed()
+  const { sessions, connected, error, latestPrompt, viewedAt, markViewed, rekeyMap } = useStatusFeed()
   const [selectedId, setSelectedId] = useState(null)
   const [previewId,  setPreviewId]  = useState(null)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
@@ -109,6 +109,15 @@ export default function App() {
     if (selectedId && !selectedId.startsWith('pending-') && !sessions.find(s => s.id === selectedId)) setSelectedId(null)
     if (previewId  && !sessions.find(s => s.id === previewId))  setPreviewId(null)
   }, [sessions, selectedId, previewId])
+
+  // When the server re-keys a pending session to its real ID, swap selectedId
+  // so the sidebar highlights the correct card and the Terminal remounts with
+  // the real session ID (which the PTY is now keyed under).
+  useEffect(() => {
+    if (!selectedId || !selectedId.startsWith('pending-')) return
+    const realId = rekeyMap[selectedId]
+    if (realId) setSelectedId(realId)
+  }, [selectedId, rekeyMap])
 
   const selectedSession = sessions.find(s => s.id === selectedId) || null
 

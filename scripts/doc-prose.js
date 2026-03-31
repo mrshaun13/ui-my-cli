@@ -78,6 +78,10 @@ module.exports = {
       'If a legacy `hidden-sessions.json` sidecar exists it is migrated automatically on first start.',
     'Production: `npm start` — must run `npm run build` first.',
     'Development: `node --watch server/index.js` + `cd client && npm run dev`.',
+    '**PM2 caveat** — PM2 keeps the old process in memory until explicitly restarted.' +
+      ' After any server-side code change, always run `npm run pm2:restart`' +
+      ' (which rebuilds the client and restarts the process).' +
+      ' A bare `npm run build` is **not enough** — the running Node process still executes the old code.',
   ],
 
   // Descriptions for REST routes — keyed as "METHOD /path"
@@ -87,6 +91,7 @@ module.exports = {
     'GET /api/latest-prompt':        'Most recent user prompt from the `prompt_history` table',
     'GET /api/sessions':             'List all active (non-archived) sessions with derived status',
     'GET /api/sessions/archived':    'List archived (hidden) sessions',
+    'GET /api/sessions/search':      'Full-text session search — query param `q` (required), `archived=1` to include archived sessions. Searches title, working directory, prompt history, and user-role message content. Returns same shape as the sessions list.',
     'GET /api/repos':                'List all unique repos (working directories) from past sessions',
     'POST /api/sessions/create':     'Start a new Devin session in the given working directory (body: `{ workingDir: string }`); returns `{ sessionId }`',
     'GET /api/sessions/:id/preview': 'Rich read-only session detail — chat history, stats, top tools',

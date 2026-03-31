@@ -7,14 +7,17 @@
  *  - coldDays threshold is user-configurable (gear icon → inline input, persists to localStorage)
  *  - One-click archive on old+idle cards (no confirm needed — reversible)
  *  - Archive drawer at bottom: "N archived" link → expands to show hidden sessions with Restore
+ *  - Free-text search box: instant client-side pre-filter + 200ms debounced server search
+ *    across title, project, prompt history, and user-role message content
  */
 
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import AgentCard from './AgentCard.jsx'
 
-const STORAGE_REPOS  = 'devin-dash:visible-repos'
-const STORAGE_COLD   = 'devin-dash:cold-days'
-const DEFAULT_COLD   = 3
+const STORAGE_REPOS            = 'devin-dash:visible-repos'
+const STORAGE_COLD             = 'devin-dash:cold-days'
+const STORAGE_SEARCH_ARCHIVED  = 'devin-dash:search-archived'
+const DEFAULT_COLD             = 3
 
 function loadSavedRepos() {
   try {
@@ -38,6 +41,14 @@ function loadColdDays() {
 
 function saveColdDays(n) {
   try { localStorage.setItem(STORAGE_COLD, String(n)) } catch { /* ignore */ }
+}
+
+function loadSearchArchived() {
+  try { return localStorage.getItem(STORAGE_SEARCH_ARCHIVED) === 'true' } catch { return false }
+}
+
+function saveSearchArchived(v) {
+  try { localStorage.setItem(STORAGE_SEARCH_ARCHIVED, String(v)) } catch { /* ignore */ }
 }
 
 // ── New Session FAB — floating button at bottom-right of sidebar ─────────────
@@ -140,8 +151,6 @@ function ArchiveDrawer({ onRestore }) {
     setSessions(prev => prev?.filter(s => s.id !== id) ?? [])
   }
 
-  const count = sessions?.length ?? '…'
-
   return (
     <div className="archive-drawer">
       <button className="archive-drawer-toggle" onClick={toggle}>
@@ -205,6 +214,62 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
   const [coldInput, setColdInput]       = useState(String(coldDays))
   const addRef  = useRef(null)
   const coldRef = useRef(null)
+
+  // ── Search state ────────────────────────────────────────────────────────────
+  const [searchQuery,    setSearchQuery]    = useState('')
+  const [searchFocused,  setSearchFocused]  = useState(false)
+  const [searchArchived, setSearchArchived] = useState(loadSearchArchived)
+  // serverResults: null = not yet fetched / cleared; array = server response
+  const [serverResults,  setServerResults]  = useState(null)
+  const searchInputRef = useRef(null)
+  const searchTimerRef = useRef(null)
+
+  // Instant client-side filter — updates immediately on each 3s feed tick
+  // so results stay fresh without re-hitting the server.
+  const clientFiltered = useMemo(() => {
+    if (!searchQuery.trim()) return null
+    const q = searchQuery.toLowerCase()
+    return sessions.filter(s =>
+      s.title?.toLowerCase().includes(q) ||
+      s.project?.toLowerCase().includes(q) ||
+      s.firstUserPrompt?.toLowerCase().includes(q) ||
+      s.lastUserPrompt?.toLowerCase().includes(q)
+    )
+  }, [searchQuery, sessions])
+
+  // Debounced server fetch — only re-fires when query or archived flag changes,
+  // not on every 3s feed tick (sessions is intentionally excluded from deps).
+  useEffect(() => {
+    clearTimeout(searchTimerRef.current)
+    if (!searchQuery.trim()) {
+      setServerResults(null)
+      return
+    }
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/sessions/search?q=${encodeURIComponent(searchQuery)}&archived=${searchArchived ? 1 : 0}`
+        )
+        if (res.ok) setServerResults(await res.json())
+      } catch { /* ignore — client filter still showing */ }
+    }, 200)
+    return () => clearTimeout(searchTimerRef.current)
+  }, [searchQuery, searchArchived]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // What to display: server results take priority; fall back to client filter while in flight
+  const displayResults = searchQuery.trim()
+    ? (serverResults ?? clientFiltered ?? [])
+    : null
+
+  const handleSearchArchivedChange = (v) => {
+    setSearchArchived(v)
+    saveSearchArchived(v)
+  }
+
+  const clearSearch = () => {
+    setSearchQuery('')
+    setServerResults(null)
+  }
 
   // Resolve initial repo selection from first session load
   useEffect(() => {
@@ -295,6 +360,9 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
 
   const needsYouCount = sessions.filter(s => s.status === 'question').length
 
+  // Whether the archived option row should be visible
+  const showSearchOption = searchFocused || !!searchQuery
+
   if (sessions.length === 0) {
     return (
       <aside className="sidebar">
@@ -315,18 +383,63 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
     <aside className="sidebar">
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className="sidebar-section-header">
-        <span>Sessions <span className="sidebar-count">({sessions.length})</span></span>
+        <span>
+          Sessions{' '}
+          <span className="sidebar-count">
+            {displayResults
+              ? `(${displayResults.length} of ${sessions.length})`
+              : `(${sessions.length})`
+            }
+          </span>
+        </span>
+
+        {/* ⚡ filter — dimmed while search is active */}
         {needsYouCount > 0 && (
           <button
             className={`filter-btn ${filterNeedsYou ? 'active' : ''}`}
             onClick={onToggleFilter}
             title="Show only sessions waiting for your input"
+            style={displayResults ? { opacity: 0.4, pointerEvents: 'none' } : undefined}
           >
             ⚡ {needsYouCount}
           </button>
         )}
-        {/* Cold-days threshold control */}
-        <div className="cold-days-wrap" ref={coldRef}>
+
+        {/* ── Search input ──────────────────────────────────────── */}
+        <div className="sidebar-search-wrap">
+          <input
+            ref={searchInputRef}
+            className="sidebar-search-input"
+            type="text"
+            placeholder="search…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+            onKeyDown={e => {
+              if (e.key === 'Escape') {
+                clearSearch()
+                searchInputRef.current?.blur()
+              }
+            }}
+          />
+          {searchQuery && (
+            <button
+              className="sidebar-search-clear"
+              // mousedown preventDefault keeps input focused while handling the click
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => { clearSearch(); searchInputRef.current?.focus() }}
+              title="Clear search (Esc)"
+            >×</button>
+          )}
+        </div>
+
+        {/* Cold-days threshold control — dimmed while search active */}
+        <div
+          className="cold-days-wrap"
+          ref={coldRef}
+          style={displayResults ? { opacity: 0.4, pointerEvents: 'none' } : undefined}
+        >
           {editingCold ? (
             <input
               className="cold-days-input"
@@ -351,72 +464,117 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
         </div>
       </div>
 
-      {/* ── Repo filter pills ────────────────────────────────────── */}
-      {allRepos.length > 1 && visibleRepos && (
-        <div className="sidebar-repo-filters">
-          {[...visibleRepos].filter(r => allRepos.includes(r)).map(repo => (
-            <button key={repo} className="repo-chip on" onClick={() => removeRepo(repo)} title={`Hide ${repo}`}>
-              {repo} <span className="repo-chip-count">({repoSessionCounts[repo] || 0})</span><span className="repo-chip-x">×</span>
-            </button>
-          ))}
-          {hiddenRepos.length > 0 && (
-            <div className="repo-add-wrap" ref={addRef}>
-              <button className="repo-chip repo-chip-add" onClick={() => setAddOpen(v => !v)} title="Add a project">+</button>
-              {addOpen && (
-                <div className="repo-add-dropdown">
-                  {hiddenRepos.map(repo => (
-                    <button key={repo} className="repo-add-option" onClick={() => addRepo(repo)}>
-                      {repo} <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>({repoSessionCounts[repo] || 0})</span>
-                    </button>
-                  ))}
+      {/* ── "incl. archived" option — pops up when search is focused or active ── */}
+      {showSearchOption && (
+        <div
+          className="sidebar-search-option"
+          // Prevent this row from stealing focus away from the search input
+          onMouseDown={e => e.preventDefault()}
+        >
+          <label className="sidebar-search-option-label">
+            <input
+              type="checkbox"
+              checked={searchArchived}
+              onChange={e => handleSearchArchivedChange(e.target.checked)}
+            />
+            incl. archived
+          </label>
+        </div>
+      )}
+
+      {/* ── Search results (flat list, bypasses repo/question filters) ─── */}
+      {displayResults !== null ? (
+        <>
+          {displayResults.length === 0 ? (
+            <div className="sidebar-empty" style={{ padding: '16px' }}>
+              <div className="sidebar-empty-text">No sessions match "{searchQuery}".</div>
+            </div>
+          ) : (
+            displayResults.map(session => (
+              <AgentCard
+                key={session.id}
+                session={session}
+                isActive={session.id === selectedId}
+                isPreview={session.id === previewId}
+                isOld={false}
+                onClick={() => onSelect(session.id)}
+                onPreview={onPreview}
+                onRename={onRename}
+                onArchive={onRemove}
+              />
+            ))
+          )}
+        </>
+      ) : (
+        <>
+          {/* ── Repo filter pills ────────────────────────────────────── */}
+          {allRepos.length > 1 && visibleRepos && (
+            <div className="sidebar-repo-filters">
+              {[...visibleRepos].filter(r => allRepos.includes(r)).map(repo => (
+                <button key={repo} className="repo-chip on" onClick={() => removeRepo(repo)} title={`Hide ${repo}`}>
+                  {repo} <span className="repo-chip-count">({repoSessionCounts[repo] || 0})</span><span className="repo-chip-x">×</span>
+                </button>
+              ))}
+              {hiddenRepos.length > 0 && (
+                <div className="repo-add-wrap" ref={addRef}>
+                  <button className="repo-chip repo-chip-add" onClick={() => setAddOpen(v => !v)} title="Add a project">+</button>
+                  {addOpen && (
+                    <div className="repo-add-dropdown">
+                      {hiddenRepos.map(repo => (
+                        <button key={repo} className="repo-add-option" onClick={() => addRepo(repo)}>
+                          {repo} <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>({repoSessionCounts[repo] || 0})</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           )}
-        </div>
-      )}
 
-      {/* ── Active / recent sessions ─────────────────────────────── */}
-      {hot.map(session => (
-        <AgentCard
-          key={session.id}
-          session={session}
-          isActive={session.id === selectedId}
-          isPreview={session.id === previewId}
-          isOld={false}
-          onClick={() => onSelect(session.id)}
-          onPreview={onPreview}
-          onRename={onRename}
-          onArchive={onRemove}
-        />
-      ))}
-
-      {/* ── Older divider + cold sessions ───────────────────────── */}
-      {cold.length > 0 && (
-        <>
-          <div className="sidebar-older-divider">
-            <span>older</span>
-          </div>
-          {cold.map(session => (
+          {/* ── Active / recent sessions ─────────────────────────────── */}
+          {hot.map(session => (
             <AgentCard
               key={session.id}
               session={session}
               isActive={session.id === selectedId}
               isPreview={session.id === previewId}
-              isOld={true}
+              isOld={false}
               onClick={() => onSelect(session.id)}
               onPreview={onPreview}
               onRename={onRename}
               onArchive={onRemove}
             />
           ))}
-        </>
-      )}
 
-      {hot.length === 0 && cold.length === 0 && (
-        <div className="sidebar-empty" style={{ padding: '16px' }}>
-          <div className="sidebar-empty-text">No sessions match the current filter.</div>
-        </div>
+          {/* ── Older divider + cold sessions ───────────────────────── */}
+          {cold.length > 0 && (
+            <>
+              <div className="sidebar-older-divider">
+                <span>older</span>
+              </div>
+              {cold.map(session => (
+                <AgentCard
+                  key={session.id}
+                  session={session}
+                  isActive={session.id === selectedId}
+                  isPreview={session.id === previewId}
+                  isOld={true}
+                  onClick={() => onSelect(session.id)}
+                  onPreview={onPreview}
+                  onRename={onRename}
+                  onArchive={onRemove}
+                />
+              ))}
+            </>
+          )}
+
+          {hot.length === 0 && cold.length === 0 && (
+            <div className="sidebar-empty" style={{ padding: '16px' }}>
+              <div className="sidebar-empty-text">No sessions match the current filter.</div>
+            </div>
+          )}
+        </>
       )}
 
       {/* ── Archive drawer ───────────────────────────────────────── */}

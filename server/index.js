@@ -25,7 +25,7 @@ const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const url = require('url');
 
-const { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir } = require('./sessions');
+const { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions } = require('./sessions');
 const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty } = require('./pty-manager');
 const { getStats, getLatestPrompt } = require('./stats');
 
@@ -95,6 +95,18 @@ app.get('/api/sessions/archived', (_req, res) => {
   }
 });
 
+app.get('/api/sessions/search', (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json([]);
+  const includeArchived = req.query.archived === '1';
+  try {
+    res.json(searchSessions(q, includeArchived));
+  } catch (err) {
+    console.error('[sessions] search error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/repos', (_req, res) => {
   try {
     res.json(listRepos());
@@ -138,6 +150,7 @@ app.post('/api/sessions/create', (req, res) => {
         if (rekeyPty(tempKey, realId)) {
           console.log(`[create] re-keyed ${tempKey.slice(0, 20)}… → ${realId.slice(0, 8)}…`);
         }
+        broadcastRekey(tempKey, realId);
         broadcastSessions();
       } else if (polls >= MAX_POLLS) {
         clearInterval(bgPoll);
@@ -240,6 +253,21 @@ function broadcastSessions() {
   } catch {
     return;
   }
+  for (const client of statusClients) {
+    if (client.readyState === 1) client.send(payload);
+  }
+}
+
+/**
+ * Notify all status-feed clients that a pending session has been re-keyed
+ * to a real session ID. The client uses this to swap its selectedId so the
+ * sidebar highlights the correct card and the Terminal remounts cleanly.
+ *
+ * Message shape: { type: 'rekey', tempKey: string, realId: string }
+ */
+function broadcastRekey(tempKey, realId) {
+  if (statusClients.size === 0) return;
+  const payload = JSON.stringify({ type: 'rekey', tempKey, realId });
   for (const client of statusClients) {
     if (client.readyState === 1) client.send(payload);
   }

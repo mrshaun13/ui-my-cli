@@ -12,6 +12,7 @@ with an appropriate HTTP status code.
 | `GET` | `/api/latest-prompt` | Most recent user prompt from the `prompt_history` table |
 | `GET` | `/api/sessions` | List all active (non-archived) sessions with derived status |
 | `GET` | `/api/sessions/archived` | List archived (hidden) sessions |
+| `GET` | `/api/sessions/search` | Full-text session search — query param `q` (required), `archived=1` to include archived sessions. Searches title, working directory, prompt history, and user-role message content. Returns same shape as the sessions list. |
 | `GET` | `/api/repos` | List all unique repos (working directories) from past sessions |
 | `POST` | `/api/sessions/create` | Start a new Devin session in the given working directory (body: `{ workingDir: string }`); returns `{ sessionId }` |
 | `GET` | `/api/sessions/:id/preview` | Rich read-only session detail — chat history, stats, top tools |
@@ -80,4 +81,5 @@ browser reloads. They are never sent to the server.
 | --- | --- |
 | `devin-dash:visible-repos` | `Sidebar.jsx` |
 | `devin-dash:cold-days` | `Sidebar.jsx` |
+| `devin-dash:search-archived` | `Sidebar.jsx` |
 | `devin-dash:viewed-at` | `useStatusFeed.js` |

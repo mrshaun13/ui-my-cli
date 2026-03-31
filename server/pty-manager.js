@@ -89,6 +89,11 @@ function spawnPty(sessionId, workingDir, ws, cols = 220, rows = 50) {
     const entry = ptys.get(sessionId);
     replayScrollback(entry, ws);
     entry.clients.add(ws);
+    // Resize the PTY to the new client's dimensions. This is critical for
+    // pending sessions where the PTY was spawned with default dimensions
+    // before any client connected. Without this, line wrapping and cursor
+    // positioning are calculated for the wrong terminal size.
+    try { entry.pty.resize(Math.max(1, cols), Math.max(1, rows)); } catch {}
     return entry.pty;
   }
 

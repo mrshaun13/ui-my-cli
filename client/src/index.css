@@ -1509,6 +1509,73 @@ html, body, #root {
   background: var(--border);
 }
 
+/* ─── Sidebar search box ────────────────────────────────────────────── */
+.sidebar-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 140px;
+}
+.sidebar-search-input {
+  width: 100%;
+  padding: 2px 20px 2px 6px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  outline: none;
+  transition: border-color 0.12s, background 0.12s;
+  min-width: 0;
+}
+.sidebar-search-input::placeholder { color: var(--text-muted); }
+.sidebar-search-input:focus {
+  border-color: var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+.sidebar-search-clear {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+}
+.sidebar-search-clear:hover { color: var(--text-secondary); }
+
+/* Sub-row that appears below the header when search is focused / active */
+.sidebar-search-option {
+  display: flex;
+  align-items: center;
+  padding: 3px 10px 4px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.sidebar-search-option-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.sidebar-search-option-label input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--accent, #7c6af5);
+}
+
 /* ─── Cold-days threshold control ──────────────────────────────────── */
 .cold-days-wrap {
   margin-left: auto;

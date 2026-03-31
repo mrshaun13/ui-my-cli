@@ -29,6 +29,8 @@ export function useStatusFeed() {
   const [error, setError] = useState(null)
   // viewedAt: { [sessionId]: epochMs } — when user last opened that session
   const [viewedAt, setViewedAt] = useState(loadViewed)
+  // rekeyMap: { [tempKey]: realId } — pending sessions that have been re-keyed
+  const [rekeyMap, setRekeyMap] = useState({})
   const wsRef = useRef(null)
   const backoffRef = useRef(INITIAL_BACKOFF)
   const retryRef = useRef(null)
@@ -83,6 +85,9 @@ export function useStatusFeed() {
           })
         }
         else if (msg.type === 'latest-prompt') setLatestPrompt(msg.data)
+        else if (msg.type === 'rekey' && msg.tempKey && msg.realId) {
+          setRekeyMap(prev => ({ ...prev, [msg.tempKey]: msg.realId }))
+        }
       } catch {
         // Ignore malformed frames
       }
@@ -113,5 +118,5 @@ export function useStatusFeed() {
     }
   }, [connect])
 
-  return { sessions, connected, error, latestPrompt, viewedAt, markViewed }
+  return { sessions, connected, error, latestPrompt, viewedAt, markViewed, rekeyMap }
 }
