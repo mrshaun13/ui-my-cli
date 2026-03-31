@@ -641,7 +641,7 @@ function getSessionPreview(id) {
     peakContextTokens,
     topTools,
     // Subagent count — deduplicated via countSubagents()
-    subagentCount: countSubagents(sessionId),
+    subagentCount: countSubagents(id),
     // Token usage
     inputTokens,
     outputTokens,
