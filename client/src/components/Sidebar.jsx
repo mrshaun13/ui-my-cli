@@ -40,6 +40,80 @@ function saveColdDays(n) {
   try { localStorage.setItem(STORAGE_COLD, String(n)) } catch { /* ignore */ }
 }
 
+// ── New Session FAB — floating button at bottom-right of sidebar ─────────────
+
+function NewSessionFAB({ onCreateSession }) {
+  const [open, setOpen]         = useState(false)
+  const [repos, setRepos]       = useState(null)
+  const [loading, setLoading]   = useState(false)
+  const [creating, setCreating] = useState(false)
+  const fabRef = useRef(null)
+
+  const fetchRepos = useCallback(() => {
+    setLoading(true)
+    fetch('/api/repos')
+      .then(r => r.json())
+      .then(d => { setRepos(d); setLoading(false) })
+      .catch(() => { setRepos([]); setLoading(false) })
+  }, [])
+
+  const toggle = () => {
+    if (!open) fetchRepos()
+    setOpen(v => !v)
+  }
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return
+    const handler = (e) => {
+      if (fabRef.current && !fabRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const handleSelect = async (workingDir) => {
+    setCreating(true)
+    setOpen(false)
+    try {
+      await onCreateSession(workingDir)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  return (
+    <div className="new-session-fab-wrap" ref={fabRef}>
+      {open && (
+        <div className="new-session-dropdown">
+          {loading && <div className="new-session-dropdown-empty">Loading…</div>}
+          {!loading && repos?.length === 0 && (
+            <div className="new-session-dropdown-empty">No repos found.</div>
+          )}
+          {!loading && repos?.map(r => (
+            <button
+              key={r.workingDir}
+              className="repo-add-option"
+              onClick={() => handleSelect(r.workingDir)}
+              title={r.workingDir}
+            >
+              {r.project}
+            </button>
+          ))}
+        </div>
+      )}
+      <button
+        className={`new-session-fab${creating ? ' creating' : ''}`}
+        onClick={toggle}
+        disabled={creating}
+        title="Start a new Devin session"
+      >
+        {creating ? <span className="spinner" /> : '+'}
+      </button>
+    </div>
+  )
+}
+
 // ── Archive drawer — lazy-fetches archived sessions on open ──────────────────
 
 function ArchiveDrawer({ onRestore }) {
@@ -110,7 +184,7 @@ function ArchiveDrawer({ onRestore }) {
 
 // ── Main Sidebar ─────────────────────────────────────────────────────────────
 
-export default function Sidebar({ sessions, selectedId, previewId, onSelect, onPreview, onRename, onRemove, onRestore, filterNeedsYou, onToggleFilter }) {
+export default function Sidebar({ sessions, selectedId, previewId, onSelect, onPreview, onRename, onRemove, onRestore, filterNeedsYou, onToggleFilter, onCreateSession }) {
   const allRepos = useMemo(() => {
     return [...new Set(sessions.map(s => s.project).filter(Boolean))].sort()
   }, [sessions])
@@ -232,6 +306,7 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
             Run <code>devin</code> to start an agent.
           </div>
         </div>
+        <NewSessionFAB onCreateSession={onCreateSession} />
       </aside>
     )
   }
@@ -346,6 +421,9 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
 
       {/* ── Archive drawer ───────────────────────────────────────── */}
       <ArchiveDrawer onRestore={onRestore} />
+
+      {/* ── Floating new session button ──────────────────────────── */}
+      <NewSessionFAB onCreateSession={onCreateSession} />
     </aside>
   )
 }

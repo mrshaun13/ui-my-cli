@@ -25,8 +25,8 @@ const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const url = require('url');
 
-const { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession } = require('./sessions');
-const { attachClient, killPty, isPtyActive, activePtySessions } = require('./pty-manager');
+const { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir } = require('./sessions');
+const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty } = require('./pty-manager');
 const { getStats, getLatestPrompt } = require('./stats');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
@@ -91,6 +91,61 @@ app.get('/api/sessions/archived', (_req, res) => {
     res.json(listArchivedSessions());
   } catch (err) {
     console.error('[sessions] archived list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/repos', (_req, res) => {
+  try {
+    res.json(listRepos());
+  } catch (err) {
+    console.error('[repos] list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/sessions/create', async (req, res) => {
+  const { workingDir } = req.body;
+  if (!workingDir || typeof workingDir !== 'string') {
+    return res.status(400).json({ error: 'workingDir is required' });
+  }
+  if (!fs.existsSync(workingDir)) {
+    return res.status(400).json({ error: 'workingDir does not exist on disk' });
+  }
+
+  try {
+    // Snapshot current session IDs before spawning
+    const before = listSessionIds();
+    const tempKey = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    spawnNewSession(tempKey, workingDir);
+    console.log(`[create] spawned new session in ${workingDir} (temp key: ${tempKey.slice(0, 16)}…)`);
+
+    // Poll for the new session ID (the Devin CLI writes it to SQLite on start)
+    const POLL_INTERVAL = 300;
+    const MAX_WAIT = 10000;
+    let elapsed = 0;
+
+    const poll = () => new Promise((resolve, reject) => {
+      const tick = () => {
+        const newId = findNewSessionInDir(workingDir, before);
+        if (newId) return resolve(newId);
+        elapsed += POLL_INTERVAL;
+        if (elapsed >= MAX_WAIT) return reject(new Error('Timed out waiting for new session'));
+        setTimeout(tick, POLL_INTERVAL);
+      };
+      // First poll after a short initial delay — the CLI needs a moment
+      setTimeout(tick, POLL_INTERVAL);
+    });
+
+    const sessionId = await poll();
+    rekeyPty(tempKey, sessionId);
+    console.log(`[create] detected session ${sessionId.slice(0, 8)}… — PTY re-keyed`);
+
+    broadcastSessions();
+    res.json({ sessionId });
+  } catch (err) {
+    console.error('[create] error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

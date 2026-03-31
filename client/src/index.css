@@ -1554,6 +1554,85 @@ html, body, #root {
   margin-top: auto;
   border-top: 1px solid var(--border);
 }
+
+/* ─── New Session FAB ───────────────────────────────────────────────── */
+.new-session-fab-wrap {
+  position: sticky;
+  bottom: 12px;
+  align-self: flex-end;
+  margin-right: 12px;
+  margin-top: -36px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.new-session-fab-wrap > * {
+  pointer-events: auto;
+}
+
+.new-session-fab {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--accent-dim);
+  background: var(--accent);
+  color: var(--bg-base);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 12px rgba(0, 255, 163, 0.25);
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s;
+}
+.new-session-fab:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 20px rgba(0, 255, 163, 0.35);
+  background: #00d487;
+}
+.new-session-fab:active { transform: scale(0.95); }
+.new-session-fab:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+.new-session-fab.creating {
+  background: var(--bg-elevated);
+  border-color: var(--border-bright);
+  box-shadow: none;
+}
+.new-session-fab .spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+.new-session-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  min-width: 160px;
+  max-width: 240px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.new-session-dropdown-empty {
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
 .archive-drawer-toggle {
   width: 100%;
   display: flex;

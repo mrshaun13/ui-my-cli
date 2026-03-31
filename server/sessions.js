@@ -620,4 +620,61 @@ function getSessionPreview(id) {
   };
 }
 
-module.exports = { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession };
+/**
+ * Returns all unique working directories (repos) seen across all sessions —
+ * including archived ones. Used by the "New Session" feature to let the user
+ * pick from known repos.
+ */
+function listRepos() {
+  const db = getReadDb();
+  const rows = db.prepare(`
+    SELECT DISTINCT working_directory
+    FROM sessions
+    WHERE working_directory IS NOT NULL AND working_directory != ''
+    ORDER BY working_directory ASC
+  `).all();
+
+  return rows.map(r => ({
+    workingDir: r.working_directory,
+    project: projectName(r.working_directory),
+  }));
+}
+
+/**
+ * Returns a Set of all session IDs currently in the database.
+ * Uses a fresh connection to see the very latest writes by the Devin CLI.
+ */
+function listSessionIds() {
+  const freshDb = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
+  try {
+    const rows = freshDb.prepare('SELECT id FROM sessions').all();
+    return new Set(rows.map(r => r.id));
+  } finally {
+    freshDb.close();
+  }
+}
+
+/**
+ * Finds a session by working_directory whose ID is not in the given exclusion set.
+ * Uses a fresh connection to detect recently-created sessions.
+ * Returns the session ID or null if not found.
+ */
+function findNewSessionInDir(workingDir, excludeIds) {
+  const freshDb = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
+  try {
+    const rows = freshDb.prepare(`
+      SELECT id FROM sessions
+      WHERE working_directory = ?
+      ORDER BY created_at DESC
+    `).all(workingDir);
+
+    for (const row of rows) {
+      if (!excludeIds.has(row.id)) return row.id;
+    }
+    return null;
+  } finally {
+    freshDb.close();
+  }
+}
+
+module.exports = { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir };

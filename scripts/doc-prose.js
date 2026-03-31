@@ -23,6 +23,8 @@ module.exports = {
     '**Real terminals** — xterm.js + node-pty: identical to running `devin --resume` in your shell',
     '**Click to switch** — click any agent in the sidebar to attach its live terminal; ' +
       'switching is instant with scrollback preserved',
+    '**New session** — floating "+" button in the sidebar lets you start a new Devin session ' +
+      'in any previously-used repo; the terminal opens automatically',
     '**Session preview** — click the status badge to open a read-only view of any session\'s ' +
       'chat history without spawning a PTY',
     '**Inline rename** — double-click any session title to rename it ' +
@@ -85,6 +87,8 @@ module.exports = {
     'GET /api/latest-prompt':        'Most recent user prompt from the `prompt_history` table',
     'GET /api/sessions':             'List all active (non-archived) sessions with derived status',
     'GET /api/sessions/archived':    'List archived (hidden) sessions',
+    'GET /api/repos':                'List all unique repos (working directories) from past sessions',
+    'POST /api/sessions/create':     'Start a new Devin session in the given working directory (body: `{ workingDir: string }`); returns `{ sessionId }`',
     'GET /api/sessions/:id/preview': 'Rich read-only session detail — chat history, stats, top tools',
     'GET /api/sessions/:id':         'Single session with `ptyActive` flag',
     'POST /api/sessions/:id/rename': 'Update session title (body: `{ title: string }`)',

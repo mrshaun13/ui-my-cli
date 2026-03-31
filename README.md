@@ -7,6 +7,7 @@ A browser-based dashboard for managing multiple Devin CLI agent sessions. Replac
 - **Live status badges** — ⚡ Question / ⚙ Running / ✓ Finished / · Idle, updated every 3 seconds
 - **Real terminals** — xterm.js + node-pty: identical to running `devin --resume` in your shell
 - **Click to switch** — click any agent in the sidebar to attach its live terminal; switching is instant with scrollback preserved
+- **New session** — floating "+" button in the sidebar lets you start a new Devin session in any previously-used repo; the terminal opens automatically
 - **Session preview** — click the status badge to open a read-only view of any session's chat history without spawning a PTY
 - **Inline rename** — double-click any session title to rename it (writes back to the Devin CLI sessions database)
 - **Needs-your-input filter** — one click to show only agents waiting for a reply

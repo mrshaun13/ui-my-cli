@@ -129,6 +129,22 @@ export default function App() {
     await fetch(`/api/sessions/${id}/restore`, { method: 'POST' })
   }, [])
 
+  const handleCreateSession = useCallback(async (workingDir) => {
+    const res = await fetch('/api/sessions/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workingDir }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || 'Failed to create session')
+    }
+    const { sessionId } = await res.json()
+    setSelectedId(sessionId)
+    setPreviewId(null)
+    markViewed && markViewed(sessionId)
+  }, [markViewed])
+
   const handleSelect = useCallback((id) => {
     setSelectedId(id)
     setPreviewId(null)   // close preview when going live
@@ -185,6 +201,7 @@ export default function App() {
         onRename={handleRename}
         onRemove={handleRemove}
         onRestore={handleRestore}
+        onCreateSession={handleCreateSession}
         filterNeedsYou={filterNeedsYou}
         onToggleFilter={() => setFilterNeedsYou(v => !v)}
       />

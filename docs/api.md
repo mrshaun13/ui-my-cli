@@ -12,6 +12,8 @@ with an appropriate HTTP status code.
 | `GET` | `/api/latest-prompt` | Most recent user prompt from the `prompt_history` table |
 | `GET` | `/api/sessions` | List all active (non-archived) sessions with derived status |
 | `GET` | `/api/sessions/archived` | List archived (hidden) sessions |
+| `GET` | `/api/repos` | List all unique repos (working directories) from past sessions |
+| `POST` | `/api/sessions/create` | Start a new Devin session in the given working directory (body: `{ workingDir: string }`); returns `{ sessionId }` |
 | `GET` | `/api/sessions/:id/preview` | Rich read-only session detail — chat history, stats, top tools |
 | `GET` | `/api/sessions/:id` | Single session with `ptyActive` flag |
 | `POST` | `/api/sessions/:id/rename` | Update session title (body: `{ title: string }`) |

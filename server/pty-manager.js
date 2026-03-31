@@ -36,15 +36,17 @@ function getShell() {
 }
 
 /**
- * Returns the args to pass to the shell for launching devin --resume.
- * Using `-i -l` ensures we get an interactive login shell with full PATH loaded
- * (important on WSL/macOS where PATH is set in .bashrc/.zshrc).
+ * Returns the args to pass to the shell for launching devin.
+ * If sessionId is provided, uses --resume; otherwise starts a new session.
  */
 function getShellArgs(sessionId) {
+  const cmd = sessionId
+    ? `devin --resume ${sessionId} --respect-workspace-trust false`
+    : `devin --respect-workspace-trust false`;
   if (process.platform === 'win32') {
-    return ['/k', `devin --resume ${sessionId} --respect-workspace-trust false`];
+    return ['/k', cmd];
   }
-  return ['-i', '-l', '-c', `devin --resume ${sessionId} --respect-workspace-trust false`];
+  return ['-i', '-l', '-c', cmd];
 }
 
 /**
@@ -205,4 +207,79 @@ function activePtySessions() {
   return [...ptys.keys()];
 }
 
-module.exports = { attachClient, killPty, isPtyActive, activePtySessions };
+/**
+ * Spawns a brand-new Devin session (no --resume) in the given working directory.
+ * The PTY is stored under `tempKey` until the real session ID is detected from the
+ * DB, at which point the caller should call rekeyPty(tempKey, realSessionId).
+ *
+ * No WebSocket client is attached initially — the client will connect via the
+ * standard /ws/terminal/:sessionId path once the real ID is known.
+ */
+function spawnNewSession(tempKey, workingDir, cols = 220, rows = 50) {
+  const shell = getShell();
+  const args = getShellArgs(null);  // no sessionId → bare `devin`
+  const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
+
+  const pty = spawn(shell, args, {
+    name: 'xterm-256color',
+    cols,
+    rows,
+    cwd,
+    env: {
+      ...process.env,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      DEVIN_DASHBOARD: '1',
+    },
+  });
+
+  const entry = {
+    pty,
+    clients: new Set(),
+    scrollback: [],
+    scrollbackSize: 0,
+  };
+  ptys.set(tempKey, entry);
+
+  pty.onData(data => {
+    appendScrollback(entry, data);
+    const dead = [];
+    for (const client of entry.clients) {
+      if (client.readyState === 1) {
+        client.send(JSON.stringify({ type: 'output', data }));
+      } else {
+        dead.push(client);
+      }
+    }
+    for (const c of dead) entry.clients.delete(c);
+  });
+
+  pty.onExit(({ exitCode }) => {
+    for (const client of entry.clients) {
+      if (client.readyState === 1) {
+        client.send(JSON.stringify({ type: 'exit', exitCode }));
+      }
+    }
+    // Clean up under whatever key we're stored as (might already be re-keyed)
+    for (const [key, val] of ptys.entries()) {
+      if (val === entry) { ptys.delete(key); break; }
+    }
+  });
+
+  return entry;
+}
+
+/**
+ * Re-keys a PTY entry in the map from oldKey to newKey.
+ * This lets attachClient(realSessionId, ...) find the already-running PTY
+ * instead of spawning a duplicate.
+ */
+function rekeyPty(oldKey, newKey) {
+  const entry = ptys.get(oldKey);
+  if (!entry) return false;
+  ptys.delete(oldKey);
+  ptys.set(newKey, entry);
+  return true;
+}
+
+module.exports = { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty };
