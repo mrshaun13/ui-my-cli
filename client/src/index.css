@@ -1311,6 +1311,33 @@ html, body, #root {
 .legend-label { color: var(--text-secondary); }
 .legend-sep { color: var(--text-muted); margin: 0 2px; }
 
+/* ── Legend toggles — clickable legend items for filtering chart series ── */
+.legend-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.15s;
+}
+
+.legend-toggle:hover { opacity: 0.85; }
+
+.legend-toggle.legend-off {
+  opacity: 0.3;
+  text-decoration: line-through;
+}
+
+/* ── Clickable leaderboard labels ──────────────────────────────── */
+.lb-clickable-label {
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 0.15s;
+}
+.lb-clickable-label:hover {
+  text-decoration-color: currentColor;
+}
+
 /* ── Sparkline ───────────────────────────────────────────────── */
 .sparkline {
   display: flex;
@@ -2660,6 +2687,140 @@ html, body, #root {
 .splash-subagent-count {
   font-weight: 700;
   font-size: 13px;
+}
+
+/* ── Context Pie Chart ───────────────────────────────────────── */
+.ctx-pie-wrap {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+.ctx-pie-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.ctx-pie-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+.ctx-pie-pct {
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.ctx-pie-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.ctx-pie-svg {
+  flex-shrink: 0;
+}
+.ctx-pie-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.ctx-pie-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  padding: 1px 3px;
+  border-radius: 3px;
+  cursor: default;
+  transition: background 0.1s;
+}
+.ctx-pie-legend-row:hover,
+.ctx-pie-legend-active {
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+}
+.ctx-pie-legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.ctx-pie-legend-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctx-pie-legend-value {
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: right;
+  min-width: 28px;
+}
+.ctx-pie-legend-pct {
+  color: var(--text-muted);
+  min-width: 24px;
+  text-align: right;
+}
+.ctx-pie-compactions {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+}
+
+/* ── Session Config Section ──────────────────────────────────── */
+.session-config-section {
+  margin-top: 14px;
+}
+.session-config-group {
+  margin-bottom: 8px;
+}
+.session-config-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.session-config-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.session-config-chip {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-config-chip-rule {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.session-config-chip-skill {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.session-config-chip-perm {
+  color: var(--text-secondary);
+  border-color: var(--border);
+  background: var(--bg-elevated);
+  font-size: 9px;
 }
 
 /* ── Accessibility: reduced motion ──────────────────────────── */

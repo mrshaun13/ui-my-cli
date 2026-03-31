@@ -15,6 +15,9 @@ A browser-based dashboard for managing multiple Devin CLI agent sessions. Replac
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
 - **Archive / restore** — hide sessions from the list without deleting them; restore from the collapsible drawer at the bottom of the sidebar
 - **Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), token usage, tool call breakdown, model distribution, shown when no session is selected
+- **Context window pie chart** — per-session donut chart showing context window composition (system prompt, user messages, assistant messages, tool calls, tool results, free capacity)
+- **Environment banner** — global config overview on the dashboard home page showing active model, MCP servers, skills, and plugins with color-coded chips
+- **Session config** — per-session configuration details (active rules, invoked skills, permissions) extracted from the session's cogs_json
 
 ## Quick Start
 

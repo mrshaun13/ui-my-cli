@@ -300,7 +300,6 @@ const TOOL_COLORS = {
   find_file_by_name: 'var(--blue)',
   mcp_call_tool:     'var(--yellow)',
   run_subagent:      'var(--purple)',
-  read_subagent:     'var(--purple)',
 }
 
 const TOOL_TIP =
@@ -384,8 +383,19 @@ function fmtDurationShort(sec) {
 
 function ProjectComboChart({ projects }) {
   const [hover, setHover] = useState(null)   // { idx, px, py }
+  const [hidden, setHidden] = useState(new Set())
 
   if (!projects.length) return <div className="splash-empty-note">No project data yet.</div>
+
+  const showDur  = !hidden.has('duration')
+  const showMsg  = !hidden.has('turns')
+  const showSess = !hidden.has('sessions')
+
+  const toggleSeries = (key) => setHidden(prev => {
+    const next = new Set(prev)
+    next.has(key) ? next.delete(key) : next.add(key)
+    return next
+  })
 
   const maxMsg = Math.max(...projects.map(p => p.messages), 1)
   const maxDur = Math.max(...projects.map(p => p.durationSec), 1)
@@ -478,12 +488,12 @@ function ProjectComboChart({ projects }) {
                 fill="transparent" />
 
               {/* Duration bar */}
-              <rect x={durX} y={baseY - Math.max(1, durH)} width={barW} height={Math.max(1, durH)}
-                rx={2} fill="var(--cyan)" opacity={isHov ? 1 : 0.7} />
+              {showDur && <rect x={durX} y={baseY - Math.max(1, durH)} width={barW} height={Math.max(1, durH)}
+                rx={2} fill="var(--cyan)" opacity={isHov ? 1 : 0.7} />}
 
               {/* Turns bar */}
-              <rect x={msgX} y={baseY - Math.max(1, msgH)} width={barW} height={Math.max(1, msgH)}
-                rx={2} fill="var(--purple)" opacity={isHov ? 1 : 0.7} />
+              {showMsg && <rect x={msgX} y={baseY - Math.max(1, msgH)} width={barW} height={Math.max(1, msgH)}
+                rx={2} fill="var(--purple)" opacity={isHov ? 1 : 0.7} />}
 
               {/* Project label */}
               <text x={cx} y={COMBO_H - 6} textAnchor="middle"
@@ -496,12 +506,14 @@ function ProjectComboChart({ projects }) {
         })}
 
         {/* Session count line */}
-        <polyline points={linePath} fill="none" stroke="var(--yellow)"
-          strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" opacity="0.8" />
-        {linePoints.map((pt, i) => (
-          <circle key={i} cx={pt.x} cy={pt.y} r={hover?.idx === i ? 4.5 : 3}
-            fill="var(--yellow)" opacity={hover?.idx === i ? 1 : 0.6} />
-        ))}
+        {showSess && <>
+          <polyline points={linePath} fill="none" stroke="var(--yellow)"
+            strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" opacity="0.8" />
+          {linePoints.map((pt, i) => (
+            <circle key={i} cx={pt.x} cy={pt.y} r={hover?.idx === i ? 4.5 : 3}
+              fill="var(--yellow)" opacity={hover?.idx === i ? 1 : 0.6} />
+          ))}
+        </>}
 
       </svg>
 
@@ -542,12 +554,21 @@ function ProjectComboChart({ projects }) {
 
       {/* Legend */}
       <div className="activity-chart-legend" style={{ marginTop: 2 }}>
-        <span className="legend-dot" style={{ background: 'var(--cyan)' }} />
-        <span className="legend-label">duration</span>
-        <span className="legend-dot" style={{ background: 'var(--purple)', marginLeft: 8 }} />
-        <span className="legend-label">turns</span>
-        <span className="legend-dot" style={{ background: 'var(--yellow)', marginLeft: 8 }} />
-        <span className="legend-label">sessions (right axis)</span>
+        <span className={`legend-toggle${hidden.has('duration') ? ' legend-off' : ''}`}
+          onClick={() => toggleSeries('duration')}>
+          <span className="legend-dot" style={{ background: 'var(--cyan)' }} />
+          <span className="legend-label">duration</span>
+        </span>
+        <span className={`legend-toggle${hidden.has('turns') ? ' legend-off' : ''}`}
+          onClick={() => toggleSeries('turns')} style={{ marginLeft: 8 }}>
+          <span className="legend-dot" style={{ background: 'var(--purple)' }} />
+          <span className="legend-label">turns</span>
+        </span>
+        <span className={`legend-toggle${hidden.has('sessions') ? ' legend-off' : ''}`}
+          onClick={() => toggleSeries('sessions')} style={{ marginLeft: 8 }}>
+          <span className="legend-dot" style={{ background: 'var(--yellow)' }} />
+          <span className="legend-label">sessions (right axis)</span>
+        </span>
       </div>
     </div>
   )
@@ -596,10 +617,24 @@ function friendlyModel(raw) {
  */
 function ModelUsageTable({ models }) {
   const [hovered, setHovered] = useState(null)
+  const [hidden, setHidden] = useState(new Set())
 
   if (!models || models.length === 0) {
     return <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>No token data yet.</div>
   }
+
+  const toggleCat = (key) => setHidden(prev => {
+    const next = new Set(prev)
+    next.has(key) ? next.delete(key) : next.add(key)
+    return next
+  })
+
+  const MODEL_CATS = [
+    { key: 'output', field: 'outputTokens',    pctBase: 'outputTokens', scale: 1, barClass: 'model-bar-output' },
+    { key: 'input',  field: 'inputTokens',     pctBase: 'outputTokens', scale: 1, barClass: 'model-bar-input' },
+    { key: 'cwrite', field: 'cacheWriteTokens', pctBase: 'outputTokens', scale: 1, barClass: 'model-bar-cwrite' },
+    { key: 'cread',  field: 'cacheReadTokens',  pctBase: 'outputTokens', scale: 0.08, barClass: 'model-bar-cread' },
+  ]
 
   // Scale bars by output tokens — the "work done" axis
   const maxOutput = models[0]?.outputTokens || 1
@@ -607,13 +642,6 @@ function ModelUsageTable({ models }) {
   return (
     <div className="model-usage-table">
       {models.map(m => {
-        const total = m.inputTokens + m.outputTokens + m.cacheWriteTokens + m.cacheReadTokens
-        // Each bar segment as % of output-max (so all bars are relative to top model)
-        const outPct   = Math.max(2, (m.outputTokens     / maxOutput) * 100)
-        const inPct    = (m.inputTokens      / maxOutput) * 100
-        const cwPct    = (m.cacheWriteTokens / maxOutput) * 100
-        const crPct    = (m.cacheReadTokens  / maxOutput) * 8  // scale down — very large, less costly
-
         const isHov = hovered === m.model
         return (
           <div
@@ -642,10 +670,14 @@ function ModelUsageTable({ models }) {
               `Cache read: ${m.cacheReadTokens.toLocaleString()}\n` +
               `Total API calls: ${m.calls.toLocaleString()}`
             }>
-              <div className="model-bar-seg model-bar-output"   style={{ width: outPct + '%' }} />
-              <div className="model-bar-seg model-bar-input"    style={{ width: inPct  + '%' }} />
-              <div className="model-bar-seg model-bar-cwrite"   style={{ width: cwPct  + '%' }} />
-              <div className="model-bar-seg model-bar-cread"    style={{ width: crPct  + '%' }} />
+              {MODEL_CATS.filter(c => !hidden.has(c.key)).map(c => {
+                const pct = c.key === 'output'
+                  ? Math.max(2, (m[c.field] / maxOutput) * 100)
+                  : c.key === 'cread'
+                    ? (m[c.field] / maxOutput) * 8
+                    : (m[c.field] / maxOutput) * 100
+                return <div key={c.key} className={`model-bar-seg ${c.barClass}`} style={{ width: pct + '%' }} />
+              })}
             </div>
 
             {/* Expanded detail on hover */}
@@ -663,10 +695,18 @@ function ModelUsageTable({ models }) {
 
       {/* Legend */}
       <div className="model-usage-legend">
-        <span><span className="model-detail-dot model-bar-output" />output</span>
-        <span><span className="model-detail-dot model-bar-input" />input</span>
-        <span><span className="model-detail-dot model-bar-cwrite" />cache write</span>
-        <span><span className="model-detail-dot model-bar-cread" />cache read</span>
+        {[
+          { key: 'output', cls: 'model-bar-output', label: 'output' },
+          { key: 'input',  cls: 'model-bar-input',  label: 'input' },
+          { key: 'cwrite', cls: 'model-bar-cwrite', label: 'cache write' },
+          { key: 'cread',  cls: 'model-bar-cread',  label: 'cache read' },
+        ].map(c => (
+          <span key={c.key}
+            className={`legend-toggle${hidden.has(c.key) ? ' legend-off' : ''}`}
+            onClick={() => toggleCat(c.key)}>
+            <span className={`model-detail-dot ${c.cls}`} />{c.label}
+          </span>
+        ))}
       </div>
     </div>
   )
@@ -711,8 +751,9 @@ function lbLabel(entry) {
 /**
  * LeaderboardChart — reusable horizontal bar chart for top-10 ranked sessions.
  * Used for duration and user message leaderboards.
+ * Clicking a session label navigates to its preview panel.
  */
-function LeaderboardChart({ entries, valueFn, color }) {
+function LeaderboardChart({ entries, valueFn, color, onSelectSession }) {
   const [hover, setHover] = useState(null)
   if (!entries?.length) return <div className="splash-empty-note">No data yet.</div>
 
@@ -737,7 +778,10 @@ function LeaderboardChart({ entries, valueFn, color }) {
               style={{ cursor: 'default' }}>
               <text x={LB_LABEL_W - 4} y={y + LB_BAR_H * 0.78} textAnchor="end"
                 fill={isHov ? color : 'var(--text-secondary)'}
-                fontSize="9" fontFamily="var(--font-mono)">
+                fontSize="9" fontFamily="var(--font-mono)"
+                className={onSelectSession ? 'lb-clickable-label' : undefined}
+                style={onSelectSession ? { cursor: 'pointer' } : undefined}
+                onClick={onSelectSession ? () => onSelectSession(e.id) : undefined}>
                 {lbLabel(e)}
               </text>
               <text x={LB_LABEL_W + LB_VALUE_W - 2} y={y + LB_BAR_H * 0.78} textAnchor="end"
@@ -760,12 +804,32 @@ function LeaderboardChart({ entries, valueFn, color }) {
 /**
  * LeaderboardTokenChart — stacked horizontal bars for top-10 sessions by token usage.
  * Each bar shows output / input / cache_write / cache_read segments.
+ * Legend items are toggleable to filter visible token categories.
+ * Clicking a session label navigates to its preview panel.
  */
-function LeaderboardTokenChart({ entries }) {
+const TOKEN_CATEGORIES = [
+  { key: 'output', field: 'outputTokens',     color: 'var(--accent)', label: 'output' },
+  { key: 'input',  field: 'inputTokens',      color: 'var(--blue)',   label: 'input' },
+  { key: 'cwrite', field: 'cacheWriteTokens',  color: 'var(--yellow)', label: 'cache write' },
+  { key: 'cread',  field: 'cacheReadTokens',   color: 'var(--purple)', label: 'cache read' },
+]
+
+function LeaderboardTokenChart({ entries, onSelectSession }) {
   const [hover, setHover] = useState(null)
+  const [hidden, setHidden] = useState(new Set())
   if (!entries?.length) return <div className="splash-empty-note">No token data yet.</div>
 
-  const maxTotal = entries[0].totalTokens || 1
+  const toggleCat = (key) => setHidden(prev => {
+    const next = new Set(prev)
+    next.has(key) ? next.delete(key) : next.add(key)
+    return next
+  })
+
+  const visibleCats = TOKEN_CATEGORIES.filter(c => !hidden.has(c.key))
+
+  // Recalculate max based on visible categories
+  const visibleTotal = (e) => visibleCats.reduce((sum, c) => sum + (e[c.field] || 0), 0)
+  const maxTotal = Math.max(...entries.map(visibleTotal), 1)
   const totalH = entries.length * LB_ROW_H - LB_GAP
 
   return (
@@ -776,20 +840,22 @@ function LeaderboardTokenChart({ entries }) {
       >
         {entries.map((e, i) => {
           const y = i * LB_ROW_H
-          const scale = LB_BAR_AREA / maxTotal
-          const outW  = Math.max(1, Math.round(e.outputTokens     * scale))
-          const inW   = Math.round(e.inputTokens      * scale)
-          const cwW   = Math.round(e.cacheWriteTokens  * scale)
-          const crW   = Math.round(e.cacheReadTokens   * scale)
           const isHov = hover === i
           const bx = LB_LABEL_W + LB_VALUE_W
           const by = y + 2
           const bh = LB_BAR_H - 4
-          // Stacked segment positions (cumulative x offsets)
-          const outX = bx
-          const inX  = outX + outW
-          const cwX  = inX + inW
-          const crX  = cwX + cwW
+
+          // Build stacked segments from visible categories
+          let cx = bx
+          const segments = visibleCats.map(c => {
+            const w = Math.max(0, Math.round((e[c.field] || 0) / maxTotal * LB_BAR_AREA))
+            const seg = { x: cx, w, color: c.color, key: c.key }
+            cx += w
+            return seg
+          })
+          // Ensure first visible segment has at least 1px
+          if (segments.length && segments[0].w === 0) segments[0].w = 1
+
           return (
             <g key={e.id}
               onMouseEnter={() => setHover(i)}
@@ -797,34 +863,36 @@ function LeaderboardTokenChart({ entries }) {
               style={{ cursor: 'default' }}>
               <text x={LB_LABEL_W - 4} y={y + LB_BAR_H * 0.78} textAnchor="end"
                 fill={isHov ? 'var(--accent)' : 'var(--text-secondary)'}
-                fontSize="9" fontFamily="var(--font-mono)">
+                fontSize="9" fontFamily="var(--font-mono)"
+                className={onSelectSession ? 'lb-clickable-label' : undefined}
+                style={onSelectSession ? { cursor: 'pointer' } : undefined}
+                onClick={onSelectSession ? () => onSelectSession(e.id) : undefined}>
                 {lbLabel(e)}
               </text>
               <text x={LB_LABEL_W + LB_VALUE_W - 2} y={y + LB_BAR_H * 0.78} textAnchor="end"
                 fill={isHov ? 'var(--text-secondary)' : 'var(--text-muted)'}
                 fontSize="8.5" fontFamily="var(--font-mono)">
-                {fmtTokens(e.totalTokens)}
+                {fmtTokens(visibleTotal(e))}
               </text>
               <rect x={bx} y={by} width={LB_BAR_AREA} height={bh}
                 rx={2} fill="var(--bg-elevated)" />
-              {/* Stacked segments: output | input | cache_write | cache_read */}
-              {outW > 0 && <rect x={outX} y={by} width={outW} height={bh} rx={1}
-                fill="var(--accent)" opacity={isHov ? 1 : 0.7} />}
-              {inW > 0 && <rect x={inX} y={by} width={inW} height={bh} rx={1}
-                fill="var(--blue)" opacity={isHov ? 0.85 : 0.55} />}
-              {cwW > 0 && <rect x={cwX} y={by} width={cwW} height={bh} rx={1}
-                fill="var(--yellow)" opacity={isHov ? 0.75 : 0.45} />}
-              {crW > 0 && <rect x={crX} y={by} width={crW} height={bh} rx={1}
-                fill="var(--purple)" opacity={isHov ? 0.65 : 0.4} />}
+              {segments.map(seg => seg.w > 0 && (
+                <rect key={seg.key} x={seg.x} y={by} width={seg.w} height={bh} rx={1}
+                  fill={seg.color} opacity={isHov ? 1 : 0.7} />
+              ))}
             </g>
           )
         })}
       </svg>
       <div className="model-usage-legend" style={{ marginTop: 4 }}>
-        <span><span className="model-detail-dot model-bar-output" />output</span>
-        <span><span className="model-detail-dot model-bar-input" />input</span>
-        <span><span className="model-detail-dot model-bar-cwrite" />cache write</span>
-        <span><span className="model-detail-dot model-bar-cread" />cache read</span>
+        {TOKEN_CATEGORIES.map(c => (
+          <span key={c.key}
+            className={`legend-toggle${hidden.has(c.key) ? ' legend-off' : ''}`}
+            onClick={() => toggleCat(c.key)}>
+            <span className={`model-detail-dot model-bar-${c.key === 'output' ? 'output' : c.key === 'input' ? 'input' : c.key === 'cwrite' ? 'cwrite' : 'cread'}`} />
+            {c.label}
+          </span>
+        ))}
       </div>
     </div>
   )
@@ -863,7 +931,7 @@ function LoadingMsg() {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function DashboardSplash({ connected, latestPrompt }) {
+export default function DashboardSplash({ connected, latestPrompt, onSelectSession }) {
   const { stats, error } = useStats()
 
   if (!connected) return (
@@ -877,7 +945,8 @@ export default function DashboardSplash({ connected, latestPrompt }) {
   )
 
   const { projects, tools, activityByHour, models, totalSubagents,
-          topSessionsByDuration, topSessionsByUserMsgs, topSessionsByTokens } = stats
+          topSessionsByDuration, topSessionsByUserMsgs, topSessionsByTokens,
+          mcpServers, skills, plugins, model, permissionMode, devinVersion } = stats
 
   // Pre-format leaderboard display values
   const durEntries = (topSessionsByDuration || []).map(e => ({ ...e, _fmt: e.durationStr }))
@@ -886,6 +955,56 @@ export default function DashboardSplash({ connected, latestPrompt }) {
   return (
     <div className="splash">
       <LatestPromptBanner prompt={latestPrompt} />
+
+      {/* ── Environment banner ─────────────────────────────────────── */}
+      {(mcpServers?.length > 0 || skills?.length > 0 || plugins?.length > 0 || model) && (
+        <div className="splash-env-banner">
+          {model && (
+            <div className="splash-env-group">
+              <span className="splash-env-group-label">model</span>
+              <div className="splash-chip-list">
+                <span className="splash-chip splash-chip-model">{friendlyModel(model)}</span>
+                {permissionMode && permissionMode !== 'default' && (
+                  <span className="splash-chip splash-chip-model">{permissionMode}</span>
+                )}
+              </div>
+            </div>
+          )}
+          {mcpServers?.length > 0 && (
+            <div className="splash-env-group">
+              <span className="splash-env-group-label">mcp</span>
+              <div className="splash-chip-list">
+                {mcpServers.map(s => (
+                  <span key={s.name} className="splash-chip splash-chip-mcp" title={s.url || s.type}>{s.name}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {skills?.length > 0 && (
+            <div className="splash-env-group">
+              <span className="splash-env-group-label">skills</span>
+              <div className="splash-chip-list">
+                {skills.map(s => (
+                  <span key={s.name} className="splash-chip splash-chip-skill" title={s.description || s.dir}>{s.name}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {plugins?.length > 0 && (
+            <div className="splash-env-group">
+              <span className="splash-env-group-label">plugins</span>
+              <div className="splash-chip-list">
+                {plugins.map(p => (
+                  <span key={p.name} className={`splash-chip ${p.missing ? 'splash-chip-missing' : 'splash-chip-plugin'}`} title={p.description || p.dir}>
+                    {p.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="splash-body">
 
         {/* ── Left column ──────────────────────────────────────────── */}
@@ -930,6 +1049,7 @@ export default function DashboardSplash({ connected, latestPrompt }) {
             entries={durEntries}
             valueFn={e => e.durationSec}
             color="var(--cyan)"
+            onSelectSession={onSelectSession}
           />
         </Section>
 
@@ -938,11 +1058,12 @@ export default function DashboardSplash({ connected, latestPrompt }) {
             entries={msgEntries}
             valueFn={e => e.userMsgCount}
             color="var(--purple)"
+            onSelectSession={onSelectSession}
           />
         </Section>
 
         <Section title="Top 10 Token Usage" tip={TOKENS_LB_TIP}>
-          <LeaderboardTokenChart entries={topSessionsByTokens || []} />
+          <LeaderboardTokenChart entries={topSessionsByTokens || []} onSelectSession={onSelectSession} />
         </Section>
 
       </div>

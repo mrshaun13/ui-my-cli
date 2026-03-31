@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import SubagentTimeline from './SubagentTimeline'
+import ContextPieChart from './ContextPieChart'
 
 const STATUS_LABEL = {
   question: 'Needs your input',
@@ -298,6 +299,9 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
   // ── Subagent timeline state ─────────────────────────────────────────────────
   const [subagents, setSubagents] = useState(null)  // null = not loaded, [] = no subagents
 
+  // ── Session config state ────────────────────────────────────────────────────
+  const [sessionConfig, setSessionConfig] = useState(null)
+
   useEffect(() => {
     if (!sessionId) return
     setData(null)
@@ -310,6 +314,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
     setNextBatch(INITIAL_BATCH)
     fetchingRef.current = false
     setSubagents(null)
+    setSessionConfig(null)
     fetch(`/api/sessions/${sessionId}/preview`)
       .then(r => r.json())
       .then(d => { setData(d); setNameValue(d.title) })
@@ -342,6 +347,17 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
       .then(r => { if (!r.ok) throw new Error('subagent fetch failed'); return r.json() })
       .then(d => { if (!cancelled) setSubagents(Array.isArray(d) ? d : []) })
       .catch(() => { if (!cancelled) setSubagents([]) })  // silently degrade on error
+    return () => { cancelled = true }
+  }, [data, sessionId])
+
+  // Lazy-fetch session config when preview data arrives
+  useEffect(() => {
+    if (!data || !sessionId) return
+    let cancelled = false
+    fetch(`/api/sessions/${sessionId}/config`)
+      .then(r => { if (!r.ok) throw new Error('config fetch failed'); return r.json() })
+      .then(d => { if (!cancelled) setSessionConfig(d) })
+      .catch(() => { if (!cancelled) setSessionConfig(null) })
     return () => { cancelled = true }
   }, [data, sessionId])
 
@@ -629,9 +645,11 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
           )}
         </div>
 
-        {/* Right: tool breakdown + model section + session info */}
+        {/* Right: context pie + tool breakdown + model section + session config + session info */}
         <div className="preview-tools-col">
-          <div className="preview-section-label">
+          <ContextPieChart sessionId={sessionId} />
+
+          <div className="preview-section-label" style={{ marginTop: 14 }}>
             Tool breakdown
             <InfoBubble tip="How often Devin used each tool in this session. Tools let Devin interact with your system — run commands, read/edit files, search code, browse the web, and more." />
           </div>
@@ -650,6 +668,52 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
                 <InfoBubble tip="Background and foreground subagents spawned by Devin during this session. Each subagent runs in its own context with a specific profile (explore = read-only, general = full access)." />
               </div>
               <SubagentTimeline subagents={subagents} />
+            </>
+          )}
+
+          {sessionConfig && (sessionConfig.rules.length > 0 || sessionConfig.activeSkills.length > 0 || sessionConfig.permissions.length > 0) && (
+            <>
+              <div className="preview-section-label" style={{ marginTop: 14 }}>
+                Session config
+                <InfoBubble tip="Configuration active during this session — rules files injected into the system prompt, skills that were invoked, and permission grants from cogs." />
+              </div>
+              <div className="session-config-section">
+                {sessionConfig.rules.length > 0 && (
+                  <div className="session-config-group">
+                    <div className="session-config-group-label">Rules</div>
+                    <div className="session-config-chips">
+                      {sessionConfig.rules.map(r => (
+                        <span key={r} className="session-config-chip session-config-chip-rule" title={`AGENTS.md rule: ${r}`}>{r}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {sessionConfig.activeSkills.length > 0 && (
+                  <div className="session-config-group">
+                    <div className="session-config-group-label">Skills</div>
+                    <div className="session-config-chips">
+                      {sessionConfig.activeSkills.map(s => (
+                        <span key={s.name} className="session-config-chip session-config-chip-skill" title={`Source: ${s.source}`}>{s.name}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {sessionConfig.permissions.length > 0 && (
+                  <div className="session-config-group">
+                    <div className="session-config-group-label">Permissions ({sessionConfig.permissions.length})</div>
+                    <div className="session-config-chips">
+                      {sessionConfig.permissions.slice(0, 8).map((p, i) => (
+                        <span key={i} className="session-config-chip session-config-chip-perm" title={`${p.scope} → ${p.action}`}>
+                          {p.action === 'Allow' ? '\u2713' : p.action === 'ForceAsk' ? '?' : p.action} {p.scope.length > 30 ? p.scope.slice(0, 29) + '\u2026' : p.scope}
+                        </span>
+                      ))}
+                      {sessionConfig.permissions.length > 8 && (
+                        <span className="session-config-chip session-config-chip-perm">+{sessionConfig.permissions.length - 8} more</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </>
           )}
 

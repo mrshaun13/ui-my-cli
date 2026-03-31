@@ -36,6 +36,12 @@ module.exports = {
       'restore from the collapsible drawer at the bottom of the sidebar',
     '**Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), ' +
       'token usage, tool call breakdown, model distribution, shown when no session is selected',
+    '**Context window pie chart** — per-session donut chart showing context window composition ' +
+      '(system prompt, user messages, assistant messages, tool calls, tool results, free capacity)',
+    '**Environment banner** — global config overview on the dashboard home page showing active ' +
+      'model, MCP servers, skills, and plugins with color-coded chips',
+    '**Session config** — per-session configuration details (active rules, invoked skills, ' +
+      'permissions) extracted from the session\'s cogs_json',
   ],
 
   prerequisites: [
@@ -97,6 +103,8 @@ module.exports = {
     'GET /api/sessions/:id/preview': 'Rich read-only session detail — chat history, stats, top tools',
     'GET /api/sessions/:id/conversation': 'Paginated user↔assistant conversation turns for a session. Query params: `offset` (number of turns to skip from end, default 0), `limit` (max turns to return, 0 = all, default 50). Returns `{ turns, totalTurns, hasMore }`.',
     'GET /api/sessions/:id/subagents': 'Subagent lifecycle data for a session — launch, confirmation, and completion events mined from `message_nodes`. Returns an array of `{ id, title, profile, isBackground, agentId, task, launchedAt, completedAt, durationSec, resultPreview }`.',
+    'GET /api/sessions/:id/context': 'Context window breakdown for a session — estimated token counts per category (system prompt, user messages, assistant messages, tool calls, tool results) plus free capacity. Proportions are computed from character counts in the active context (post-compaction) and scaled to match the actual `num_tokens_preceding` value. Returns `{ categories, totalUsed, maxContext, freeTokens, compactionCount, model }`.',
+    'GET /api/sessions/:id/config': 'Per-session configuration extracted from `cogs_json` — active rules files, invoked skills, permission grants, current model, and permission mode. Returns `{ rules, activeSkills, permissions, model, permissionMode }`.',
     'GET /api/sessions/:id':         'Single session with `ptyActive` flag',
     'POST /api/sessions/:id/rename': 'Update session title (body: `{ title: string }`)',
     'POST /api/sessions/:id/kill-pty': 'Kill the active PTY for a session without archiving it',

@@ -234,7 +234,7 @@ export default function App() {
           />
         )}
         {mainView === 'splash' && (
-          <DashboardSplash sessions={sessions} connected={connected} />
+          <DashboardSplash sessions={sessions} connected={connected} onSelectSession={handlePreview} />
         )}
 
         {selectedSession && (

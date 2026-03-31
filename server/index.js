@@ -25,7 +25,7 @@ const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const url = require('url');
 
-const { listSessions, listArchivedSessions, getSession, getSessionPreview, getSessionConversation, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions } = require('./sessions');
+const { listSessions, listArchivedSessions, getSession, getSessionPreview, getSessionConversation, getSessionContextBreakdown, getSessionConfig, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions } = require('./sessions');
 const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty } = require('./pty-manager');
 const { getStats, getLatestPrompt } = require('./stats');
 const { extractSubagents } = require('./subagents');
@@ -198,6 +198,28 @@ app.get('/api/sessions/:id/subagents', (req, res) => {
     res.json(subagents);
   } catch (err) {
     console.error('[sessions] subagents error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/sessions/:id/context', (req, res) => {
+  try {
+    const result = getSessionContextBreakdown(req.params.id);
+    if (!result) return res.status(404).json({ error: 'Session not found' });
+    res.json(result);
+  } catch (err) {
+    console.error('[sessions] context error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/sessions/:id/config', (req, res) => {
+  try {
+    const result = getSessionConfig(req.params.id);
+    if (!result) return res.status(404).json({ error: 'Session not found' });
+    res.json(result);
+  } catch (err) {
+    console.error('[sessions] config error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -868,4 +868,219 @@ function findNewSessionInDir(workingDir, excludeIds) {
   }
 }
 
-module.exports = { listSessions, listArchivedSessions, getSession, getSessionPreview, getSessionConversation, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };
+/**
+ * Returns context window breakdown for a session — estimated token counts
+ * per category (system prompt, user messages, assistant messages, tool calls,
+ * tool results) plus free capacity.
+ *
+ * Strategy: count characters in each message category within the active context
+ * (after the last compaction), compute proportions, then scale to fit the
+ * actual total from num_tokens_preceding on the latest message node.
+ *
+ * @param {string} id  - Session ID
+ * @returns {object|null} - { categories, totalUsed, maxContext, freeTokens, compactionCount }
+ */
+function getSessionContextBreakdown(id) {
+  const db = getReadDb();
+
+  const session = db.prepare(
+    'SELECT id, model, cogs_json FROM sessions WHERE id = ?'
+  ).get(id);
+  if (!session) return null;
+
+  // Model context limits (tokens)
+  const MODEL_LIMITS = {
+    'claude-sonnet-4-6':          200000,
+    'claude-sonnet-4-6-thinking': 200000,
+    'claude-opus-4-6':            200000,
+    'claude-opus-4-6-thinking':   200000,
+    'MODEL_PRIVATE_2':            200000,
+    'MODEL_SWE_1_5_SLOW':        200000,
+    'MODEL_CLAUDE_4_SONNET':      200000,
+  };
+
+  // Resolve current model from cogs (may differ from session.model)
+  let currentModel = session.model;
+  try {
+    const cogs = JSON.parse(session.cogs_json || '[]');
+    const modelCog = cogs.find(c => c.lifetime && c.lifetime.Unique === 'core/model');
+    if (modelCog && modelCog.model) currentModel = modelCog.model;
+  } catch { /* ignore */ }
+
+  const maxContext = MODEL_LIMITS[currentModel] || 200000;
+
+  const allNodes = db.prepare(
+    'SELECT node_id, chat_message, metadata FROM message_nodes WHERE session_id = ? ORDER BY row_id ASC'
+  ).all(id);
+
+  // Find last compaction boundary and actual token count
+  let lastCompactionNode = 0;
+  let compactionCount = 0;
+  let actualTotal = 0;
+
+  for (const n of allNodes) {
+    let meta;
+    try { meta = JSON.parse(n.metadata); } catch { continue; }
+    if (meta && meta.summarized_from !== null && meta.summarized_from !== undefined) {
+      compactionCount++;
+      lastCompactionNode = n.node_id;
+    }
+    if (meta && meta.num_tokens_preceding !== null && meta.num_tokens_preceding !== undefined) {
+      actualTotal = meta.num_tokens_preceding; // keep updating to get latest
+    }
+  }
+
+  // Count characters per category in active context (system msgs always + post-compaction)
+  const charCounts = {
+    systemPrompt: 0,
+    userMessages: 0,
+    assistantMessages: 0,
+    toolCalls: 0,
+    toolResults: 0,
+  };
+
+  for (const n of allNodes) {
+    let msg;
+    try { msg = JSON.parse(n.chat_message); } catch { continue; }
+
+    // System messages are always in context; other roles only if after last compaction
+    if (msg.role !== 'system' && n.node_id < lastCompactionNode) continue;
+
+    const contentLen = typeof msg.content === 'string' ? msg.content.length :
+      (Array.isArray(msg.content) ? JSON.stringify(msg.content).length : 0);
+
+    if (msg.role === 'system') charCounts.systemPrompt += contentLen;
+    else if (msg.role === 'user') charCounts.userMessages += contentLen;
+    else if (msg.role === 'assistant') {
+      charCounts.assistantMessages += contentLen;
+      if (msg.tool_calls) charCounts.toolCalls += JSON.stringify(msg.tool_calls).length;
+    }
+    else if (msg.role === 'tool') charCounts.toolResults += contentLen;
+  }
+
+  // Estimate proportional token counts and scale to actual
+  const totalChars = Object.values(charCounts).reduce((a, b) => a + b, 0);
+  const categories = {};
+  if (totalChars > 0 && actualTotal > 0) {
+    for (const [key, chars] of Object.entries(charCounts)) {
+      const proportion = chars / totalChars;
+      categories[key] = Math.round(proportion * actualTotal);
+    }
+  } else {
+    // Fallback: rough ÷4 estimate
+    for (const [key, chars] of Object.entries(charCounts)) {
+      categories[key] = Math.round(chars / 4);
+    }
+    if (actualTotal === 0) {
+      actualTotal = Object.values(categories).reduce((a, b) => a + b, 0);
+    }
+  }
+
+  const freeTokens = Math.max(0, maxContext - actualTotal);
+
+  return {
+    categories,
+    totalUsed: actualTotal,
+    maxContext,
+    freeTokens,
+    compactionCount,
+    model: currentModel,
+  };
+}
+
+/**
+ * Extracts per-session configuration from cogs_json — active rules, skills,
+ * permissions, and other session-scoped settings.
+ *
+ * @param {string} id - Session ID
+ * @returns {object|null} - { rules, skills, permissions, activeSkills, model, permissionMode }
+ */
+function getSessionConfig(id) {
+  const db = getReadDb();
+
+  const session = db.prepare(
+    'SELECT id, cogs_json, permission_mode, model FROM sessions WHERE id = ?'
+  ).get(id);
+  if (!session) return null;
+
+  let cogs;
+  try { cogs = JSON.parse(session.cogs_json || '[]'); } catch { cogs = []; }
+
+  // Extract active skills (cogs with lifetime Unique matching "skill/*")
+  const activeSkills = [];
+  const rules = [];
+  const permissions = [];
+  let model = session.model;
+  let permissionMode = session.permission_mode;
+
+  for (const cog of cogs) {
+    const lifetime = cog.lifetime?.Unique || '';
+
+    // Skills: lifetime like "skill/research-visualizer"
+    if (lifetime.startsWith('skill/')) {
+      activeSkills.push({
+        name: lifetime.replace('skill/', ''),
+        source: typeof cog.source === 'object' && cog.source.Session ? cog.source.Session : String(cog.source),
+      });
+    }
+
+    // Model: core/model cog
+    if (lifetime === 'core/model' && cog.model) {
+      model = cog.model;
+    }
+
+    // Extract permission entries
+    if (cog.permissions && Array.isArray(cog.permissions)) {
+      for (const perm of cog.permissions) {
+        if (!Array.isArray(perm) || perm.length < 2) continue;
+        const scope = perm[0];
+        const action = perm[1]; // "Allow", "ForceAsk", etc.
+        let desc = '';
+        if (typeof scope === 'string') desc = scope;
+        else if (scope.Scope) {
+          const s = scope.Scope;
+          if (s.Read) desc = `Read: ${typeof s.Read === 'object' ? s.Read.glob : s.Read}`;
+          else if (s.Write) desc = `Write: ${typeof s.Write === 'object' ? s.Write.glob : s.Write}`;
+          else if (s.Command) desc = `Command: ${s.Command.matcher?.Prefix || JSON.stringify(s.Command)}`;
+          else desc = JSON.stringify(s);
+        }
+        else if (scope.Tool) {
+          const t = scope.Tool;
+          desc = `Tool: ${t.Name?.exact || JSON.stringify(t)}`;
+        }
+        else if (scope === 'AnyScope') desc = 'AnyScope';
+        else desc = JSON.stringify(scope);
+
+        if (desc) permissions.push({ scope: desc, action });
+      }
+    }
+  }
+
+  // Extract rules from the first few system messages in the session
+  const systemNodes = db.prepare(
+    "SELECT chat_message FROM message_nodes WHERE session_id = ? ORDER BY row_id ASC LIMIT 10"
+  ).all(id);
+
+  for (const n of systemNodes) {
+    let msg;
+    try { msg = JSON.parse(n.chat_message); } catch { continue; }
+    if (msg?.role !== 'system') continue;
+    const content = typeof msg.content === 'string' ? msg.content : '';
+
+    // Extract rule names from <rule name="..."> tags
+    const ruleMatches = content.matchAll(/<rule\s+name="([^"]+)">/g);
+    for (const m of ruleMatches) {
+      if (!rules.includes(m[1])) rules.push(m[1]);
+    }
+  }
+
+  return {
+    rules,
+    activeSkills,
+    permissions: permissions.slice(0, 20), // Cap to avoid huge payloads
+    model,
+    permissionMode,
+  };
+}
+
+module.exports = { listSessions, listArchivedSessions, getSession, getSessionPreview, getSessionConversation, getSessionContextBreakdown, getSessionConfig, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };
