@@ -23,6 +23,61 @@ const { spawn } = require('node-pty');
 // ~256 KB of scrollback replay per session — enough for a full screen + history
 const SCROLLBACK_BYTES = 256 * 1024;
 
+/**
+ * Matches programmatic escape-sequence responses that xterm.js generates
+ * in reply to terminal queries (OSC color reports, device attributes, etc.).
+ * These should never reach the PTY — they are not user input.
+ * The client already filters these, but we guard server-side too as defense
+ * in depth so a misbehaving or older client can't pollute the PTY stream.
+ */
+const XTERM_RESPONSE_RE = new RegExp(
+  '\\x1b\\](?:1[012]|4;\\d{1,3});rgb:[\\da-f]{4}/[\\da-f]{4}/[\\da-f]{4}(?:\\x1b\\\\|\\x07)' +
+  '|\\x1b\\[\\?[\\d;]+c|\\x1b\\[>[\\d;]+c' +
+  '|\\x1b\\[0n|\\x1b\\[\\??\\d+;\\d+R' +
+  '|\\x1b\\[\\??\\d+;\\d+\\$y' +
+  '|\\x1b\\[[468];\\d+;\\d+t' +
+  '|\\x1b\\[[IO]' +
+  '|\\x1bP[01]\\$r[^\\x1b]*\\x1b\\\\' +
+  '|\\x1b\\[<\\d+;\\d+;\\d+[Mm]',
+  'g'
+);
+
+/**
+ * Strips OSC / DCS query sequences from PTY output so that replaying the
+ * scrollback buffer into a fresh xterm instance doesn't re-trigger
+ * programmatic responses (which would then flow back as phantom input).
+ *
+ * We strip the *queries* (e.g. \x1b]10;?\x07) rather than the responses,
+ * because the queries are what cause xterm.js to generate the unwanted
+ * response data via onData on the next connect.
+ *
+ * Matched query forms (BEL or ST terminated):
+ *   OSC N ; ? BEL/ST        — e.g. \x1b]10;?\x07  (fg/bg/cursor color)
+ *   OSC 4 ; N ; ? BEL/ST    — e.g. \x1b]4;1;?\x07 (indexed color)
+ *   CSI c / CSI 0 c         — DA1 request
+ *   CSI > c / CSI > 0 c     — DA2 request
+ *   CSI 5 n / CSI 6 n       — DSR requests
+ *   CSI ? 6 n               — DECDSR
+ *   CSI Ps $ p / CSI ? Ps $ p — DECRQM
+ *   CSI 14/16/18 t           — window-size queries
+ *   DCS $ q ... ST           — DECRQSS
+ */
+const TERMINAL_QUERY_RE = new RegExp(
+  // OSC color queries: \x1b]10;?\x07 or \x1b]10;?\x1b\\  (also 11, 12, 4;N)
+  '\\x1b\\](?:1[012]|4;\\d{1,3});\\?(?:\\x07|\\x1b\\\\)' +
+  // DA1/DA2 requests
+  '|\\x1b\\[>?0?c' +
+  // DSR: CSI 5n, CSI 6n, CSI ?6n
+  '|\\x1b\\[\\??[56]n' +
+  // DECRQM: CSI ?Ps$p or CSI Ps$p
+  '|\\x1b\\[\\??\\d+\\$p' +
+  // Window-size queries: CSI 14t, CSI 16t, CSI 18t
+  '|\\x1b\\[1[468]t' +
+  // DECRQSS: DCS $ q ... ST
+  '|\\x1bP\\$q[^\\x1b]*(?:\\x1b\\\\|\\x07)',
+  'g'
+);
+
 // Map of sessionId -> { pty, clients: Set<WebSocket>, scrollback: Buffer[] }
 const ptys = new Map();
 
@@ -66,10 +121,14 @@ function appendScrollback(entry, data) {
  * Sends all buffered scrollback to a single WebSocket client as one replay message.
  * We send it as output chunks (same protocol as live data) so the client handles
  * it identically to live output.
+ *
+ * Terminal query sequences (OSC 10;?, DA requests, etc.) are stripped before
+ * replay so a fresh xterm instance doesn't re-answer them and generate
+ * phantom input that pollutes the PTY stream.
  */
 function replayScrollback(entry, ws) {
   if (!entry.scrollback.length) return;
-  const combined = entry.scrollback.join('');
+  const combined = entry.scrollback.join('').replace(TERMINAL_QUERY_RE, '');
   if (combined.length === 0) return;
   if (ws.readyState === 1 /* OPEN */) {
     ws.send(JSON.stringify({ type: 'output', data: combined }));
@@ -164,7 +223,10 @@ function attachClient(sessionId, workingDir, ws, cols, rows) {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'input') {
-        pty.write(msg.data);
+        // Strip any xterm.js programmatic responses that slipped through
+        // the client-side filter (defense in depth).
+        const cleaned = msg.data.replace(XTERM_RESPONSE_RE, '');
+        if (cleaned) pty.write(cleaned);
       } else if (msg.type === 'resize') {
         pty.resize(
           Math.max(1, msg.cols || 80),
