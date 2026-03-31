@@ -192,12 +192,9 @@ export default function App() {
 
         <div className="topbar-divider" />
 
-        {selectedSession
-          ? null
-          : env && (env.mcpServers.length > 0 || env.skills.length > 0 || env.plugins.length > 0) && (
-              <EnvChips mcpServers={env.mcpServers} skills={env.skills} plugins={env.plugins} />
-            )
-        }
+        {env && (env.mcpServers.length > 0 || env.skills.length > 0 || env.plugins.length > 0) && (
+          <EnvChips mcpServers={env.mcpServers} skills={env.skills} plugins={env.plugins} />
+        )}
 
         {needsYouCount > 0 && (
           <div className="topbar-meta" style={{ marginLeft: 'auto' }}>
@@ -241,7 +238,7 @@ export default function App() {
         )}
 
         {selectedSession && (
-          <PromptStrip prompt={selectedSession.lastUserPrompt} />
+          <PromptStrip prompt={selectedSession.lastUserPrompt || selectedSession.firstUserPrompt} />
         )}
       </main>
 
