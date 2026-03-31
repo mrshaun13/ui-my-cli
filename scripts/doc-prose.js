@@ -95,6 +95,8 @@ module.exports = {
     'GET /api/repos':                'List all unique repos (working directories) from past sessions',
     'POST /api/sessions/create':     'Start a new Devin session in the given working directory (body: `{ workingDir: string }`); returns `{ sessionId }`',
     'GET /api/sessions/:id/preview': 'Rich read-only session detail — chat history, stats, top tools',
+    'GET /api/sessions/:id/conversation': 'Paginated user↔assistant conversation turns for a session. Query params: `offset` (number of turns to skip from end, default 0), `limit` (max turns to return, 0 = all, default 50). Returns `{ turns, totalTurns, hasMore }`.',
+    'GET /api/sessions/:id/subagents': 'Subagent lifecycle data for a session — launch, confirmation, and completion events mined from `message_nodes`. Returns an array of `{ id, title, profile, isBackground, agentId, task, launchedAt, completedAt, durationSec, resultPreview }`.',
     'GET /api/sessions/:id':         'Single session with `ptyActive` flag',
     'POST /api/sessions/:id/rename': 'Update session title (body: `{ title: string }`)',
     'POST /api/sessions/:id/kill-pty': 'Kill the active PTY for a session without archiving it',

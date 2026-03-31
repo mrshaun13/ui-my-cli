@@ -876,7 +876,7 @@ export default function DashboardSplash({ connected, latestPrompt }) {
     <div className="splash-loading"><div className="spinner" /><LoadingMsg /></div>
   )
 
-  const { projects, tools, activityByHour, models,
+  const { projects, tools, activityByHour, models, totalSubagents,
           topSessionsByDuration, topSessionsByUserMsgs, topSessionsByTokens } = stats
 
   // Pre-format leaderboard display values
@@ -907,6 +907,13 @@ export default function DashboardSplash({ connected, latestPrompt }) {
           <Section title="Tool Calls" tip={TOOL_TIP}>
             <ToolBarChart tools={tools} />
           </Section>
+
+          {totalSubagents > 0 && (
+            <div className="splash-subagent-stat">
+              <span className="splash-subagent-count">{totalSubagents}</span>{' '}
+              subagent{totalSubagents !== 1 ? 's' : ''} launched
+            </div>
+          )}
 
           <Section title="Model Token Usage" tip={MODEL_TIP}>
             <ModelUsageTable models={models} />

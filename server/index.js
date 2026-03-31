@@ -25,9 +25,10 @@ const cors = require('cors');
 const { WebSocketServer } = require('ws');
 const url = require('url');
 
-const { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions } = require('./sessions');
+const { listSessions, listArchivedSessions, getSession, getSessionPreview, getSessionConversation, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions } = require('./sessions');
 const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty } = require('./pty-manager');
 const { getStats, getLatestPrompt } = require('./stats');
+const { extractSubagents } = require('./subagents');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
 const IS_DEV = process.env.NODE_ENV !== 'production';
@@ -172,6 +173,31 @@ app.get('/api/sessions/:id/preview', (req, res) => {
     res.json(preview);
   } catch (err) {
     console.error('[sessions] preview error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/sessions/:id/conversation', (req, res) => {
+  try {
+    const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
+    const limit  = Math.max(0, parseInt(req.query.limit  || '50', 10) || 0);
+    const result = getSessionConversation(req.params.id, offset, limit);
+    if (!result) return res.status(404).json({ error: 'Session not found' });
+    res.json(result);
+  } catch (err) {
+    console.error('[sessions] conversation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/sessions/:id/subagents', (req, res) => {
+  try {
+    const session = getSession(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    const subagents = extractSubagents(req.params.id);
+    res.json(subagents);
+  } catch (err) {
+    console.error('[sessions] subagents error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

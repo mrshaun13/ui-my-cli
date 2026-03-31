@@ -76,7 +76,8 @@ export function useStatusFeed() {
                 && old.snippet === s.snippet
                 && old.lastActivityAt === s.lastActivityAt
                 && old.title === s.title
-                && old.lastUserPrompt === s.lastUserPrompt) {
+                && old.lastUserPrompt === s.lastUserPrompt
+                && old.hasSubagents === s.hasSubagents) {
                 return old  // reuse reference — unchanged
               }
               changed = true

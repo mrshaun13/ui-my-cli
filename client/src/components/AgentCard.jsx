@@ -116,6 +116,9 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, on
       <div className="agent-project">
         <span className="agent-project-icon">▶</span>
         {session.project}
+        {session.hasSubagents && (
+          <span className="agent-subagent-badge" title="Session used subagents">⑂</span>
+        )}
       </div>
 
       {/* Old+idle: one-click archive button (no confirm — reversible) */}

@@ -338,10 +338,12 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
   // Lazy-fetch subagent timeline when preview reports subagentCount > 0
   useEffect(() => {
     if (!data || !sessionId || !data.subagentCount) return
+    let cancelled = false
     fetch(`/api/sessions/${sessionId}/subagents`)
-      .then(r => r.json())
-      .then(setSubagents)
-      .catch(() => setSubagents([]))  // silently degrade on error
+      .then(r => { if (!r.ok) throw new Error('subagent fetch failed'); return r.json() })
+      .then(d => { if (!cancelled) setSubagents(Array.isArray(d) ? d : []) })
+      .catch(() => { if (!cancelled) setSubagents([]) })  // silently degrade on error
+    return () => { cancelled = true }
   }, [data, sessionId])
 
   // Auto-select text when input appears

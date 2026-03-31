@@ -20,7 +20,7 @@ const os = require('os');
 const fs = require('fs');
 const { resolveDbPath, resolveDashboardDbPath } = require('./db-path');
 const { formatDuration } = require('./stats');
-const { sessionsWithSubagents } = require('./subagents');
+const { sessionsWithSubagents, countSubagents } = require('./subagents');
 
 // ── Devin CLI sessions.db ──────────────────────────────────────────────────────
 
@@ -640,8 +640,8 @@ function getSessionPreview(id) {
     compactionCount,
     peakContextTokens,
     topTools,
-    // Subagent count — derived from toolCounts with zero additional queries
-    subagentCount: toolCounts['run_subagent'] || 0,
+    // Subagent count — deduplicated via countSubagents()
+    subagentCount: countSubagents(sessionId),
     // Token usage
     inputTokens,
     outputTokens,
@@ -806,6 +806,7 @@ function searchSessions(query, includeArchived) {
       lastActivityAt: session.last_activity_at,
       lastActivityAgo: relativeTime(session.last_activity_at),
       createdAt: session.created_at,
+      hasSubagents: sessionsWithSubagents().has(session.id),
     };
   });
 }
