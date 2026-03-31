@@ -87,7 +87,7 @@ function PromptStrip({ prompt }) {
       <span className="prompt-strip-label">prompt</span>
       <span className="prompt-strip-text">{prompt}</span>
       {isLong && (
-        <span className="prompt-strip-toggle">{expanded ? '▲' : '▼'}</span>
+        <span className="prompt-strip-toggle">{expanded ? '▼' : '▲'}</span>
       )}
     </div>
   )
@@ -193,7 +193,7 @@ export default function App() {
         <div className="topbar-divider" />
 
         {selectedSession
-          ? <PromptStrip prompt={selectedSession.lastUserPrompt} />
+          ? null
           : env && (env.mcpServers.length > 0 || env.skills.length > 0 || env.plugins.length > 0) && (
               <EnvChips mcpServers={env.mcpServers} skills={env.skills} plugins={env.plugins} />
             )
@@ -238,6 +238,10 @@ export default function App() {
         )}
         {mainView === 'splash' && (
           <DashboardSplash sessions={sessions} connected={connected} />
+        )}
+
+        {selectedSession && (
+          <PromptStrip prompt={selectedSession.lastUserPrompt} />
         )}
       </main>
 

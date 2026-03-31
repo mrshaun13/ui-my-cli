@@ -184,22 +184,27 @@ html, body, #root {
   margin-left: auto;
 }
 
-/* ── Prompt strip — pinned first user prompt ────────────────────── */
+/* ── Prompt strip — last user prompt, anchored above controlbar ──── */
 .prompt-strip {
-  flex: 1;
+  flex-shrink: 0;
   min-width: 0;
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 0 4px;
-  /* Collapsed: single line, clipped */
-  max-height: 20px;
+  padding: 3px 12px;
+  max-height: 22px;
   overflow: hidden;
-  transition: max-height 0.22s ease;
   cursor: default;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  z-index: 5;
 }
 
 .prompt-strip.expanded {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
   max-height: 320px;
   overflow-y: auto;
 }
