@@ -59,7 +59,29 @@ export function useStatusFeed() {
     ws.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data)
-        if (msg.type === 'sessions') setSessions(msg.data)
+        if (msg.type === 'sessions') {
+          // Reference-preserving diff: reuse previous session objects when
+          // nothing meaningful changed. This lets React.memo on AgentCard
+          // skip re-renders for unchanged sessions.
+          setSessions(prev => {
+            if (!prev.length) return msg.data
+            const prevMap = new Map(prev.map(s => [s.id, s]))
+            let changed = prev.length !== msg.data.length
+            const next = msg.data.map(s => {
+              const old = prevMap.get(s.id)
+              if (old
+                && old.status === s.status
+                && old.snippet === s.snippet
+                && old.lastActivityAt === s.lastActivityAt
+                && old.title === s.title) {
+                return old  // reuse reference — unchanged
+              }
+              changed = true
+              return s      // new reference — something changed
+            })
+            return changed ? next : prev
+          })
+        }
         else if (msg.type === 'latest-prompt') setLatestPrompt(msg.data)
       } catch {
         // Ignore malformed frames

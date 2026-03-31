@@ -11,7 +11,7 @@
  *   onPreview — called with session.id to open the read-only preview panel.
  */
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, memo } from 'react'
 
 const STATUS_ICON = {
   question: '⚡',
@@ -36,7 +36,7 @@ export function StatusBadge({ status }) {
   )
 }
 
-export default function AgentCard({ session, isActive, isPreview, isOld, onClick, onPreview, onRename, onArchive }) {
+export default memo(function AgentCard({ session, isActive, isPreview, isOld, onClick, onPreview, onRename, onArchive }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState(session.title)
   const inputRef = useRef(null)
@@ -136,5 +136,5 @@ export default function AgentCard({ session, isActive, isPreview, isOld, onClick
       )}
     </div>
   )
-}
+})
 

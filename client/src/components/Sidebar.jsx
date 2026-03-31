@@ -187,7 +187,9 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
     [allRepos, visibleRepos]
   )
 
-  const nowSec = Math.floor(Date.now() / 1000)
+  // Round to 60s granularity — the hot/cold boundary is measured in days,
+  // so per-second precision just busts the useMemo cache on every render.
+  const nowSec = Math.floor(Date.now() / 60000) * 60
   const coldSec = coldDays * 86400
 
   // Filter by visible repos + question toggle
