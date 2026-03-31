@@ -80,10 +80,11 @@ export default function Terminal({ sessionId }) {
     xtermRef.current    = xterm
     fitAddonRef.current = fitAddon
 
-    // Smart Ctrl+C / Ctrl+V — mirrors WSL terminal behaviour:
+    // Smart Ctrl+C — mirrors WSL terminal behaviour:
     //   Ctrl+C with selection → copy to clipboard, swallow the keypress
     //   Ctrl+C without selection → pass \x03 (SIGINT) through to PTY
-    //   Ctrl+V → paste clipboard text into PTY
+    // Paste (Ctrl+V) is handled natively by xterm's hidden textarea —
+    // pasted text flows through onData like normal keyboard input.
     xterm.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
 
@@ -95,15 +96,6 @@ export default function Terminal({ sessionId }) {
           return false  // swallow — don't send \x03 to PTY
         }
         return true  // no selection — let SIGINT through normally
-      }
-
-      if (e.ctrlKey && e.key === 'v') {
-        navigator.clipboard.readText().then(text => {
-          if (text && wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: 'input', data: text }))
-          }
-        }).catch(() => {})
-        return false  // swallow — we handle the paste ourselves
       }
 
       return true
