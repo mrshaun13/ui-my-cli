@@ -18,7 +18,7 @@
 
 const os = require('os');
 const fs = require('fs');
-const { spawn } = require('node-pty');
+const pty = require('node-pty');
 
 // ~256 KB of scrollback replay per session — enough for a full screen + history
 const SCROLLBACK_BYTES = 256 * 1024;
@@ -81,13 +81,31 @@ const TERMINAL_QUERY_RE = new RegExp(
 // Map of sessionId -> { pty, clients: Set<WebSocket>, scrollback: Buffer[] }
 const ptys = new Map();
 
+// ── Shell resolution ────────────────────────────────────────────────────────
+
 /**
  * Returns the shell to use for spawning the PTY.
- * Detects the user's preferred shell from SHELL env, falls back to /bin/bash.
+ *
+ * Cascade: $SHELL → /bin/zsh (macOS default) → /bin/bash → /bin/sh
+ * Validates the binary exists before returning it so we never hand
+ * node-pty a path that will cause posix_spawnp to fail.
  */
 function getShell() {
   if (process.platform === 'win32') return 'cmd.exe';
-  return process.env.SHELL || '/bin/bash';
+
+  const candidates = [
+    process.env.SHELL,
+    process.platform === 'darwin' ? '/bin/zsh' : null,
+    '/bin/bash',
+    '/bin/sh',  // POSIX-guaranteed to exist
+  ].filter(Boolean);
+
+  for (const sh of candidates) {
+    if (fs.existsSync(sh)) return sh;
+  }
+
+  // Should never reach here — /bin/sh must exist on any Unix
+  return '/bin/sh';
 }
 
 /**
@@ -103,6 +121,8 @@ function getShellArgs(sessionId) {
   }
   return ['-i', '-l', '-c', cmd];
 }
+
+// ── Scrollback buffer ────────────────────────────────────────────────────────
 
 /**
  * Appends data to a session's scrollback ring buffer.
@@ -135,6 +155,99 @@ function replayScrollback(entry, ws) {
   }
 }
 
+// ── PTY lifecycle helpers ────────────────────────────────────────────────────
+
+/** Sends a plain-text error to the terminal client (rendered as red text). */
+function sendPtyError(ws, message) {
+  if (ws.readyState !== 1) return;
+  // CSI 31m = red foreground, CSI 0m = reset
+  const redText = `\x1b[31m${message}\x1b[0m\r\n`;
+  ws.send(JSON.stringify({ type: 'output', data: redText }));
+}
+
+/**
+ * Wires up PTY output → WebSocket broadcast + scrollback accumulation,
+ * and PTY exit → client notification + map cleanup.
+ */
+function wirePtyEvents(entry, sessionId) {
+  entry.pty.onData(data => {
+    appendScrollback(entry, data);
+    const dead = [];
+    for (const client of entry.clients) {
+      if (client.readyState === 1 /* OPEN */) {
+        client.send(JSON.stringify({ type: 'output', data }));
+      } else {
+        dead.push(client);
+      }
+    }
+    for (const c of dead) entry.clients.delete(c);
+  });
+
+  entry.pty.onExit(({ exitCode }) => {
+    for (const client of entry.clients) {
+      if (client.readyState === 1) {
+        client.send(JSON.stringify({ type: 'exit', exitCode }));
+      }
+    }
+    // Clean up under whatever key we're stored as (might already be re-keyed)
+    for (const [key, val] of ptys.entries()) {
+      if (val === entry) { ptys.delete(key); break; }
+    }
+  });
+}
+
+/**
+ * Core spawn logic shared by spawnPty() and spawnNewSession().
+ * Returns the PTY entry or null if spawning fails.
+ *
+ * On failure, logs a detailed diagnostic and (if a ws client is provided)
+ * sends a user-friendly error to the terminal instead of crashing the server.
+ */
+function doSpawn(shell, args, cwd, cols, rows, ws) {
+  try {
+    const p = pty.spawn(shell, args, {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd,
+      env: {
+        ...process.env,
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor',
+        // Prevent nested devin dashboard from launching
+        DEVIN_DASHBOARD: '1',
+      },
+    });
+
+    return {
+      pty: p,
+      clients: new Set(),
+      scrollback: [],
+      scrollbackSize: 0,
+    };
+  } catch (err) {
+    // Log full diagnostic server-side
+    console.error(`[pty] Failed to spawn PTY: ${err.message}`);
+    console.error(`[pty]   shell=${shell}, cwd=${cwd}, platform=${process.platform}, arch=${process.arch}`);
+    console.error(`[pty]   SHELL=$${process.env.SHELL || '(unset)'}, node=${process.version}`);
+
+    // Send a helpful message to the browser terminal
+    if (ws) {
+      const isSpawnp = /posix_spawnp|spawn/i.test(err.message);
+      const hint = isSpawnp
+        ? 'This usually means node-pty\'s native module was compiled for a different platform.\n\r' +
+          'Fix: rm -rf node_modules && npm install\n\r' +
+          `(current platform: ${process.platform}/${process.arch}, node ${process.version})`
+        : err.message;
+      sendPtyError(ws, `Terminal error: ${hint}`);
+    }
+
+    return null;
+  }
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
 /**
  * Spawns a new PTY for the given session, or attaches to existing one.
  * workingDir: the session's working_directory from the DB — used as PTY cwd
@@ -163,61 +276,26 @@ function spawnPty(sessionId, workingDir, ws, cols = 220, rows = 50) {
   // Fall back to home if the directory no longer exists (deleted repo, etc.).
   const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
 
-  const pty = spawn(shell, args, {
-    name: 'xterm-256color',
-    cols,
-    rows,
-    cwd,
-    env: {
-      ...process.env,
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor',
-      // Prevent nested devin dashboard from launching
-      DEVIN_DASHBOARD: '1',
-    },
-  });
+  const entry = doSpawn(shell, args, cwd, cols, rows, ws);
+  if (!entry) return null;
 
-  const entry = {
-    pty,
-    clients: new Set([ws]),
-    scrollback: [],
-    scrollbackSize: 0,
-  };
+  entry.clients.add(ws);
   ptys.set(sessionId, entry);
+  wirePtyEvents(entry, sessionId);
 
-  // Broadcast PTY output to all attached clients and accumulate scrollback
-  pty.onData(data => {
-    appendScrollback(entry, data);
-    const dead = [];
-    for (const client of entry.clients) {
-      if (client.readyState === 1 /* OPEN */) {
-        client.send(JSON.stringify({ type: 'output', data }));
-      } else {
-        dead.push(client);
-      }
-    }
-    for (const c of dead) entry.clients.delete(c);
-  });
-
-  pty.onExit(({ exitCode }) => {
-    // Notify all clients the process ended
-    for (const client of entry.clients) {
-      if (client.readyState === 1) {
-        client.send(JSON.stringify({ type: 'exit', exitCode }));
-      }
-    }
-    ptys.delete(sessionId);
-  });
-
-  return pty;
+  return entry.pty;
 }
 
 /**
  * Attaches a WebSocket client to an existing PTY session.
  * If no PTY exists yet, spawns one in the session's working directory.
+ *
+ * If spawning fails (e.g. node-pty native module mismatch), the server stays
+ * alive and the client receives an error message in the terminal pane.
  */
 function attachClient(sessionId, workingDir, ws, cols, rows) {
-  const pty = spawnPty(sessionId, workingDir, ws, cols, rows);
+  const p = spawnPty(sessionId, workingDir, ws, cols, rows);
+  if (!p) return; // spawn failed — error already sent to ws
 
   ws.on('message', raw => {
     try {
@@ -226,9 +304,9 @@ function attachClient(sessionId, workingDir, ws, cols, rows) {
         // Strip any xterm.js programmatic responses that slipped through
         // the client-side filter (defense in depth).
         const cleaned = msg.data.replace(XTERM_RESPONSE_RE, '');
-        if (cleaned) pty.write(cleaned);
+        if (cleaned) p.write(cleaned);
       } else if (msg.type === 'resize') {
-        pty.resize(
+        p.resize(
           Math.max(1, msg.cols || 80),
           Math.max(1, msg.rows || 24)
         );
@@ -287,51 +365,11 @@ function spawnNewSession(tempKey, workingDir, cols = 220, rows = 50) {
   const args = getShellArgs(null);  // no sessionId → bare `devin`
   const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
 
-  const pty = spawn(shell, args, {
-    name: 'xterm-256color',
-    cols,
-    rows,
-    cwd,
-    env: {
-      ...process.env,
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor',
-      DEVIN_DASHBOARD: '1',
-    },
-  });
+  const entry = doSpawn(shell, args, cwd, cols, rows, null);
+  if (!entry) return null;
 
-  const entry = {
-    pty,
-    clients: new Set(),
-    scrollback: [],
-    scrollbackSize: 0,
-  };
   ptys.set(tempKey, entry);
-
-  pty.onData(data => {
-    appendScrollback(entry, data);
-    const dead = [];
-    for (const client of entry.clients) {
-      if (client.readyState === 1) {
-        client.send(JSON.stringify({ type: 'output', data }));
-      } else {
-        dead.push(client);
-      }
-    }
-    for (const c of dead) entry.clients.delete(c);
-  });
-
-  pty.onExit(({ exitCode }) => {
-    for (const client of entry.clients) {
-      if (client.readyState === 1) {
-        client.send(JSON.stringify({ type: 'exit', exitCode }));
-      }
-    }
-    // Clean up under whatever key we're stored as (might already be re-keyed)
-    for (const [key, val] of ptys.entries()) {
-      if (val === entry) { ptys.delete(key); break; }
-    }
-  });
+  wirePtyEvents(entry, tempKey);
 
   return entry;
 }
@@ -349,4 +387,38 @@ function rekeyPty(oldKey, newKey) {
   return true;
 }
 
-module.exports = { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty };
+/**
+ * Startup self-test: spawns a minimal PTY to verify node-pty's native module
+ * works on this platform.  Called once at server boot so a broken native addon
+ * is caught immediately with a clear message instead of on the first WebSocket
+ * connection.
+ *
+ * Returns true if healthy, false (with logged guidance) if not.
+ */
+function validatePty() {
+  const shell = getShell();
+  try {
+    const p = pty.spawn(shell, ['--version'], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: os.homedir(),
+      env: { ...process.env, TERM: 'xterm-256color' },
+    });
+    p.kill();
+    return true;
+  } catch (err) {
+    console.error('\n[pty] *** node-pty self-test failed ***');
+    console.error(`[pty] Error: ${err.message}`);
+    console.error(`[pty] Platform: ${process.platform}/${process.arch}, Node: ${process.version}`);
+    console.error(`[pty] Shell: ${shell}`);
+    console.error('[pty]');
+    console.error('[pty] This usually means the native module was compiled for a different OS or architecture.');
+    console.error('[pty] Fix:  rm -rf node_modules && npm install');
+    console.error('[pty]');
+    console.error('[pty] The dashboard will start, but terminal sessions will show an error.\n');
+    return false;
+  }
+}
+
+module.exports = { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty, validatePty };

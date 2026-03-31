@@ -10,10 +10,10 @@ const path = require('path');
 const os   = require('os');
 const fs   = require('fs');
 const Database = require('better-sqlite3');
-const { resolveDbPath } = require('./db-path');
+const { resolveDbPath, resolveDevinDir } = require('./db-path');
 
 const CONFIG_FILE  = path.join(os.homedir(), '.config', 'devin', 'config.json');
-const DEVIN_DIR    = path.join(os.homedir(), '.local', 'share', 'devin', 'cli');
+const DEVIN_DIR    = resolveDevinDir();
 const { countAllSubagents } = require('./subagents');
 
 let db;

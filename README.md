@@ -81,7 +81,7 @@ The dashboard reads the Devin CLI SQLite database. Platform defaults:
 | Platform | Default path |
 | --- | --- |
 | Linux / WSL2 | `~/.local/share/devin/cli/sessions.db` |
-| macOS | `~/Library/Application Support/devin/cli/sessions.db` |
+| macOS | `~/.local/share/devin/cli/sessions.db` |
 | Windows | `%APPDATA%\devin\cli\sessions.db` |
 
 Override with `DEVIN_DB_PATH`:
@@ -100,10 +100,11 @@ in `devin list` and inside active sessions.
 | `PORT` | `7575` | HTTP server port |
 | `NODE_ENV` | `—` | Set to `production` to enable static file serving from `client/dist/` |
 | `DEVIN_VERSION` | `—` |  |
-| `SHELL` | `/bin/bash` | Shell binary for the node-pty process (falls back to `/bin/bash`) |
+| `SHELL` | `—` | Shell binary for the node-pty process (falls back to `/bin/zsh` on macOS, then `/bin/bash`, then `/bin/sh`) |
 | `DEVIN_DB_PATH` | `—` | Override the auto-detected Devin CLI SQLite database path |
-| `APPDATA` | `—` | Windows `%APPDATA%` directory — used to find the database path on Windows |
 | `DEVIN_DASHBOARD_DB_PATH` | `—` | Override the dashboard.db path (defaults to same dir as sessions.db) |
+| `XDG_DATA_HOME` | `—` | Override the XDG data directory (default: `~/.local/share`); affects DB path on all platforms |
+| `APPDATA` | `—` | Windows `%APPDATA%` directory — used to find the database path on Windows |
 
 ## Architecture
 

@@ -118,7 +118,8 @@ module.exports = {
     NODE_ENV:                'Set to `production` to enable static file serving from `client/dist/`',
     DEVIN_DB_PATH:           'Override the auto-detected Devin CLI SQLite database path',
     DEVIN_DASHBOARD_DB_PATH: 'Override the dashboard.db path (defaults to same dir as sessions.db)',
-    SHELL:                   'Shell binary for the node-pty process (falls back to `/bin/bash`)',
+    XDG_DATA_HOME:           'Override the XDG data directory (default: `~/.local/share`); affects DB path on all platforms',
+    SHELL:                   'Shell binary for the node-pty process (falls back to `/bin/zsh` on macOS, then `/bin/bash`, then `/bin/sh`)',
     APPDATA:                 'Windows `%APPDATA%` directory — used to find the database path on Windows',
   },
 };

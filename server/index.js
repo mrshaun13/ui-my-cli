@@ -26,7 +26,7 @@ const { WebSocketServer } = require('ws');
 const url = require('url');
 
 const { listSessions, listArchivedSessions, getSession, getSessionPreview, getSessionConversation, getSessionContextBreakdown, getSessionConfig, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions } = require('./sessions');
-const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty } = require('./pty-manager');
+const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
 const { getStats, getLatestPrompt } = require('./stats');
 const { extractSubagents } = require('./subagents');
 
@@ -434,6 +434,7 @@ server.listen(PORT, '127.0.0.1', () => {
     console.log(`Client dev server: http://localhost:5173`);
   }
   console.log(`Press Ctrl+C to stop.\n`);
+  validatePty();
   watchDbForPrompts();
 });
 

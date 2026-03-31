@@ -226,7 +226,7 @@ function buildReadme(d) {
     ['Platform', 'Default path'],
     [
       ['Linux / WSL2', '`~/.local/share/devin/cli/sessions.db`'],
-      ['macOS',        '`~/Library/Application Support/devin/cli/sessions.db`'],
+      ['macOS',        '`~/.local/share/devin/cli/sessions.db`'],
       ['Windows',      '`%APPDATA%\\devin\\cli\\sessions.db`'],
     ]
   );
