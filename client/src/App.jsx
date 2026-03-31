@@ -5,6 +5,7 @@ import Terminal from './components/Terminal.jsx'
 import ControlBar from './components/ControlBar.jsx'
 import DashboardSplash from './components/DashboardSplash.jsx'
 import SessionPreview from './components/SessionPreview.jsx'
+import ContextPieChart from './components/ContextPieChart.jsx'
 
 // Fetch just the env config fields (MCP servers, skills, plugins) for the topbar.
 // Runs once on mount — these are global config, not session-specific.
@@ -196,11 +197,14 @@ export default function App() {
           <EnvChips mcpServers={env.mcpServers} skills={env.skills} plugins={env.plugins} />
         )}
 
-        {needsYouCount > 0 && (
-          <div className="topbar-meta" style={{ marginLeft: 'auto' }}>
-            <span style={{ color: 'var(--yellow)' }}>⚡ {needsYouCount}</span> waiting
-          </div>
-        )}
+        <div className="topbar-right">
+          <ContextPieChart sessionId={selectedId || previewId} />
+          {needsYouCount > 0 && (
+            <div className="topbar-meta">
+              <span style={{ color: 'var(--yellow)' }}>⚡ {needsYouCount}</span> waiting
+            </div>
+          )}
+        </div>
       </header>
 
       <Sidebar

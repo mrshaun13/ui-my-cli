@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export function useStats() {
   const [stats, setStats] = useState(null)
@@ -31,15 +32,55 @@ export function useStats() {
 // Kept only to avoid removing InfoTip which is still used below.
 
 // A small ⓘ circle that shows a tooltip on hover.
+// Renders via portal to document.body so it escapes all overflow:hidden ancestors.
 
 function InfoTip({ text }) {
   const [show, setShow] = useState(false)
+  const iconRef = useRef(null)
+  const tipRef = useRef(null)
+  const [pos, setPos] = useState(null)
+
+  useEffect(() => {
+    if (!show || !iconRef.current) return
+
+    function reposition() {
+      const r = iconRef.current.getBoundingClientRect()
+      const tipEl = tipRef.current
+      const tipH = tipEl ? tipEl.offsetHeight : 60
+      const tipW = tipEl ? tipEl.offsetWidth : 260
+
+      // Prefer above; flip below if not enough room
+      const above = r.top - tipH - 6 >= 0
+      const top = above ? r.top - tipH - 6 : r.bottom + 6
+      let left = r.left + r.width / 2 - tipW / 2
+      left = Math.max(8, Math.min(left, window.innerWidth - tipW - 8))
+
+      setPos({ top, left })
+    }
+
+    reposition()
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [show])
+
   return (
     <span className="info-tip-wrap"
       onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}>
+      onMouseLeave={() => setShow(false)}
+      ref={iconRef}>
       <span className="info-tip-icon">ⓘ</span>
-      {show && <span className="info-tip-bubble">{text}</span>}
+      {show && createPortal(
+        <span
+          ref={tipRef}
+          className="info-tip-bubble info-tip-bubble-portal"
+          style={pos ? { top: pos.top, left: pos.left } : { visibility: 'hidden', top: 0, left: 0 }}
+        >{text}</span>,
+        document.body
+      )}
     </span>
   )
 }
@@ -202,12 +243,10 @@ function WeekHeatmap({ days }) {
                 return (
                   <g key={hi}
                     onMouseEnter={(e) => {
-                      const rect = e.currentTarget.closest('svg').getBoundingClientRect()
-                      const wrap = e.currentTarget.closest('.activity-chart-wrap').getBoundingClientRect()
                       setHover({
                         di, hi, v, day,
-                        px: e.clientX - wrap.left + 8,
-                        py: e.clientY - wrap.top - 36,
+                        px: e.clientX + 8,
+                        py: e.clientY - 36,
                       })
                     }}
                     onMouseLeave={() => setHover(null)}
@@ -229,15 +268,16 @@ function WeekHeatmap({ days }) {
 
       </svg>
 
-      {/* HTML tooltip — rendered outside SVG so it's never clipped */}
-      {hover && (
-        <div className="heatmap-tooltip" style={{ left: hover.px, top: hover.py }}>
+      {/* HTML tooltip — rendered via portal so it's never clipped */}
+      {hover && createPortal(
+        <div className="heatmap-tooltip heatmap-tooltip-portal" style={{ left: hover.px, top: hover.py }}>
           <span className="heatmap-tooltip-day">{hover.day.label} {hover.day.date.slice(5)}</span>
           <span className="heatmap-tooltip-sep">·</span>
           <span>{fmtHour(hover.hi)}–{fmtHour((hover.hi + 1) % 24)}</span>
           <span className="heatmap-tooltip-sep">·</span>
           <span className="heatmap-tooltip-count">{hover.v} turn{hover.v !== 1 ? 's' : ''}</span>
-        </div>
+        </div>,
+        document.body
       )}
 
       <div className="activity-chart-legend">
@@ -473,11 +513,10 @@ function ProjectComboChart({ projects }) {
           return (
             <g key={p.name}
               onMouseEnter={(e) => {
-                const wrap = e.currentTarget.closest('.activity-chart-wrap').getBoundingClientRect()
                 setHover({
                   idx: i,
-                  px: e.clientX - wrap.left,
-                  py: e.clientY - wrap.top - 8,
+                  px: e.clientX,
+                  py: e.clientY - 8,
                 })
               }}
               onMouseLeave={() => setHover(null)}
@@ -517,14 +556,14 @@ function ProjectComboChart({ projects }) {
 
       </svg>
 
-      {/* HTML popover — rendered outside SVG for rich session detail */}
+      {/* HTML popover — rendered via portal so it's never clipped */}
       {hover !== null && (() => {
         const p = projects[hover.idx]
         const detail = p.sessions_detail || []
         const shown = detail.slice(0, 5)
         const remaining = detail.length - 5
-        return (
-          <div className="combo-popover" style={{ left: hover.px, top: hover.py }}>
+        return createPortal(
+          <div className="combo-popover combo-popover-portal" style={{ left: hover.px, top: hover.py }}>
             <div className="combo-popover-header">
               <span className="combo-popover-name">{p.name}</span>
               <span className="combo-popover-summary">
@@ -548,7 +587,8 @@ function ProjectComboChart({ projects }) {
                 )}
               </div>
             )}
-          </div>
+          </div>,
+          document.body
         )
       })()}
 
@@ -945,8 +985,7 @@ export default function DashboardSplash({ connected, latestPrompt, onSelectSessi
   )
 
   const { projects, tools, activityByHour, models, totalSubagents,
-          topSessionsByDuration, topSessionsByUserMsgs, topSessionsByTokens,
-          mcpServers, skills, plugins, model, permissionMode, devinVersion } = stats
+          topSessionsByDuration, topSessionsByUserMsgs, topSessionsByTokens } = stats
 
   // Pre-format leaderboard display values
   const durEntries = (topSessionsByDuration || []).map(e => ({ ...e, _fmt: e.durationStr }))
@@ -955,56 +994,6 @@ export default function DashboardSplash({ connected, latestPrompt, onSelectSessi
   return (
     <div className="splash">
       <LatestPromptBanner prompt={latestPrompt} />
-
-      {/* ── Environment banner ─────────────────────────────────────── */}
-      {(mcpServers?.length > 0 || skills?.length > 0 || plugins?.length > 0 || model) && (
-        <div className="splash-env-banner">
-          {model && (
-            <div className="splash-env-group">
-              <span className="splash-env-group-label">model</span>
-              <div className="splash-chip-list">
-                <span className="splash-chip splash-chip-model">{friendlyModel(model)}</span>
-                {permissionMode && permissionMode !== 'default' && (
-                  <span className="splash-chip splash-chip-model">{permissionMode}</span>
-                )}
-              </div>
-            </div>
-          )}
-          {mcpServers?.length > 0 && (
-            <div className="splash-env-group">
-              <span className="splash-env-group-label">mcp</span>
-              <div className="splash-chip-list">
-                {mcpServers.map(s => (
-                  <span key={s.name} className="splash-chip splash-chip-mcp" title={s.url || s.type}>{s.name}</span>
-                ))}
-              </div>
-            </div>
-          )}
-          {skills?.length > 0 && (
-            <div className="splash-env-group">
-              <span className="splash-env-group-label">skills</span>
-              <div className="splash-chip-list">
-                {skills.map(s => (
-                  <span key={s.name} className="splash-chip splash-chip-skill" title={s.description || s.dir}>{s.name}</span>
-                ))}
-              </div>
-            </div>
-          )}
-          {plugins?.length > 0 && (
-            <div className="splash-env-group">
-              <span className="splash-env-group-label">plugins</span>
-              <div className="splash-chip-list">
-                {plugins.map(p => (
-                  <span key={p.name} className={`splash-chip ${p.missing ? 'splash-chip-missing' : 'splash-chip-plugin'}`} title={p.description || p.dir}>
-                    {p.name}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
       <div className="splash-body">
 
         {/* ── Left column ──────────────────────────────────────────── */}

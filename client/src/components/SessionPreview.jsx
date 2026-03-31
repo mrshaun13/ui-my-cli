@@ -13,8 +13,8 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import SubagentTimeline from './SubagentTimeline'
-import ContextPieChart from './ContextPieChart'
 
 const STATUS_LABEL = {
   question: 'Needs your input',
@@ -76,28 +76,54 @@ function formatTokens(n) {
   return String(n)
 }
 
-// ── Info bubble (tooltip) ─────────────────────────────────────────────────────
+// ── Info tooltip (hover) ──────────────────────────────────────────────────────
+// Matches the Dashboard InfoTip — hover to show, portal-rendered to escape overflow.
 function InfoBubble({ tip }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef(null)
+  const [show, setShow] = useState(false)
+  const iconRef = useRef(null)
+  const tipRef = useRef(null)
+  const [pos, setPos] = useState(null)
 
   useEffect(() => {
-    if (!open) return
-    function handle(e) { if (!ref.current?.contains(e.target)) setOpen(false) }
-    document.addEventListener('mousedown', handle)
-    return () => document.removeEventListener('mousedown', handle)
-  }, [open])
+    if (!show || !iconRef.current) return
+
+    function reposition() {
+      const r = iconRef.current.getBoundingClientRect()
+      const tipEl = tipRef.current
+      const tipH = tipEl ? tipEl.offsetHeight : 60
+      const tipW = tipEl ? tipEl.offsetWidth : 260
+
+      // Prefer above; flip below if not enough room
+      const above = r.top - tipH - 6 >= 0
+      const top = above ? r.top - tipH - 6 : r.bottom + 6
+      let left = r.left + r.width / 2 - tipW / 2
+      left = Math.max(8, Math.min(left, window.innerWidth - tipW - 8))
+
+      setPos({ top, left })
+    }
+
+    reposition()
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [show])
 
   return (
-    <span className="info-bubble-wrap" ref={ref}>
-      <button
-        className="info-bubble-btn"
-        onClick={e => { e.stopPropagation(); setOpen(v => !v) }}
-        title={tip}
-        aria-label="More info"
-      >ⓘ</button>
-      {open && (
-        <div className="info-bubble-tip">{tip}</div>
+    <span className="info-tip-wrap"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      ref={iconRef}>
+      <span className="info-tip-icon">ⓘ</span>
+      {show && createPortal(
+        <span
+          ref={tipRef}
+          className="info-tip-bubble info-tip-bubble-portal"
+          style={pos ? { top: pos.top, left: pos.left } : { visibility: 'hidden', top: 0, left: 0 }}
+        >{tip}</span>,
+        document.body
       )}
     </span>
   )
@@ -645,10 +671,8 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
           )}
         </div>
 
-        {/* Right: context pie + tool breakdown + model section + session config + session info */}
+        {/* Right: tool breakdown + model section + session config + session info */}
         <div className="preview-tools-col">
-          <ContextPieChart sessionId={sessionId} />
-
           <div className="preview-section-label" style={{ marginTop: 14 }}>
             Tool breakdown
             <InfoBubble tip="How often Devin used each tool in this session. Tools let Devin interact with your system — run commands, read/edit files, search code, browse the web, and more." />

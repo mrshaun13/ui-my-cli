@@ -159,6 +159,13 @@ html, body, #root {
 
 .topbar-meta span { color: var(--text-secondary); }
 
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
 .topbar-filter {
   margin-left: auto;
   display: flex;
@@ -329,6 +336,15 @@ html, body, #root {
   box-shadow: 0 4px 16px rgba(0,0,0,0.5);
   white-space: normal;
   pointer-events: none;
+}
+
+/* Portal-rendered: position via inline top/left, escape all overflow parents */
+.info-tip-bubble-portal {
+  position: fixed;
+  bottom: auto;
+  left: auto;
+  transform: none;
+  z-index: 10000;
 }
 
 
@@ -970,17 +986,6 @@ html, body, #root {
   gap: 10px;
 }
 
-/* ── Environment banner (top, full width) ───────────────────────── */
-.splash-env-banner {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 20px;
-  padding: 10px 14px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
 /* ── Activity tabs ──────────────────────────────────────────────── */
 .act-tabs-wrap {
   display: flex;
@@ -1073,6 +1078,12 @@ html, body, #root {
   box-shadow: 0 2px 8px rgba(0,0,0,0.4);
   z-index: 10;
   transform: translateX(-50%);
+}
+
+.heatmap-tooltip-portal {
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 10000;
 }
 
 .heatmap-tooltip-day {
@@ -1375,61 +1386,6 @@ html, body, #root {
   color: var(--text-secondary);
 }
 
-/* ── Environment section ─────────────────────────────────────── */
-.splash-env-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.splash-env-key {
-  font-size: 9px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-family: var(--font-mono);
-  min-width: 52px;
-  flex-shrink: 0;
-}
-
-.splash-env-group {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.splash-env-group-label {
-  font-size: 9px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-family: var(--font-mono);
-  min-width: 52px;
-  flex-shrink: 0;
-  padding-top: 2px;
-}
-
-.splash-chip-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.splash-chip {
-  font-size: 10px;
-  font-family: var(--font-mono);
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 3px;
-  white-space: nowrap;
-}
-
-.splash-chip-model   { background: var(--yellow-dim);  color: var(--yellow); }
-.splash-chip-mcp     { background: var(--blue-dim);    color: var(--blue); }
-.splash-chip-skill   { background: var(--accent-glow); color: var(--accent); }
-.splash-chip-plugin  { background: var(--purple-dim);  color: var(--purple); }
-.splash-chip-missing { background: var(--red-dim);     color: var(--red); }
-
 .splash-empty-note {
   font-size: 11px;
   color: var(--text-muted);
@@ -1462,6 +1418,12 @@ html, body, #root {
   box-shadow: 0 4px 16px rgba(0,0,0,0.5);
   transform: translateX(-50%) translateY(-100%);
   font-family: var(--font-mono);
+}
+
+.combo-popover-portal {
+  position: fixed;
+  transform: translateX(-50%) translateY(-100%);
+  z-index: 10000;
 }
 
 .combo-popover-header {
@@ -2401,52 +2363,6 @@ html, body, #root {
   border-radius: 6px;
 }
 
-/* ── Info bubble (ⓘ tooltip) ────────────────────────────────────── */
-.info-bubble-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  margin-left: 4px;
-  vertical-align: middle;
-}
-
-.info-bubble-btn {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  font-size: 10px;
-  color: var(--text-muted);
-  line-height: 1;
-  opacity: 0.6;
-  transition: opacity 0.12s, color 0.12s;
-  user-select: none;
-}
-.info-bubble-btn:hover {
-  opacity: 1;
-  color: var(--accent);
-}
-
-.info-bubble-tip {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-bright);
-  border-radius: 6px;
-  padding: 8px 10px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  width: 220px;
-  white-space: normal;
-  text-align: left;
-  z-index: 99;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
-  pointer-events: none;
-}
-
 /* ── Model section ──────────────────────────────────────────────── */
 .preview-model-section {
   margin-top: 2px;
@@ -2689,91 +2605,84 @@ html, body, #root {
   font-size: 13px;
 }
 
-/* ── Context Pie Chart ───────────────────────────────────────── */
-.ctx-pie-wrap {
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-card);
-}
-.ctx-pie-header {
+/* ── Context Pie Chart (topbar compact) ──────────────────────── */
+.ctx-pie-topbar {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-.ctx-pie-title {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
-}
-.ctx-pie-pct {
-  font-size: 11px;
-  font-family: var(--font-mono);
-}
-.ctx-pie-body {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
 }
 .ctx-pie-svg {
   flex-shrink: 0;
 }
-.ctx-pie-legend {
+.ctx-pie-topbar-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
+  gap: 1px;
+  line-height: 1.2;
 }
-.ctx-pie-legend-row {
+.ctx-pie-topbar-label {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.ctx-pie-topbar-stats {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.ctx-pie-topbar-sep {
+  opacity: 0.4;
+  margin: 0 1px;
+}
+.ctx-pie-topbar-pct {
+  font-size: 10px;
+  font-weight: 500;
+  margin-left: 3px;
+}
+.ctx-pie-tooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10px;
+  padding: 4px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-bright);
+  border-radius: 6px;
   font-family: var(--font-mono);
-  color: var(--text-secondary);
-  padding: 1px 3px;
-  border-radius: 3px;
-  cursor: default;
-  transition: background 0.1s;
+  font-size: 10px;
+  white-space: nowrap;
+  z-index: 50;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  pointer-events: none;
 }
-.ctx-pie-legend-row:hover,
-.ctx-pie-legend-active {
-  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+
+.ctx-pie-tooltip-portal {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 10000;
 }
-.ctx-pie-legend-dot {
-  width: 7px;
-  height: 7px;
+.ctx-pie-tooltip-dot {
+  width: 6px;
+  height: 6px;
   border-radius: 2px;
   flex-shrink: 0;
 }
-.ctx-pie-legend-label {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.ctx-pie-tooltip-label {
+  color: var(--text-secondary);
 }
-.ctx-pie-legend-value {
-  font-weight: 600;
+.ctx-pie-tooltip-value {
   color: var(--text-primary);
-  text-align: right;
-  min-width: 28px;
+  font-weight: 600;
 }
-.ctx-pie-legend-pct {
+.ctx-pie-tooltip-pct {
   color: var(--text-muted);
-  min-width: 24px;
-  text-align: right;
-}
-.ctx-pie-compactions {
-  font-size: 10px;
-  color: var(--text-muted);
-  margin-top: 6px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
-  font-family: var(--font-mono);
 }
 
 /* ── Session Config Section ──────────────────────────────────── */
