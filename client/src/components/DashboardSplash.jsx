@@ -299,6 +299,8 @@ const TOOL_COLORS = {
   webfetch:          'var(--purple)',
   find_file_by_name: 'var(--blue)',
   mcp_call_tool:     'var(--yellow)',
+  run_subagent:      'var(--purple)',
+  read_subagent:     'var(--purple)',
 }
 
 const TOOL_TIP =
@@ -381,7 +383,7 @@ function fmtDurationShort(sec) {
 }
 
 function ProjectComboChart({ projects }) {
-  const [hover, setHover] = useState(null)
+  const [hover, setHover] = useState(null)   // { idx, px, py }
 
   if (!projects.length) return <div className="splash-empty-note">No project data yet.</div>
 
@@ -457,10 +459,17 @@ function ProjectComboChart({ projects }) {
           const durX = cx - barW - barGap / 2
           const msgX = cx + barGap / 2
 
-          const isHov = hover === i
+          const isHov = hover?.idx === i
           return (
             <g key={p.name}
-              onMouseEnter={() => setHover(i)}
+              onMouseEnter={(e) => {
+                const wrap = e.currentTarget.closest('.activity-chart-wrap').getBoundingClientRect()
+                setHover({
+                  idx: i,
+                  px: e.clientX - wrap.left,
+                  py: e.clientY - wrap.top - 8,
+                })
+              }}
               onMouseLeave={() => setHover(null)}
               style={{ cursor: 'default' }}>
               {/* Hit area */}
@@ -490,34 +499,46 @@ function ProjectComboChart({ projects }) {
         <polyline points={linePath} fill="none" stroke="var(--yellow)"
           strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" opacity="0.8" />
         {linePoints.map((pt, i) => (
-          <circle key={i} cx={pt.x} cy={pt.y} r={hover === i ? 4.5 : 3}
-            fill="var(--yellow)" opacity={hover === i ? 1 : 0.6} />
+          <circle key={i} cx={pt.x} cy={pt.y} r={hover?.idx === i ? 4.5 : 3}
+            fill="var(--yellow)" opacity={hover?.idx === i ? 1 : 0.6} />
         ))}
 
-        {/* Hover tooltip */}
-        {hover !== null && (() => {
-          const p = projects[hover]
-          const cx = COMBO_PAD_L + groupW * hover + groupW / 2
-          const tipW = 160
-          const tipH = 38
-          const tipX = Math.max(2, Math.min(cx - tipW / 2, COMBO_W - tipW - 2))
-          const tipY = 2
-          return (
-            <>
-              <rect x={tipX} y={tipY} width={tipW} height={tipH} rx={3}
-                fill="var(--bg-elevated)" stroke="var(--border-bright)" strokeWidth="0.8" />
-              <text x={tipX + tipW / 2} y={tipY + 14} textAnchor="middle"
-                fill="var(--text-primary)" fontSize="9.5" fontFamily="var(--font-mono)" fontWeight="600">
-                {p.name}
-              </text>
-              <text x={tipX + tipW / 2} y={tipY + 28} textAnchor="middle"
-                fill="var(--text-secondary)" fontSize="8" fontFamily="var(--font-mono)">
-                {fmtDurationShort(p.durationSec)} · {p.messages.toLocaleString()} turns · {p.sessions} sess
-              </text>
-            </>
-          )
-        })()}
       </svg>
+
+      {/* HTML popover — rendered outside SVG for rich session detail */}
+      {hover !== null && (() => {
+        const p = projects[hover.idx]
+        const detail = p.sessions_detail || []
+        const shown = detail.slice(0, 5)
+        const remaining = detail.length - 5
+        return (
+          <div className="combo-popover" style={{ left: hover.px, top: hover.py }}>
+            <div className="combo-popover-header">
+              <span className="combo-popover-name">{p.name}</span>
+              <span className="combo-popover-summary">
+                {fmtDurationShort(p.durationSec)} · {p.messages.toLocaleString()} turns · {p.sessions} sess
+              </span>
+            </div>
+            {shown.length > 0 && (
+              <div className="combo-popover-sessions">
+                {shown.map(s => (
+                  <div key={s.id} className="combo-popover-row">
+                    <span className="combo-popover-session-title">
+                      {s.title.length > 22 ? s.title.slice(0, 21) + '…' : s.title}
+                    </span>
+                    <span className="combo-popover-session-stats">
+                      {s.durationStr} · {s.messages} msgs
+                    </span>
+                  </div>
+                ))}
+                {remaining > 0 && (
+                  <div className="combo-popover-more">+{remaining} more</div>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* Legend */}
       <div className="activity-chart-legend" style={{ marginTop: 2 }}>
@@ -669,7 +690,176 @@ const MODEL_TIP =
 const PROJECT_TIP =
   'Breakdown by working directory (folder name). Duration bars (cyan) show total wall-clock ' +
   'time across all sessions. Turns bars (purple) show total AI message nodes. The yellow line ' +
-  'tracks session count per project (right axis). Hover a project for exact numbers.'
+  'tracks session count per project (right axis). Hover a project for per-session breakdown.'
+
+// ── Leaderboard charts ────────────────────────────────────────────────────────
+
+const LB_BAR_H = 14
+const LB_GAP = 4
+const LB_LABEL_W = 140
+const LB_VALUE_W = 52
+const LB_BAR_AREA = 90
+const LB_ROW_H = LB_BAR_H + LB_GAP
+
+function lbLabel(entry) {
+  const proj = entry.project || ''
+  const title = entry.title || ''
+  const full = proj === title ? proj : `${proj} · ${title}`
+  return full.length > 24 ? full.slice(0, 23) + '…' : full
+}
+
+/**
+ * LeaderboardChart — reusable horizontal bar chart for top-10 ranked sessions.
+ * Used for duration and user message leaderboards.
+ */
+function LeaderboardChart({ entries, valueFn, color }) {
+  const [hover, setHover] = useState(null)
+  if (!entries?.length) return <div className="splash-empty-note">No data yet.</div>
+
+  const maxVal = valueFn(entries[0])
+  const totalH = entries.length * LB_ROW_H - LB_GAP
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <svg
+        viewBox={`0 0 ${LB_LABEL_W + LB_VALUE_W + LB_BAR_AREA} ${totalH}`}
+        style={{ width: '100%', height: `${totalH + 2}px`, display: 'block', overflow: 'visible' }}
+      >
+        {entries.map((e, i) => {
+          const y = i * LB_ROW_H
+          const val = valueFn(e)
+          const barW = Math.max(2, Math.round((val / maxVal) * LB_BAR_AREA))
+          const isHov = hover === i
+          return (
+            <g key={e.id}
+              onMouseEnter={() => setHover(i)}
+              onMouseLeave={() => setHover(null)}
+              style={{ cursor: 'default' }}>
+              <text x={LB_LABEL_W - 4} y={y + LB_BAR_H * 0.78} textAnchor="end"
+                fill={isHov ? color : 'var(--text-secondary)'}
+                fontSize="9" fontFamily="var(--font-mono)">
+                {lbLabel(e)}
+              </text>
+              <text x={LB_LABEL_W + LB_VALUE_W - 2} y={y + LB_BAR_H * 0.78} textAnchor="end"
+                fill={isHov ? 'var(--text-secondary)' : 'var(--text-muted)'}
+                fontSize="8.5" fontFamily="var(--font-mono)">
+                {e._fmt}
+              </text>
+              <rect x={LB_LABEL_W + LB_VALUE_W} y={y + 2} width={LB_BAR_AREA} height={LB_BAR_H - 4}
+                rx={2} fill="var(--bg-elevated)" />
+              <rect x={LB_LABEL_W + LB_VALUE_W} y={y + 2} width={barW} height={LB_BAR_H - 4}
+                rx={2} fill={color} opacity={isHov ? 1 : 0.7} />
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+/**
+ * LeaderboardTokenChart — stacked horizontal bars for top-10 sessions by token usage.
+ * Each bar shows output / input / cache_write / cache_read segments.
+ */
+function LeaderboardTokenChart({ entries }) {
+  const [hover, setHover] = useState(null)
+  if (!entries?.length) return <div className="splash-empty-note">No token data yet.</div>
+
+  const maxTotal = entries[0].totalTokens || 1
+  const totalH = entries.length * LB_ROW_H - LB_GAP
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <svg
+        viewBox={`0 0 ${LB_LABEL_W + LB_VALUE_W + LB_BAR_AREA} ${totalH}`}
+        style={{ width: '100%', height: `${totalH + 2}px`, display: 'block', overflow: 'visible' }}
+      >
+        {entries.map((e, i) => {
+          const y = i * LB_ROW_H
+          const scale = LB_BAR_AREA / maxTotal
+          const outW  = Math.max(1, Math.round(e.outputTokens     * scale))
+          const inW   = Math.round(e.inputTokens      * scale)
+          const cwW   = Math.round(e.cacheWriteTokens  * scale)
+          const crW   = Math.round(e.cacheReadTokens   * scale)
+          const isHov = hover === i
+          const bx = LB_LABEL_W + LB_VALUE_W
+          const by = y + 2
+          const bh = LB_BAR_H - 4
+          // Stacked segment positions (cumulative x offsets)
+          const outX = bx
+          const inX  = outX + outW
+          const cwX  = inX + inW
+          const crX  = cwX + cwW
+          return (
+            <g key={e.id}
+              onMouseEnter={() => setHover(i)}
+              onMouseLeave={() => setHover(null)}
+              style={{ cursor: 'default' }}>
+              <text x={LB_LABEL_W - 4} y={y + LB_BAR_H * 0.78} textAnchor="end"
+                fill={isHov ? 'var(--accent)' : 'var(--text-secondary)'}
+                fontSize="9" fontFamily="var(--font-mono)">
+                {lbLabel(e)}
+              </text>
+              <text x={LB_LABEL_W + LB_VALUE_W - 2} y={y + LB_BAR_H * 0.78} textAnchor="end"
+                fill={isHov ? 'var(--text-secondary)' : 'var(--text-muted)'}
+                fontSize="8.5" fontFamily="var(--font-mono)">
+                {fmtTokens(e.totalTokens)}
+              </text>
+              <rect x={bx} y={by} width={LB_BAR_AREA} height={bh}
+                rx={2} fill="var(--bg-elevated)" />
+              {/* Stacked segments: output | input | cache_write | cache_read */}
+              {outW > 0 && <rect x={outX} y={by} width={outW} height={bh} rx={1}
+                fill="var(--accent)" opacity={isHov ? 1 : 0.7} />}
+              {inW > 0 && <rect x={inX} y={by} width={inW} height={bh} rx={1}
+                fill="var(--blue)" opacity={isHov ? 0.85 : 0.55} />}
+              {cwW > 0 && <rect x={cwX} y={by} width={cwW} height={bh} rx={1}
+                fill="var(--yellow)" opacity={isHov ? 0.75 : 0.45} />}
+              {crW > 0 && <rect x={crX} y={by} width={crW} height={bh} rx={1}
+                fill="var(--purple)" opacity={isHov ? 0.65 : 0.4} />}
+            </g>
+          )
+        })}
+      </svg>
+      <div className="model-usage-legend" style={{ marginTop: 4 }}>
+        <span><span className="model-detail-dot model-bar-output" />output</span>
+        <span><span className="model-detail-dot model-bar-input" />input</span>
+        <span><span className="model-detail-dot model-bar-cwrite" />cache write</span>
+        <span><span className="model-detail-dot model-bar-cread" />cache read</span>
+      </div>
+    </div>
+  )
+}
+
+const DURATION_LB_TIP =
+  'Top 10 sessions ranked by wall-clock duration (last activity minus creation time). ' +
+  'This measures total elapsed time, not active coding time.'
+
+const MESSAGES_LB_TIP =
+  'Top 10 sessions ranked by the number of messages you sent to Devin. ' +
+  'More messages usually means a longer, more interactive session.'
+
+const TOKENS_LB_TIP =
+  'Top 10 sessions ranked by total token consumption across all LLM API calls. ' +
+  'The stacked bar shows the breakdown: output (work done), input (context), ' +
+  'cache write, and cache read.'
+
+// ── Loading easter eggs ───────────────────────────────────────────────────────
+
+const LOADING_MSGS = [
+  'Crunching numbers…',
+  'Consulting the oracle…',
+  'Counting tokens like sheep…',
+  'Warming up the flux capacitor…',
+  'Asking Devin how Devin is doing…',
+  'Reticulating splines…',
+  'Calibrating the vibes…',
+  'Scanning the multiverse…',
+]
+
+function LoadingMsg() {
+  const [msg] = useState(() => LOADING_MSGS[Math.floor(Math.random() * LOADING_MSGS.length)])
+  return <>{msg}</>
+}
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -683,10 +873,15 @@ export default function DashboardSplash({ connected, latestPrompt }) {
     <div className="splash-loading" style={{ color: 'var(--red)' }}>Stats error: {error}</div>
   )
   if (!stats) return (
-    <div className="splash-loading"><div className="spinner" />Loading…</div>
+    <div className="splash-loading"><div className="spinner" /><LoadingMsg /></div>
   )
 
-  const { projects, tools, activityByHour, models } = stats
+  const { projects, tools, activityByHour, models,
+          topSessionsByDuration, topSessionsByUserMsgs, topSessionsByTokens } = stats
+
+  // Pre-format leaderboard display values
+  const durEntries = (topSessionsByDuration || []).map(e => ({ ...e, _fmt: e.durationStr }))
+  const msgEntries = (topSessionsByUserMsgs || []).map(e => ({ ...e, _fmt: String(e.userMsgCount) }))
 
   return (
     <div className="splash">
@@ -718,6 +913,31 @@ export default function DashboardSplash({ connected, latestPrompt }) {
           </Section>
 
         </div>
+      </div>
+
+      {/* ── Leaderboards — full-width below the two-column grid ──── */}
+      <div className="splash-leaderboards">
+
+        <Section title="Top 10 Session Durations" tip={DURATION_LB_TIP}>
+          <LeaderboardChart
+            entries={durEntries}
+            valueFn={e => e.durationSec}
+            color="var(--cyan)"
+          />
+        </Section>
+
+        <Section title="Top 10 User Messages" tip={MESSAGES_LB_TIP}>
+          <LeaderboardChart
+            entries={msgEntries}
+            valueFn={e => e.userMsgCount}
+            color="var(--purple)"
+          />
+        </Section>
+
+        <Section title="Top 10 Token Usage" tip={TOKENS_LB_TIP}>
+          <LeaderboardTokenChart entries={topSessionsByTokens || []} />
+        </Section>
+
       </div>
     </div>
   )

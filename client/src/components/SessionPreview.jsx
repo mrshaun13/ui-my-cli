@@ -12,7 +12,8 @@
  *   Footer: Archive button (left) · Resume button (right)
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import SubagentTimeline from './SubagentTimeline'
 
 const STATUS_LABEL = {
   question: 'Needs your input',
@@ -208,6 +209,14 @@ function ModelSection({ startingModel, currentModel, modelSwitches }) {
   )
 }
 
+function formatTurnTime(epochSec) {
+  if (!epochSec) return null
+  const d = new Date(epochSec * 1000)
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const date = `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(2)}`
+  return { date, time }
+}
+
 function ChatBubble({ turn, index, total }) {
   const [expanded, setExpanded] = useState(false)
   const isLatest = index === total - 1
@@ -224,19 +233,27 @@ function ChatBubble({ turn, index, total }) {
     : turn.assistantText?.slice(0, ASSIST_LIMIT) + '…'
 
   const canExpand = userTrunc || assistTrunc
+  const timestamp = formatTurnTime(turn.createdAt)
+  const assistTimestamp = formatTurnTime(turn.assistantCreatedAt)
 
   return (
     <div className={`preview-turn${isLatest ? ' preview-turn-latest' : ''}`}>
       {/* User bubble */}
       <div className="preview-bubble preview-bubble-user">
-        <span className="preview-bubble-label">you</span>
+        <span className="preview-bubble-label">
+          you
+          {timestamp && <span className="preview-bubble-time">{timestamp.date} {timestamp.time}</span>}
+        </span>
         <p className="preview-bubble-text">{userDisplay}</p>
       </div>
 
       {/* Assistant bubble */}
       {assistDisplay ? (
         <div className="preview-bubble preview-bubble-assistant">
-          <span className="preview-bubble-label">devin</span>
+          <span className="preview-bubble-label">
+            devin
+            {assistTimestamp && <span className="preview-bubble-time">{assistTimestamp.time}</span>}
+          </span>
           <p className="preview-bubble-text">{assistDisplay}</p>
         </div>
       ) : (
@@ -269,16 +286,63 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
   const [nameValue, setNameValue] = useState('')
   const inputRef = useRef(null)
 
+  // ── Full conversation viewer state ──────────────────────────────────────────
+  const INITIAL_BATCH = 50
+  const [convoTurns, setConvoTurns]     = useState([])      // accumulated turns (oldest first)
+  const [convoTotal, setConvoTotal]     = useState(0)       // total turns available on server
+  const [convoLoading, setConvoLoading] = useState(false)
+  const [convoError, setConvoError]     = useState(null)
+  const [nextBatch, setNextBatch]       = useState(INITIAL_BATCH)  // doubles each "load more"
+  const threadColRef = useRef(null)
+  const fetchingRef  = useRef(false)     // ref guard — survives React batching
+
+  // ── Subagent timeline state ─────────────────────────────────────────────────
+  const [subagents, setSubagents] = useState(null)  // null = not loaded, [] = no subagents
+
   useEffect(() => {
     if (!sessionId) return
     setData(null)
     setError(null)
     setRenaming(false)
+    // Reset conversation viewer state when switching sessions
+    setConvoTurns([])
+    setConvoTotal(0)
+    setConvoError(null)
+    setNextBatch(INITIAL_BATCH)
+    fetchingRef.current = false
+    setSubagents(null)
     fetch(`/api/sessions/${sessionId}/preview`)
       .then(r => r.json())
       .then(d => { setData(d); setNameValue(d.title) })
       .catch(e => setError(e.message))
   }, [sessionId])
+
+  // Auto-load the initial conversation batch when preview data arrives
+  useEffect(() => {
+    if (!data || !sessionId || convoTurns.length > 0) return
+    fetchingRef.current = false
+    fetch(`/api/sessions/${sessionId}/conversation?offset=0&limit=${INITIAL_BATCH}`)
+      .then(r => { if (!r.ok) throw new Error('Failed to load conversation'); return r.json() })
+      .then(result => {
+        setConvoTurns(result.turns)
+        setConvoTotal(result.totalTurns)
+        // Scroll to bottom to show most recent messages
+        requestAnimationFrame(() => {
+          const col = threadColRef.current
+          if (col) col.scrollTop = col.scrollHeight
+        })
+      })
+      .catch(e => setConvoError(e.message))
+  }, [data, sessionId])
+
+  // Lazy-fetch subagent timeline when preview reports subagentCount > 0
+  useEffect(() => {
+    if (!data || !sessionId || !data.subagentCount) return
+    fetch(`/api/sessions/${sessionId}/subagents`)
+      .then(r => r.json())
+      .then(setSubagents)
+      .catch(() => setSubagents([]))  // silently degrade on error
+  }, [data, sessionId])
 
   // Auto-select text when input appears
   useEffect(() => {
@@ -305,6 +369,52 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
     if (e.key === 'Escape') { setRenaming(false); setNameValue(data?.title || '') }
     e.stopPropagation()
   }
+
+  // ── Conversation loader ─────────────────────────────────────────────────────
+  const fetchConversation = useCallback((limit, loadAll = false) => {
+    if (!sessionId || fetchingRef.current) return
+    fetchingRef.current = true
+    setConvoLoading(true)
+    setConvoError(null)
+
+    const offset = convoTurns.length
+    const url = loadAll
+      ? `/api/sessions/${sessionId}/conversation?offset=0&limit=0`
+      : `/api/sessions/${sessionId}/conversation?offset=${offset}&limit=${limit}`
+
+    fetch(url)
+      .then(r => { if (!r.ok) throw new Error('Failed to load conversation'); return r.json() })
+      .then(result => {
+        // Preserve scroll position — measure before DOM update
+        const col = threadColRef.current
+        const prevScrollHeight = col?.scrollHeight || 0
+
+        if (loadAll) {
+          setConvoTurns(result.turns)
+        } else {
+          // Prepend older turns before existing ones
+          setConvoTurns(prev => [...result.turns, ...prev])
+        }
+        setConvoTotal(result.totalTurns)
+        if (!loadAll) setNextBatch(prev => prev * 2)
+
+        // Restore scroll position after prepend
+        requestAnimationFrame(() => {
+          if (col && !loadAll) {
+            const newScrollHeight = col.scrollHeight
+            col.scrollTop += (newScrollHeight - prevScrollHeight)
+          } else if (col && loadAll) {
+            // Scroll to bottom when loading all
+            col.scrollTop = col.scrollHeight
+          }
+        })
+      })
+      .catch(e => setConvoError(e.message))
+      .finally(() => { fetchingRef.current = false; setConvoLoading(false) })
+  }, [sessionId, convoTurns.length])
+
+  const loadMore    = useCallback(() => fetchConversation(nextBatch), [fetchConversation, nextBatch])
+  const loadAll     = useCallback(() => fetchConversation(0, true), [fetchConversation])
 
   if (error) return (
     <div className="preview-wrap preview-loading" style={{ color: 'var(--red)' }}>
@@ -419,23 +529,100 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
           value={data.totalNodes.toLocaleString()}
           tip="Total message nodes stored in the database for this session. Each user message, assistant response, tool call, and tool result is a separate node."
         />
+        {data.outputTokens > 0 && (
+          <StatPill
+            label="output tok"
+            value={formatTokens(data.outputTokens)}
+            highlight={data.outputTokens > 500000 ? 'var(--accent)' : undefined}
+            tip="Total tokens generated by the LLM in this session. Higher output = more work done by the model."
+          />
+        )}
+        {data.inputTokens > 0 && (
+          <StatPill
+            label="input tok"
+            value={formatTokens(data.inputTokens)}
+            tip="Total fresh input tokens sent to the LLM across all API calls in this session. These are non-cached context tokens."
+          />
+        )}
+        {data.cacheReadTokens > 0 && (
+          <StatPill
+            label="cache read"
+            value={formatTokens(data.cacheReadTokens)}
+            tip="Tokens served from prompt cache hits. Cache reads are ~10× cheaper than fresh input tokens."
+          />
+        )}
+        {data.cacheWriteTokens > 0 && (
+          <StatPill
+            label="cache write"
+            value={formatTokens(data.cacheWriteTokens)}
+            tip="Tokens written to the prompt cache. Cache creation costs ~1.25× the input token rate but pays for itself on subsequent cache hits."
+          />
+        )}
+        {data.subagentCount > 0 && (
+          <StatPill
+            label="subagents"
+            value={data.subagentCount}
+            highlight="var(--purple)"
+            tip="Number of subagents spawned by Devin during this session. Subagents handle delegated tasks (code exploration, parallel work) in their own context."
+          />
+        )}
       </div>
 
       {/* ── Two-column body ─────────────────────────────────────────── */}
       <div className="preview-body">
 
         {/* Left: chat thread */}
-        <div className="preview-thread-col">
-          <div className="preview-section-label">Last {data.chatThread.length} exchanges</div>
-          {data.chatThread.length === 0 ? (
+        <div className="preview-thread-col" ref={threadColRef}>
+
+          {/* Sticky header: exchange count + load buttons */}
+          <div className="preview-convo-header">
+            <div className="preview-section-label" style={{ marginBottom: 0 }}>
+              {convoTotal === 0 && convoTurns.length === 0
+                ? 'Conversation'
+                : convoTurns.length === convoTotal
+                  ? `All ${convoTotal} exchanges`
+                  : `${convoTurns.length} of ${convoTotal} exchanges`}
+            </div>
+
+            {convoTurns.length < convoTotal && convoTotal > 0 && (
+              <div className="preview-convo-actions">
+                <button
+                  className="preview-convo-btn"
+                  onClick={loadMore}
+                  disabled={convoLoading}
+                >
+                  {convoLoading ? 'Loading…' : `Load ${Math.min(nextBatch, convoTotal - convoTurns.length)} more`}
+                </button>
+                <button
+                  className="preview-convo-btn preview-convo-btn-all"
+                  onClick={loadAll}
+                  disabled={convoLoading}
+                  title="Load everything for Ctrl+F search"
+                >
+                  Load all ({convoTotal})
+                </button>
+              </div>
+            )}
+          </div>
+
+          {convoError && (
+            <div className="preview-empty" style={{ color: 'var(--red)' }}>
+              Error: {convoError}
+            </div>
+          )}
+
+          {/* Conversation turns */}
+          {convoTurns.length === 0 && !convoLoading ? (
             <div className="preview-empty">No conversation history found.</div>
+          ) : convoTurns.length === 0 && convoLoading ? (
+            <div className="preview-empty"><div className="spinner" style={{ display: 'inline-block', marginRight: 6 }} /> Loading conversation…</div>
           ) : (
-            data.chatThread.map((turn, i) => (
+            convoTurns.map((turn, i) => (
               <ChatBubble
-                key={i}
+                key={`${turn.createdAt}-${turn.userText.slice(0, 24)}`}
                 turn={turn}
                 index={i}
-                total={data.chatThread.length}
+                total={convoTurns.length}
               />
             ))
           )}
@@ -454,6 +641,16 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
             currentModel={data.currentModel}
             modelSwitches={data.modelSwitches}
           />
+
+          {subagents?.length > 0 && (
+            <>
+              <div className="preview-section-label" style={{ marginTop: 14 }}>
+                Subagents
+                <InfoBubble tip="Background and foreground subagents spawned by Devin during this session. Each subagent runs in its own context with a specific profile (explore = read-only, general = full access)." />
+              </div>
+              <SubagentTimeline subagents={subagents} />
+            </>
+          )}
 
           <div className="preview-section-label" style={{ marginTop: 14 }}>Session info</div>
           <div className="preview-info-rows">

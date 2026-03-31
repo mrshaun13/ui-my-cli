@@ -14,6 +14,7 @@ const { resolveDbPath } = require('./db-path');
 
 const CONFIG_FILE  = path.join(os.homedir(), '.config', 'devin', 'config.json');
 const DEVIN_DIR    = path.join(os.homedir(), '.local', 'share', 'devin', 'cli');
+const { countAllSubagents } = require('./subagents');
 
 let db;
 function getDb() {
@@ -74,7 +75,7 @@ function formatDuration(sec) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-/** Per-project session + message node counts + total duration */
+/** Per-project session + message node counts + total duration + per-session detail */
 function projectBreakdown(db, sessions) {
   const msgBySession = {};
   const rows = db.prepare('SELECT session_id, COUNT(*) as c FROM message_nodes GROUP BY session_id').all();
@@ -83,13 +84,26 @@ function projectBreakdown(db, sessions) {
   const byProject = {};
   for (const s of sessions) {
     const proj = s.working_directory ? path.basename(s.working_directory) : 'unknown';
-    if (!byProject[proj]) byProject[proj] = { sessions: 0, messages: 0, durationSec: 0 };
+    if (!byProject[proj]) byProject[proj] = { sessions: 0, messages: 0, durationSec: 0, sessions_detail: [] };
     byProject[proj].sessions++;
-    byProject[proj].messages += msgBySession[s.id] || 0;
-    byProject[proj].durationSec += Math.max(0, (s.last_activity_at || 0) - (s.created_at || 0));
+    const msgs = msgBySession[s.id] || 0;
+    byProject[proj].messages += msgs;
+    const durSec = Math.max(0, (s.last_activity_at || 0) - (s.created_at || 0));
+    byProject[proj].durationSec += durSec;
+    byProject[proj].sessions_detail.push({
+      id: s.id,
+      title: s.title || s.id.slice(0, 8),
+      durationSec: durSec,
+      durationStr: formatDuration(durSec),
+      messages: msgs,
+    });
   }
   return Object.entries(byProject)
-    .map(([name, d]) => ({ name, ...d, durationStr: formatDuration(d.durationSec) }))
+    .map(([name, d]) => ({
+      name, sessions: d.sessions, messages: d.messages,
+      durationSec: d.durationSec, durationStr: formatDuration(d.durationSec),
+      sessions_detail: d.sessions_detail.sort((a, b) => b.durationSec - a.durationSec),
+    }))
     .sort((a, b) => b.messages - a.messages);
 }
 
@@ -150,26 +164,24 @@ function activityByHour(db) {
 }
 
 /**
- * Real token usage breakdown per model, aggregated from message_node metadata.
+ * Single-pass token analysis over all assistant message_nodes.
  *
  * Each assistant message stores a `metadata.metrics` object with:
  *   input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
  * and a `metadata.generation_model` field — the *actual* model used for
  * that API call, which may differ from session.model if the config changed.
  *
- * Token buckets:
- *   input         — fresh input context tokens (most expensive)
- *   output        — generated output tokens
- *   cache_read    — prompt cache hits (cheap, ~0.1× input rate)
- *   cache_write   — prompt cache writes (~1.25× input rate, one-time)
- *   calls         — number of LLM API calls (useful to sanity-check)
+ * Returns:
+ *   byModel   — per-model aggregate (same shape as old modelTokenBreakdown)
+ *   bySession — per-session token totals for leaderboard ranking
  */
-function modelTokenBreakdown(db) {
+function tokenBreakdown(db) {
   const rows = db.prepare(
-    "SELECT chat_message FROM message_nodes WHERE chat_message LIKE '%generation_model%'"
+    "SELECT session_id, chat_message FROM message_nodes WHERE chat_message LIKE '%generation_model%'"
   ).all();
 
-  const byModel = {};
+  const byModel   = {};
+  const bySession = {};
 
   for (const r of rows) {
     let msg;
@@ -181,20 +193,39 @@ function modelTokenBreakdown(db) {
     const metrics = meta.metrics;
     if (!model || !metrics) continue;
 
+    const input  = metrics.input_tokens          || 0;
+    const output = metrics.output_tokens         || 0;
+    const cRead  = metrics.cache_read_tokens     || 0;
+    const cWrite = metrics.cache_creation_tokens || 0;
+
+    // Per-model (existing behavior)
     if (!byModel[model]) {
       byModel[model] = { model, calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
     }
-    const s = byModel[model];
-    s.calls            += 1;
-    s.inputTokens      += metrics.input_tokens         || 0;
-    s.outputTokens     += metrics.output_tokens        || 0;
-    s.cacheReadTokens  += metrics.cache_read_tokens    || 0;
-    s.cacheWriteTokens += metrics.cache_creation_tokens || 0;
+    const m = byModel[model];
+    m.calls            += 1;
+    m.inputTokens      += input;
+    m.outputTokens     += output;
+    m.cacheReadTokens  += cRead;
+    m.cacheWriteTokens += cWrite;
+
+    // Per-session (new — for leaderboards)
+    const sid = r.session_id;
+    if (!bySession[sid]) {
+      bySession[sid] = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 };
+    }
+    const s = bySession[sid];
+    s.inputTokens      += input;
+    s.outputTokens     += output;
+    s.cacheReadTokens  += cRead;
+    s.cacheWriteTokens += cWrite;
+    s.totalTokens      += input + output + cRead + cWrite;
   }
 
-  // Sort by output tokens descending — output is the clearest proxy for "how much work"
-  return Object.values(byModel)
-    .sort((a, b) => b.outputTokens - a.outputTokens);
+  return {
+    byModel: Object.values(byModel).sort((a, b) => b.outputTokens - a.outputTokens),
+    bySession,
+  };
 }
 
 /** Most recent user prompts from prompt_history */
@@ -284,8 +315,58 @@ function getStats() {
   const config = loadConfig();
 
   const sessions = db.prepare(
-    'SELECT id, working_directory, model, created_at, last_activity_at FROM sessions'
+    'SELECT id, working_directory, model, created_at, last_activity_at, title FROM sessions'
   ).all();
+
+  // Unified token scan — per-model (for ModelUsageTable) + per-session (for leaderboard)
+  const { byModel, bySession: tokensBySession } = tokenBreakdown(db);
+
+  // Per-session user message counts (for leaderboard)
+  const userMsgRows = db.prepare(
+    "SELECT session_id, COUNT(*) as c FROM message_nodes WHERE chat_message LIKE '%\"role\":\"user\"%' GROUP BY session_id"
+  ).all();
+  const userMsgBySession = {};
+  for (const r of userMsgRows) userMsgBySession[r.session_id] = r.c;
+
+  // Build session lookup for leaderboard enrichment
+  const sessionMap = {};
+  for (const s of sessions) {
+    sessionMap[s.id] = {
+      id: s.id,
+      title: s.title || s.id.slice(0, 8),
+      project: s.working_directory ? path.basename(s.working_directory) : 'unknown',
+      durationSec: Math.max(0, (s.last_activity_at || 0) - (s.created_at || 0)),
+    };
+  }
+
+  // Leaderboard: top 10 sessions by duration
+  const topSessionsByDuration = Object.values(sessionMap)
+    .sort((a, b) => b.durationSec - a.durationSec)
+    .slice(0, 10)
+    .map(s => ({
+      id: s.id, title: s.title, project: s.project,
+      durationSec: s.durationSec, durationStr: formatDuration(s.durationSec),
+    }));
+
+  // Leaderboard: top 10 sessions by user message count
+  const topSessionsByUserMsgs = Object.entries(userMsgBySession)
+    .filter(([sid]) => sessionMap[sid])
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([sid, count]) => ({
+      id: sid, title: sessionMap[sid].title, project: sessionMap[sid].project,
+      userMsgCount: count,
+    }));
+
+  // Leaderboard: top 10 sessions by total token usage
+  const topSessionsByTokens = Object.entries(tokensBySession)
+    .filter(([sid]) => sessionMap[sid])
+    .sort((a, b) => b[1].totalTokens - a[1].totalTokens)
+    .slice(0, 10)
+    .map(([sid, tok]) => ({
+      id: sid, title: sessionMap[sid].title, project: sessionMap[sid].project,
+      ...tok,
+    }));
 
   return {
     activity:    sessionActivityBuckets(sessions),
@@ -293,7 +374,7 @@ function getStats() {
     projects:    projectBreakdown(db, sessions),
     tools:       topTools(db),
     activityByHour: activityByHour(db),
-    models:      modelTokenBreakdown(db),
+    models:      byModel,
     recentPrompts: recentPrompts(db),
     mcpServers:  mcpServers(config),
     skills:      installedSkills(),
@@ -301,6 +382,12 @@ function getStats() {
     devinVersion: process.env.DEVIN_VERSION || null,
     model:       config?.agent?.model || null,
     permissionMode: config?.permissions ? 'configured' : 'default',
+    // Leaderboards
+    topSessionsByDuration,
+    topSessionsByUserMsgs,
+    topSessionsByTokens,
+    // Subagents
+    totalSubagents: countAllSubagents(),
   };
 }
 

@@ -20,6 +20,7 @@ const os = require('os');
 const fs = require('fs');
 const { resolveDbPath, resolveDashboardDbPath } = require('./db-path');
 const { formatDuration } = require('./stats');
+const { sessionsWithSubagents } = require('./subagents');
 
 // ── Devin CLI sessions.db ──────────────────────────────────────────────────────
 
@@ -294,6 +295,7 @@ function projectName(workingDir) {
 function listSessions() {
   const db = getReadDb();
   const hidden = loadHidden();
+  const subagentSessions = sessionsWithSubagents();
 
   const sessions = db.prepare(`
     SELECT id, working_directory, model, created_at, last_activity_at, title
@@ -325,6 +327,7 @@ function listSessions() {
         snippet,
         firstUserPrompt,
         lastUserPrompt,
+        hasSubagents: subagentSessions.has(session.id),
         lastActivityAt: session.last_activity_at,
         lastActivityAgo: relativeTime(session.last_activity_at),
         createdAt: session.created_at,
@@ -482,6 +485,10 @@ function getSessionPreview(id) {
   let toolCallCount = 0;
   let compactionCount = 0;
   let peakContextTokens = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
   const toolCounts = {};
   const userPrompts = [];   // { text, createdAt }
   const chatThread = [];    // last N turns for preview rendering
@@ -526,6 +533,14 @@ function getSessionPreview(id) {
           if (name) { toolCounts[name] = (toolCounts[name] || 0) + 1; toolCallCount++; }
         }
       }
+      // Token metrics from API call metadata
+      const meta = msg.metadata;
+      if (meta?.metrics) {
+        inputTokens      += meta.metrics.input_tokens          || 0;
+        outputTokens     += meta.metrics.output_tokens         || 0;
+        cacheReadTokens  += meta.metrics.cache_read_tokens     || 0;
+        cacheWriteTokens += meta.metrics.cache_creation_tokens || 0;
+      }
     }
   }
 
@@ -552,7 +567,8 @@ function getSessionPreview(id) {
 
     // Find the next assistant text response after this user message
     let assistantText = null;
-    for (let j = i + 1; j < Math.min(i + 20, threadNodes.length); j++) {
+    let assistantCreatedAt = null;
+    for (let j = i + 1; j < Math.min(i + 40, threadNodes.length); j++) {
       let am;
       try { am = JSON.parse(threadNodes[j].chat_message); } catch { continue; }
       if (am?.role !== 'assistant') continue;
@@ -562,6 +578,7 @@ function getSessionPreview(id) {
         : typeof rawAss === 'string' ? rawAss : null;
       if (text && text.trim().length > 10) {
         assistantText = text.trim();
+        assistantCreatedAt = threadNodes[j].created_at;
         break;
       }
     }
@@ -570,6 +587,7 @@ function getSessionPreview(id) {
       userText: userText.trim(),
       assistantText,
       createdAt: node.created_at,
+      assistantCreatedAt,
     });
     i--;
   }
@@ -622,8 +640,104 @@ function getSessionPreview(id) {
     compactionCount,
     peakContextTokens,
     topTools,
+    // Subagent count — derived from toolCounts with zero additional queries
+    subagentCount: toolCounts['run_subagent'] || 0,
+    // Token usage
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens,
     // Last 5 user→assistant exchanges for the chat preview
     chatThread: threadTurns,
+  };
+}
+
+/**
+ * Returns paginated user↔assistant conversation turns for a session.
+ *
+ * Scans message_nodes in row_id order, extracts only user and assistant text
+ * (no tool calls, no system messages), pairs them into turns, then returns
+ * the requested slice.  This powers the "full conversation" viewer in the
+ * SessionPreview panel.
+ *
+ * @param {string} id     - Session ID
+ * @param {number} offset - Number of turns to skip (from the end; 0 = most recent)
+ * @param {number} limit  - Max turns to return (0 = all)
+ * @returns {{ turns: Array<{userText: string, assistantText: string|null, createdAt: number}>, totalTurns: number, hasMore: boolean }}
+ */
+function getSessionConversation(id, offset = 0, limit = 50) {
+  const db = getReadDb();
+
+  const session = db.prepare('SELECT id FROM sessions WHERE id = ?').get(id);
+  if (!session) return null;
+
+  // Pull only the columns we need — chat_message for text, created_at for timestamps
+  const allNodes = db.prepare(
+    'SELECT chat_message, created_at FROM message_nodes WHERE session_id = ? ORDER BY row_id ASC'
+  ).all(id);
+
+  // Build all user→assistant turns (same pairing logic as getSessionPreview)
+  const allTurns = [];
+
+  for (let i = 0; i < allNodes.length; i++) {
+    let msg;
+    try { msg = JSON.parse(allNodes[i].chat_message); } catch { continue; }
+
+    if (msg?.role !== 'user') continue;
+
+    const rawContent = msg.content;
+    const userText = Array.isArray(rawContent)
+      ? rawContent.find(c => c.type === 'text')?.text
+      : typeof rawContent === 'string' ? rawContent : null;
+
+    if (!userText || userText.trim().length < 3) continue;
+
+    // Find the next assistant text response after this user message
+    let assistantText = null;
+    let assistantCreatedAt = null;
+    for (let j = i + 1; j < Math.min(i + 40, allNodes.length); j++) {
+      let am;
+      try { am = JSON.parse(allNodes[j].chat_message); } catch { continue; }
+      if (am?.role !== 'assistant') continue;
+      const rawAss = am.content;
+      const text = Array.isArray(rawAss)
+        ? rawAss.find(c => c.type === 'text')?.text
+        : typeof rawAss === 'string' ? rawAss : null;
+      if (text && text.trim().length > 10) {
+        assistantText = text.trim();
+        assistantCreatedAt = allNodes[j].created_at;
+        break;
+      }
+    }
+
+    allTurns.push({
+      userText: userText.trim(),
+      assistantText,
+      createdAt: allNodes[i].created_at,
+      assistantCreatedAt,
+    });
+  }
+
+  const totalTurns = allTurns.length;
+
+  // offset counts from the end (most recent), so slice accordingly
+  // offset=0, limit=50 → last 50 turns
+  // offset=50, limit=100 → turns before those last 50
+  let sliced;
+  if (limit === 0) {
+    // "Load all" — return everything
+    sliced = allTurns;
+  } else {
+    const end = totalTurns - offset;
+    const start = Math.max(0, end - limit);
+    sliced = allTurns.slice(start, Math.max(end, 0));
+  }
+
+  return {
+    turns: sliced,
+    totalTurns,
+    hasMore: limit === 0 ? false : (totalTurns - offset - sliced.length) > 0,
   };
 }
 
@@ -753,4 +867,4 @@ function findNewSessionInDir(workingDir, excludeIds) {
   }
 }
 
-module.exports = { listSessions, listArchivedSessions, getSession, getSessionPreview, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };
+module.exports = { listSessions, listArchivedSessions, getSession, getSessionPreview, getSessionConversation, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };
