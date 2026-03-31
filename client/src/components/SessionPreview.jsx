@@ -43,7 +43,6 @@ const TOOL_COLORS = {
   find_file_by_name: 'var(--blue)',
   mcp_call_tool:     'var(--yellow)',
   run_subagent:      'var(--purple)',
-  read_subagent:     'var(--purple)',
 }
 
 // Friendly display names for model strings
