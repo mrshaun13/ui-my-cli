@@ -364,12 +364,12 @@ function ToolBarChart({ tools }) {
 
 // ── Project combo chart — grouped bars (duration + turns) with session count line ──
 
-const COMBO_W = 420
-const COMBO_H = 170
-const COMBO_PAD_L = 36     // left axis labels
+const COMBO_W = 460
+const COMBO_H = 240
+const COMBO_PAD_L = 40     // left axis labels
 const COMBO_PAD_R = 36     // right axis labels
-const COMBO_PAD_B = 28     // project name labels
-const COMBO_PAD_T = 10     // top breathing room
+const COMBO_PAD_B = 36     // project name labels
+const COMBO_PAD_T = 12     // top breathing room
 const COMBO_PLOT_W = COMBO_W - COMBO_PAD_L - COMBO_PAD_R
 const COMBO_PLOT_H = COMBO_H - COMBO_PAD_T - COMBO_PAD_B
 
@@ -391,8 +391,8 @@ function ProjectComboChart({ projects }) {
 
   const n = projects.length
   const groupW = COMBO_PLOT_W / n
-  const barW = Math.min(16, groupW * 0.3)
-  const barGap = Math.max(2, barW * 0.2)
+  const barW = Math.min(24, groupW * 0.32)
+  const barGap = Math.max(3, barW * 0.2)
 
   // Y-axis tick marks (left = duration, right = sessions)
   const durTicks = [0.25, 0.5, 0.75, 1]
@@ -414,22 +414,23 @@ function ProjectComboChart({ projects }) {
     <div className="activity-chart-wrap" style={{ position: 'relative' }}>
       <svg
         viewBox={`0 0 ${COMBO_W} ${COMBO_H}`}
+        preserveAspectRatio="xMidYMid meet"
         className="activity-chart-svg"
-        style={{ overflow: 'visible' }}
+        style={{ overflow: 'visible', height: 'auto', aspectRatio: `${COMBO_W} / ${COMBO_H}` }}
       >
         {/* Horizontal grid lines */}
         {durTicks.map(f => {
           const y = (COMBO_PAD_T + COMBO_PLOT_H - f * COMBO_PLOT_H).toFixed(1)
           return <line key={f} x1={COMBO_PAD_L} x2={COMBO_W - COMBO_PAD_R} y1={y} y2={y}
-            stroke="var(--border)" strokeWidth="0.4" />
+            stroke="var(--border)" strokeWidth="0.5" />
         })}
 
         {/* Left Y-axis labels (duration) */}
         {durTicks.map(f => {
           const y = COMBO_PAD_T + COMBO_PLOT_H - f * COMBO_PLOT_H
           return (
-            <text key={f} x={COMBO_PAD_L - 4} y={y + 2.5} textAnchor="end"
-              fill="var(--text-muted)" fontSize="6.5" fontFamily="var(--font-mono)">
+            <text key={f} x={COMBO_PAD_L - 4} y={y + 3} textAnchor="end"
+              fill="var(--text-muted)" fontSize="8" fontFamily="var(--font-mono)">
               {fmtDurationShort(maxDur * f)}
             </text>
           )
@@ -439,8 +440,8 @@ function ProjectComboChart({ projects }) {
         {sessTicksFiltered.map(s => {
           const y = COMBO_PAD_T + COMBO_PLOT_H - (s / maxSess) * COMBO_PLOT_H
           return (
-            <text key={s} x={COMBO_W - COMBO_PAD_R + 4} y={y + 2.5} textAnchor="start"
-              fill="var(--yellow)" fontSize="6.5" fontFamily="var(--font-mono)" opacity="0.7">
+            <text key={s} x={COMBO_W - COMBO_PAD_R + 4} y={y + 3} textAnchor="start"
+              fill="var(--yellow)" fontSize="8" fontFamily="var(--font-mono)" opacity="0.7">
               {s}
             </text>
           )
@@ -476,10 +477,10 @@ function ProjectComboChart({ projects }) {
                 rx={2} fill="var(--purple)" opacity={isHov ? 1 : 0.7} />
 
               {/* Project label */}
-              <text x={cx} y={COMBO_H - 4} textAnchor="middle"
+              <text x={cx} y={COMBO_H - 6} textAnchor="middle"
                 fill={isHov ? 'var(--text-primary)' : 'var(--text-muted)'}
-                fontSize="7.5" fontFamily="var(--font-mono)">
-                {p.name.length > 12 ? p.name.slice(0, 11) + '…' : p.name}
+                fontSize="9" fontFamily="var(--font-mono)">
+                {p.name.length > 14 ? p.name.slice(0, 13) + '…' : p.name}
               </text>
             </g>
           )
@@ -487,9 +488,9 @@ function ProjectComboChart({ projects }) {
 
         {/* Session count line */}
         <polyline points={linePath} fill="none" stroke="var(--yellow)"
-          strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" opacity="0.8" />
+          strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" opacity="0.8" />
         {linePoints.map((pt, i) => (
-          <circle key={i} cx={pt.x} cy={pt.y} r={hover === i ? 3.5 : 2.5}
+          <circle key={i} cx={pt.x} cy={pt.y} r={hover === i ? 4.5 : 3}
             fill="var(--yellow)" opacity={hover === i ? 1 : 0.6} />
         ))}
 
@@ -497,20 +498,20 @@ function ProjectComboChart({ projects }) {
         {hover !== null && (() => {
           const p = projects[hover]
           const cx = COMBO_PAD_L + groupW * hover + groupW / 2
-          const tipW = 140
-          const tipH = 34
+          const tipW = 160
+          const tipH = 38
           const tipX = Math.max(2, Math.min(cx - tipW / 2, COMBO_W - tipW - 2))
           const tipY = 2
           return (
             <>
               <rect x={tipX} y={tipY} width={tipW} height={tipH} rx={3}
                 fill="var(--bg-elevated)" stroke="var(--border-bright)" strokeWidth="0.8" />
-              <text x={tipX + tipW / 2} y={tipY + 12} textAnchor="middle"
-                fill="var(--text-primary)" fontSize="8" fontFamily="var(--font-mono)" fontWeight="600">
+              <text x={tipX + tipW / 2} y={tipY + 14} textAnchor="middle"
+                fill="var(--text-primary)" fontSize="9.5" fontFamily="var(--font-mono)" fontWeight="600">
                 {p.name}
               </text>
-              <text x={tipX + tipW / 2} y={tipY + 24} textAnchor="middle"
-                fill="var(--text-secondary)" fontSize="7" fontFamily="var(--font-mono)">
+              <text x={tipX + tipW / 2} y={tipY + 28} textAnchor="middle"
+                fill="var(--text-secondary)" fontSize="8" fontFamily="var(--font-mono)">
                 {fmtDurationShort(p.durationSec)} · {p.messages.toLocaleString()} turns · {p.sessions} sess
               </text>
             </>
