@@ -58,6 +58,8 @@
   --red-dim:       rgba(255, 77, 106, 0.12);
   --purple:        #9d6fff;
   --purple-dim:    rgba(157, 111, 255, 0.1);
+  --cyan:          #00d4e8;
+  --cyan-dim:      rgba(0, 212, 232, 0.12);
 
   --font-display:  'Syne', sans-serif;
   --font-mono:     'Berkeley Mono', 'Fira Code', 'Cascadia Code', monospace;
@@ -1168,51 +1170,6 @@ html, body, #root {
   transition: width 0.4s ease;
 }
 
-/* ── BarRow component (project breakdown, etc.) ──────────────── */
-.bar-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.bar-row-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.bar-row-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-.bar-row-count {
-  font-size: 10px;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.bar-row-track {
-  height: 3px;
-  background: var(--bg-elevated);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.bar-row-fill {
-  height: 100%;
-  border-radius: 2px;
-  transition: width 0.4s ease;
-}
-
 /* ── Model token usage table ─────────────────────────────────── */
 .model-usage-table {
   display: flex;
@@ -1987,6 +1944,14 @@ html, body, #root {
 }
 
 .preview-path-sep { color: var(--border-bright); }
+.preview-project-duration {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  opacity: 0.8;
+}
 
 /* ── Stats row ───────────────────────────────────────────────────── */
 .preview-stats-row {

@@ -19,6 +19,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { resolveDbPath, resolveDashboardDbPath } = require('./db-path');
+const { formatDuration } = require('./stats');
 
 // ── Devin CLI sessions.db ──────────────────────────────────────────────────────
 
@@ -580,12 +581,17 @@ function getSessionPreview(id) {
     .map(([name, count]) => ({ name, count }));
 
   // ── Duration ──────────────────────────────────────────────────────────────
-  const durationSec = session.last_activity_at - session.created_at;
-  const durationHours = Math.floor(durationSec / 3600);
-  const durationMins  = Math.floor((durationSec % 3600) / 60);
-  const durationStr   = durationHours > 0
-    ? `${durationHours}h ${durationMins}m`
-    : `${durationMins}m`;
+  const durationSec = Math.max(0, (session.last_activity_at || 0) - (session.created_at || 0));
+  const durationStr = formatDuration(durationSec);
+
+  // ── Project total duration (sum across all sessions in same working dir) ──
+  const projectSessions = db.prepare(
+    'SELECT created_at, last_activity_at FROM sessions WHERE working_directory = ?'
+  ).all(session.working_directory);
+  const projectDurationSec = projectSessions.reduce(
+    (sum, s) => sum + Math.max(0, (s.last_activity_at || 0) - (s.created_at || 0)), 0
+  );
+  const projectDurationStr = formatDuration(projectDurationSec);
 
   return {
     id: session.id,
@@ -607,6 +613,7 @@ function getSessionPreview(id) {
     lastActivityAt: session.last_activity_at,
     lastActivityAgo: relativeTime(session.last_activity_at),
     durationStr,
+    projectDurationStr,
     // Conversation stats
     totalNodes: allNodes.length,
     userMsgCount,

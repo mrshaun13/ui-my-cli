@@ -362,28 +362,170 @@ function ToolBarChart({ tools }) {
   )
 }
 
-// ── BarRow — labeled horizontal bar for project / session breakdowns ──────────
+// ── Project combo chart — grouped bars (duration + turns) with session count line ──
 
-/**
- * BarRow renders a single labeled bar in a breakdown list.
- *
- * Props:
- *   label      — left-side text (repo name, model name, etc.)
- *   countLabel — right-side secondary text ("3 sessions · 412 turns")
- *   pctOf      — [value, max] tuple; bar fill = value/max * 100%
- *   color      — CSS color string for the filled portion
- */
-function BarRow({ label, countLabel, pctOf, color = 'var(--accent)' }) {
-  const [value, max] = pctOf
-  const pct = Math.max(2, Math.min(100, (value / (max || 1)) * 100))
+const COMBO_W = 420
+const COMBO_H = 170
+const COMBO_PAD_L = 36     // left axis labels
+const COMBO_PAD_R = 36     // right axis labels
+const COMBO_PAD_B = 28     // project name labels
+const COMBO_PAD_T = 10     // top breathing room
+const COMBO_PLOT_W = COMBO_W - COMBO_PAD_L - COMBO_PAD_R
+const COMBO_PLOT_H = COMBO_H - COMBO_PAD_T - COMBO_PAD_B
+
+function fmtDurationShort(sec) {
+  if (sec < 0) sec = 0
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
+
+function ProjectComboChart({ projects }) {
+  const [hover, setHover] = useState(null)
+
+  if (!projects.length) return <div className="splash-empty-note">No project data yet.</div>
+
+  const maxMsg = Math.max(...projects.map(p => p.messages), 1)
+  const maxDur = Math.max(...projects.map(p => p.durationSec), 1)
+  const maxSess = Math.max(...projects.map(p => p.sessions), 1)
+
+  const n = projects.length
+  const groupW = COMBO_PLOT_W / n
+  const barW = Math.min(16, groupW * 0.3)
+  const barGap = Math.max(2, barW * 0.2)
+
+  // Y-axis tick marks (left = duration, right = sessions)
+  const durTicks = [0.25, 0.5, 0.75, 1]
+  const sessTicks = []
+  for (let s = 1; s <= maxSess; s++) sessTicks.push(s)
+  // Limit to ~4 ticks for readability
+  const sessTickStep = maxSess <= 4 ? 1 : Math.ceil(maxSess / 4)
+  const sessTicksFiltered = sessTicks.filter(s => s % sessTickStep === 0 || s === maxSess)
+
+  // Line points for session count
+  const linePoints = projects.map((p, i) => {
+    const cx = COMBO_PAD_L + groupW * i + groupW / 2
+    const cy = COMBO_PAD_T + COMBO_PLOT_H - (p.sessions / maxSess) * COMBO_PLOT_H
+    return { x: cx, y: cy, p }
+  })
+  const linePath = linePoints.map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ')
+
   return (
-    <div className="bar-row">
-      <div className="bar-row-header">
-        <span className="bar-row-label">{label}</span>
-        <span className="bar-row-count">{countLabel}</span>
-      </div>
-      <div className="bar-row-track">
-        <div className="bar-row-fill" style={{ width: pct + '%', background: color }} />
+    <div className="activity-chart-wrap" style={{ position: 'relative' }}>
+      <svg
+        viewBox={`0 0 ${COMBO_W} ${COMBO_H}`}
+        className="activity-chart-svg"
+        style={{ overflow: 'visible' }}
+      >
+        {/* Horizontal grid lines */}
+        {durTicks.map(f => {
+          const y = (COMBO_PAD_T + COMBO_PLOT_H - f * COMBO_PLOT_H).toFixed(1)
+          return <line key={f} x1={COMBO_PAD_L} x2={COMBO_W - COMBO_PAD_R} y1={y} y2={y}
+            stroke="var(--border)" strokeWidth="0.4" />
+        })}
+
+        {/* Left Y-axis labels (duration) */}
+        {durTicks.map(f => {
+          const y = COMBO_PAD_T + COMBO_PLOT_H - f * COMBO_PLOT_H
+          return (
+            <text key={f} x={COMBO_PAD_L - 4} y={y + 2.5} textAnchor="end"
+              fill="var(--text-muted)" fontSize="6.5" fontFamily="var(--font-mono)">
+              {fmtDurationShort(maxDur * f)}
+            </text>
+          )
+        })}
+
+        {/* Right Y-axis labels (sessions) */}
+        {sessTicksFiltered.map(s => {
+          const y = COMBO_PAD_T + COMBO_PLOT_H - (s / maxSess) * COMBO_PLOT_H
+          return (
+            <text key={s} x={COMBO_W - COMBO_PAD_R + 4} y={y + 2.5} textAnchor="start"
+              fill="var(--yellow)" fontSize="6.5" fontFamily="var(--font-mono)" opacity="0.7">
+              {s}
+            </text>
+          )
+        })}
+
+        {/* Grouped bars per project */}
+        {projects.map((p, i) => {
+          const cx = COMBO_PAD_L + groupW * i + groupW / 2
+          const durH = (p.durationSec / maxDur) * COMBO_PLOT_H
+          const msgH = (p.messages / maxMsg) * COMBO_PLOT_H
+          const baseY = COMBO_PAD_T + COMBO_PLOT_H
+
+          const durX = cx - barW - barGap / 2
+          const msgX = cx + barGap / 2
+
+          const isHov = hover === i
+          return (
+            <g key={p.name}
+              onMouseEnter={() => setHover(i)}
+              onMouseLeave={() => setHover(null)}
+              style={{ cursor: 'default' }}>
+              {/* Hit area */}
+              <rect x={COMBO_PAD_L + groupW * i} y={COMBO_PAD_T}
+                width={groupW} height={COMBO_PLOT_H + COMBO_PAD_B}
+                fill="transparent" />
+
+              {/* Duration bar */}
+              <rect x={durX} y={baseY - Math.max(1, durH)} width={barW} height={Math.max(1, durH)}
+                rx={2} fill="var(--cyan)" opacity={isHov ? 1 : 0.7} />
+
+              {/* Turns bar */}
+              <rect x={msgX} y={baseY - Math.max(1, msgH)} width={barW} height={Math.max(1, msgH)}
+                rx={2} fill="var(--purple)" opacity={isHov ? 1 : 0.7} />
+
+              {/* Project label */}
+              <text x={cx} y={COMBO_H - 4} textAnchor="middle"
+                fill={isHov ? 'var(--text-primary)' : 'var(--text-muted)'}
+                fontSize="7.5" fontFamily="var(--font-mono)">
+                {p.name.length > 12 ? p.name.slice(0, 11) + '…' : p.name}
+              </text>
+            </g>
+          )
+        })}
+
+        {/* Session count line */}
+        <polyline points={linePath} fill="none" stroke="var(--yellow)"
+          strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" opacity="0.8" />
+        {linePoints.map((pt, i) => (
+          <circle key={i} cx={pt.x} cy={pt.y} r={hover === i ? 3.5 : 2.5}
+            fill="var(--yellow)" opacity={hover === i ? 1 : 0.6} />
+        ))}
+
+        {/* Hover tooltip */}
+        {hover !== null && (() => {
+          const p = projects[hover]
+          const cx = COMBO_PAD_L + groupW * hover + groupW / 2
+          const tipW = 140
+          const tipH = 34
+          const tipX = Math.max(2, Math.min(cx - tipW / 2, COMBO_W - tipW - 2))
+          const tipY = 2
+          return (
+            <>
+              <rect x={tipX} y={tipY} width={tipW} height={tipH} rx={3}
+                fill="var(--bg-elevated)" stroke="var(--border-bright)" strokeWidth="0.8" />
+              <text x={tipX + tipW / 2} y={tipY + 12} textAnchor="middle"
+                fill="var(--text-primary)" fontSize="8" fontFamily="var(--font-mono)" fontWeight="600">
+                {p.name}
+              </text>
+              <text x={tipX + tipW / 2} y={tipY + 24} textAnchor="middle"
+                fill="var(--text-secondary)" fontSize="7" fontFamily="var(--font-mono)">
+                {fmtDurationShort(p.durationSec)} · {p.messages.toLocaleString()} turns · {p.sessions} sess
+              </text>
+            </>
+          )
+        })()}
+      </svg>
+
+      {/* Legend */}
+      <div className="activity-chart-legend" style={{ marginTop: 2 }}>
+        <span className="legend-dot" style={{ background: 'var(--cyan)' }} />
+        <span className="legend-label">duration</span>
+        <span className="legend-dot" style={{ background: 'var(--purple)', marginLeft: 8 }} />
+        <span className="legend-label">turns</span>
+        <span className="legend-dot" style={{ background: 'var(--yellow)', marginLeft: 8 }} />
+        <span className="legend-label">sessions (right axis)</span>
       </div>
     </div>
   )
@@ -524,9 +666,9 @@ const MODEL_TIP =
   'Cache read = cache hits (0.1× input rate). Hover a row for exact counts.'
 
 const PROJECT_TIP =
-  'Breakdown by working directory (folder name). "Sessions" = how many Devin runs ' +
-  'were started in that project. "Turns" = total AI message nodes (assistant replies, ' +
-  'tool calls, tool results) — a rough proxy for how much work was done there.'
+  'Breakdown by working directory (folder name). Duration bars (cyan) show total wall-clock ' +
+  'time across all sessions. Turns bars (purple) show total AI message nodes. The yellow line ' +
+  'tracks session count per project (right axis). Hover a project for exact numbers.'
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -545,8 +687,6 @@ export default function DashboardSplash({ connected, latestPrompt }) {
 
   const { projects, tools, activityByHour, models } = stats
 
-  const projMax = projects[0]?.messages || 1
-
   return (
     <div className="splash">
       <LatestPromptBanner prompt={latestPrompt} />
@@ -560,14 +700,7 @@ export default function DashboardSplash({ connected, latestPrompt }) {
           </Section>
 
           <Section title="Projects" tip={PROJECT_TIP}>
-            {projects.map(p => (
-              <BarRow key={p.name}
-                label={p.name}
-                countLabel={`${p.sessions} sessions · ${p.messages.toLocaleString()} turns`}
-                pctOf={[p.messages, projMax]}
-                color="var(--purple)"
-              />
-            ))}
+            <ProjectComboChart projects={projects} />
           </Section>
 
         </div>

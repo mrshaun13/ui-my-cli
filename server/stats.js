@@ -66,7 +66,15 @@ function sessionsByDay(sessions) {
   return byDay;
 }
 
-/** Per-project session + message node counts */
+/** Format a duration in seconds as "Xh Ym" or "Ym" */
+function formatDuration(sec) {
+  if (!Number.isFinite(sec) || sec < 0) sec = 0;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+/** Per-project session + message node counts + total duration */
 function projectBreakdown(db, sessions) {
   const msgBySession = {};
   const rows = db.prepare('SELECT session_id, COUNT(*) as c FROM message_nodes GROUP BY session_id').all();
@@ -75,12 +83,13 @@ function projectBreakdown(db, sessions) {
   const byProject = {};
   for (const s of sessions) {
     const proj = s.working_directory ? path.basename(s.working_directory) : 'unknown';
-    if (!byProject[proj]) byProject[proj] = { sessions: 0, messages: 0 };
+    if (!byProject[proj]) byProject[proj] = { sessions: 0, messages: 0, durationSec: 0 };
     byProject[proj].sessions++;
     byProject[proj].messages += msgBySession[s.id] || 0;
+    byProject[proj].durationSec += Math.max(0, (s.last_activity_at || 0) - (s.created_at || 0));
   }
   return Object.entries(byProject)
-    .map(([name, d]) => ({ name, ...d }))
+    .map(([name, d]) => ({ name, ...d, durationStr: formatDuration(d.durationSec) }))
     .sort((a, b) => b.messages - a.messages);
 }
 
@@ -304,4 +313,4 @@ function getLatestPrompt() {
   }
 }
 
-module.exports = { getStats, getLatestPrompt };
+module.exports = { getStats, getLatestPrompt, formatDuration };

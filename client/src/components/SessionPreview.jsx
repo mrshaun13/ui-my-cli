@@ -379,6 +379,11 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
           <code>{data.id.slice(0, 8)}</code>
           <span className="preview-path-sep">·</span>
           {data.workingDir}
+          {data.projectDurationStr && (
+            <span className="preview-project-duration" title="Total wall-clock time across all sessions in this project">
+              project total: {data.projectDurationStr}
+            </span>
+          )}
         </div>
       </div>
 
