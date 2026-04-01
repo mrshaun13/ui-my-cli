@@ -48,7 +48,8 @@ function NewSessionFAB({ onCreateSession }) {
   const [repos, setRepos]       = useState(null)
   const [loading, setLoading]   = useState(false)
   const [creating, setCreating] = useState(false)
-  const fabRef = useRef(null)
+  const fabRef      = useRef(null)
+  const dropdownRef = useRef(null)
 
   const fetchRepos = useCallback(() => {
     setLoading(true)
@@ -63,11 +64,13 @@ function NewSessionFAB({ onCreateSession }) {
     setOpen(v => !v)
   }
 
-  // Close on outside click
+  // Close on outside click (check both the FAB and the portal'd dropdown)
   useEffect(() => {
     if (!open) return
     const handler = (e) => {
-      if (fabRef.current && !fabRef.current.contains(e.target)) setOpen(false)
+      if (fabRef.current?.contains(e.target)) return
+      if (dropdownRef.current?.contains(e.target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -83,10 +86,22 @@ function NewSessionFAB({ onCreateSession }) {
     }
   }
 
+  // Compute dropdown position from the FAB button's bounding rect
+  const dropdownStyle = useMemo(() => {
+    if (!open || !fabRef.current) return {}
+    const rect = fabRef.current.getBoundingClientRect()
+    // Open to the right of the FAB, bottom-aligned
+    return {
+      position: 'fixed',
+      bottom: window.innerHeight - rect.bottom,
+      left: rect.right + 6,
+    }
+  }, [open])
+
   return (
     <div className="new-session-fab-wrap" ref={fabRef}>
-      {open && (
-        <div className="new-session-dropdown">
+      {open && createPortal(
+        <div className="new-session-dropdown" ref={dropdownRef} style={dropdownStyle}>
           {loading && <div className="new-session-dropdown-empty">Loading…</div>}
           {!loading && repos?.length === 0 && (
             <div className="new-session-dropdown-empty">No repos found.</div>
@@ -101,7 +116,8 @@ function NewSessionFAB({ onCreateSession }) {
               {r.project}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
       <button
         className={`new-session-fab${creating ? ' creating' : ''}`}

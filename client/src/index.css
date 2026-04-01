@@ -1831,10 +1831,7 @@ html, body, #root {
 }
 
 .new-session-dropdown {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  right: 0;
-  z-index: 50;
+  z-index: 10000;
   background: var(--bg-elevated);
   border: 1px solid var(--border-bright);
   border-radius: var(--radius);
@@ -2940,7 +2937,7 @@ html, body, #root {
 
 /* Reset FAB positioning inside collapsed sidebar — normal flow, centered */
 .sidebar-bottom-collapsed .new-session-fab-wrap {
-  position: static;
+  position: relative;
   align-self: auto;
   margin: 0;
   pointer-events: auto;
