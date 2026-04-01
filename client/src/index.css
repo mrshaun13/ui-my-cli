@@ -2932,8 +2932,18 @@ html, body, #root {
   margin-top: auto;
   border-top: 1px solid var(--border);
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   padding: 6px 0;
+}
+
+/* Reset FAB positioning inside collapsed sidebar — normal flow, centered */
+.sidebar-bottom-collapsed .new-session-fab-wrap {
+  position: static;
+  align-self: auto;
+  margin: 0;
+  pointer-events: auto;
 }
 
 .sidebar-collapsed-empty {

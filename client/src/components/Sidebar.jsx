@@ -382,8 +382,9 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
           )}
         </div>
 
-        {/* Bottom area: expand toggle — no FAB in collapsed mode */}
+        {/* Bottom area: FAB + expand toggle, stacked vertically */}
         <div className="sidebar-bottom-collapsed">
+          <NewSessionFAB onCreateSession={onCreateSession} />
           <button
             className="sidebar-collapse-btn"
             onClick={onToggleCollapse}
