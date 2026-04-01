@@ -67,7 +67,7 @@
   --radius:        6px;
   --sidebar-w:     300px;
   --topbar-h:      auto;
-  --controlbar-h:  56px;
+  --controlbar-h:  auto;
 }
 
 /* ─── Reset & Base ─────────────────────────────────────────────────── */
@@ -101,6 +101,11 @@ html, body, #root {
     "sidebar controlbar";
   height: 100vh;
   width: 100vw;
+  transition: grid-template-columns 150ms ease;
+}
+
+.app-shell.sidebar-collapsed {
+  --sidebar-w: 48px;
 }
 
 /* ─── Top Bar ───────────────────────────────────────────────────────── */
@@ -353,8 +358,11 @@ html, body, #root {
   background: var(--bg-surface);
   border-right: 1px solid var(--border);
   overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+  transition: padding 150ms ease;
 }
 
 .sidebar-section-header {
@@ -621,11 +629,17 @@ html, body, #root {
 .controlbar {
   grid-area: controlbar;
   display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+}
+
+.controlbar-top-row {
+  display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 16px;
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border);
+  min-height: 40px;
 }
 
 .controlbar-session-info {
@@ -691,8 +705,44 @@ html, body, #root {
 
 .controlbar-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.controlbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+/* Keyboard shortcut hints — inline within controlbar-actions */
+.controlbar-shortcuts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shortcut-hint {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shortcut-hint kbd {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 16px;
 }
 
 /* ─── Buttons ───────────────────────────────────────────────────────── */
@@ -899,7 +949,6 @@ html, body, #root {
   padding: 2px 7px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  cursor: pointer;
   transition: all 0.12s;
   white-space: nowrap;
   display: inline-flex;
@@ -907,22 +956,49 @@ html, body, #root {
   gap: 3px;
 }
 
-/* Active pill — green, click to remove */
+/* Active pill — green, body click toggles to disabled */
 .repo-chip.on {
   background: var(--accent-glow);
   border-color: var(--accent-dim);
   color: var(--accent);
 }
-.repo-chip.on:hover {
-  background: var(--red-dim);
-  border-color: var(--red);
-  color: var(--red);
+
+/* Disabled pill — grey, body click toggles to active */
+.repo-chip.off {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+.repo-chip.off:hover {
+  opacity: 1;
+}
+
+/* Pill body — clickable label area (text + count) */
+.repo-chip-body {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.repo-chip.on .repo-chip-body:hover {
+  opacity: 0.75;
+}
+.repo-chip.off .repo-chip-body:hover {
+  color: var(--text-secondary);
 }
 
 .repo-chip-x {
   font-size: 11px;
   line-height: 1;
-  opacity: 0.6;
+  opacity: 0.4;
+  cursor: pointer;
+  padding: 0 1px 0 2px;
+  transition: opacity 0.1s, color 0.1s;
+}
+.repo-chip-x:hover {
+  opacity: 1;
+  color: var(--red);
 }
 
 /* "+" add button */
@@ -948,14 +1024,18 @@ html, body, #root {
 .repo-add-dropdown {
   position: absolute;
   top: calc(100% + 4px);
-  left: 0;
-  z-index: 50;
+  right: 0;
+  left: auto;
+  z-index: 200;
   background: var(--bg-elevated);
   border: 1px solid var(--border-bright);
   border-radius: var(--radius);
   box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   min-width: 140px;
-  overflow: hidden;
+  max-width: calc(var(--sidebar-w) - 24px);
+  max-height: 260px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .repo-add-option {
@@ -974,6 +1054,41 @@ html, body, #root {
 .repo-add-option:hover {
   background: var(--bg-hover);
   color: var(--accent);
+}
+
+/* Dropdown search input */
+.repo-add-search-wrap {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+}
+.repo-add-search {
+  width: 100%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.repo-add-search:focus {
+  border-color: var(--accent-dim);
+}
+.repo-add-search::placeholder {
+  color: var(--text-muted);
+}
+
+/* Empty state in dropdown */
+.repo-add-empty {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 /* ─── Dashboard Splash ──────────────────────────────────────────────── */
@@ -2730,6 +2845,144 @@ html, body, #root {
   border-color: var(--border);
   background: var(--bg-elevated);
   font-size: 9px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Collapsible Sidebar
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Compact AgentCard (collapsed sidebar) ──────────────────────── */
+.agent-card-compact {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 0;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: all 0.12s;
+  position: relative;
+}
+
+.agent-card-compact:hover {
+  background: var(--bg-hover);
+}
+
+.agent-card-compact.active {
+  background: var(--bg-active);
+  border-left-color: var(--blue);
+}
+
+.agent-card-compact.previewing {
+  background: var(--bg-active);
+}
+
+.agent-card-compact.question {
+  border-left-color: var(--yellow);
+}
+
+.agent-card-compact.finished {
+  border-left-color: var(--accent);
+}
+
+/* ── Archive row + collapse toggle ──────────────────────────────── */
+.sidebar-archive-row {
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-archive-row .archive-drawer {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
+  border-top: none;
+}
+
+.sidebar-collapse-btn {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  border-radius: var(--radius);
+  transition: all 0.12s;
+  margin: 4px;
+}
+
+.sidebar-collapse-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ── Collapsed sidebar layout ───────────────────────────────────── */
+.sidebar-collapsed .sidebar-collapsed-list {
+  flex: 1;
+  overflow-y: auto;
+  padding-top: 6px;
+}
+
+.sidebar-bottom-collapsed {
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: center;
+  padding: 6px 0;
+}
+
+.sidebar-collapsed-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* Collapsed sidebar: center the FAB */
+.sidebar.sidebar-collapsed .new-session-fab-wrap {
+  align-self: center;
+  margin-right: 0;
+}
+
+/* Hide scroll-fade pseudo on collapsed sidebar */
+.sidebar.sidebar-collapsed::after {
+  display: none;
+}
+
+/* ── Session hover flyout (collapsed mode) ──────────────────────── */
+.sidebar-flyout {
+  position: fixed;
+  z-index: 10000;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.sidebar-flyout-title {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.sidebar-flyout-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
 }
 
 /* ── Accessibility: reduced motion ──────────────────────────── */

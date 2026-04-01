@@ -12,24 +12,14 @@
  */
 
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import AgentCard from './AgentCard.jsx'
+import { STATUS_ICON, STATUS_LABEL } from './AgentCard.jsx'
+import { useRepoFilter } from '../hooks/useRepoFilter.js'
 
-const STORAGE_REPOS            = 'devin-dash:visible-repos'
 const STORAGE_COLD             = 'devin-dash:cold-days'
 const STORAGE_SEARCH_ARCHIVED  = 'devin-dash:search-archived'
 const DEFAULT_COLD             = 3
-
-function loadSavedRepos() {
-  try {
-    const raw = localStorage.getItem(STORAGE_REPOS)
-    if (raw) return new Set(JSON.parse(raw))
-  } catch { /* ignore */ }
-  return null
-}
-
-function saveRepos(set) {
-  try { localStorage.setItem(STORAGE_REPOS, JSON.stringify([...set])) } catch { /* ignore */ }
-}
 
 function loadColdDays() {
   try {
@@ -193,22 +183,15 @@ function ArchiveDrawer({ onRestore }) {
 
 // ── Main Sidebar ─────────────────────────────────────────────────────────────
 
-export default function Sidebar({ sessions, selectedId, previewId, onSelect, onPreview, onRename, onRemove, onRestore, filterNeedsYou, onToggleFilter, onCreateSession }) {
-  const allRepos = useMemo(() => {
-    return [...new Set(sessions.map(s => s.project).filter(Boolean))].sort()
-  }, [sessions])
+export default function Sidebar({ sessions, selectedId, previewId, collapsed, onToggleCollapse, onSelect, onPreview, onRename, onRemove, onRestore, filterNeedsYou, onToggleFilter, onCreateSession }) {
+  const {
+    repoFilter, allRepos, addedRepos,
+    sortedHiddenRepos, activeRepos, repoSessionCounts,
+    addRepo, removeRepo, toggleRepo,
+  } = useRepoFilter(sessions)
 
-  // Count all active (non-archived) sessions per repo — used by repo pills
-  const repoSessionCounts = useMemo(() => {
-    const counts = {}
-    for (const s of sessions) {
-      counts[s.project] = (counts[s.project] || 0) + 1
-    }
-    return counts
-  }, [sessions])
-
-  const [visibleRepos, setVisibleRepos] = useState(() => loadSavedRepos())
   const [addOpen, setAddOpen]           = useState(false)
+  const [dropdownSearch, setDropdownSearch] = useState('')
   const [coldDays, setColdDays]         = useState(loadColdDays)
   const [editingCold, setEditingCold]   = useState(false)
   const [coldInput, setColdInput]       = useState(String(coldDays))
@@ -271,22 +254,14 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
     setServerResults(null)
   }
 
-  // Resolve initial repo selection from first session load
-  useEffect(() => {
-    if (visibleRepos !== null || sessions.length === 0) return
-    const mostRecent = sessions[0]?.project
-    if (mostRecent) {
-      const initial = new Set([mostRecent])
-      setVisibleRepos(initial)
-      saveRepos(initial)
-    }
-  }, [sessions, visibleRepos])
-
   // Close repo-add dropdown on outside click
   useEffect(() => {
     if (!addOpen) return
     const handler = (e) => {
-      if (addRef.current && !addRef.current.contains(e.target)) setAddOpen(false)
+      if (addRef.current && !addRef.current.contains(e.target)) {
+        setAddOpen(false)
+        setDropdownSearch('')
+      }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -302,17 +277,18 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
     return () => document.removeEventListener('mousedown', handler)
   }, [editingCold])
 
-  const removeRepo = (repo) => {
-    setVisibleRepos(prev => {
-      const next = new Set(prev); next.delete(repo); saveRepos(next); return next
-    })
-  }
-  const addRepo = (repo) => {
-    setVisibleRepos(prev => {
-      const next = new Set(prev); next.add(repo); saveRepos(next); return next
-    })
+  const handleAddRepo = (repo) => {
+    addRepo(repo)
     setAddOpen(false)
+    setDropdownSearch('')
   }
+
+  // Dropdown search filter
+  const filteredDropdown = useMemo(() => {
+    if (!dropdownSearch.trim()) return sortedHiddenRepos
+    const q = dropdownSearch.toLowerCase()
+    return sortedHiddenRepos.filter(r => r.toLowerCase().includes(q))
+  }, [sortedHiddenRepos, dropdownSearch])
 
   const commitCold = () => {
     const n = parseInt(coldInput, 10)
@@ -321,23 +297,18 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
     setEditingCold(false)
   }
 
-  const hiddenRepos = useMemo(
-    () => allRepos.filter(r => !visibleRepos?.has(r)),
-    [allRepos, visibleRepos]
-  )
-
   // Round to 60s granularity — the hot/cold boundary is measured in days,
   // so per-second precision just busts the useMemo cache on every render.
   const nowSec = Math.floor(Date.now() / 60000) * 60
   const coldSec = coldDays * 86400
 
-  // Filter by visible repos + question toggle
+  // Filter by active repos + question toggle
   const filtered = useMemo(() => {
-    if (!visibleRepos) return []
-    let list = sessions.filter(s => visibleRepos.has(s.project))
+    if (!repoFilter) return []
+    let list = sessions.filter(s => activeRepos.has(s.project))
     if (filterNeedsYou) list = list.filter(s => s.status === 'question')
     return list
-  }, [sessions, visibleRepos, filterNeedsYou])
+  }, [sessions, repoFilter, activeRepos, filterNeedsYou])
 
   // Split into hot (recent) and cold (old+idle)
   const { hot, cold } = useMemo(() => {
@@ -363,6 +334,80 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
   // Whether the archived option row should be visible
   const showSearchOption = searchFocused || !!searchQuery
 
+  // ── Flyout tooltip for collapsed mode ──────────────────────────────────────
+  const [tooltip, setTooltip] = useState(null)
+
+  const showTooltip = useCallback((session, e) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    setTooltip({
+      title: session.title,
+      project: session.project,
+      status: session.status,
+      time: session.lastActivityAgo,
+      top: rect.top,
+      left: rect.right + 8,
+    })
+  }, [])
+
+  const hideTooltip = useCallback(() => setTooltip(null), [])
+
+  // ── Collapsed sidebar render ───────────────────────────────────────────────
+  if (collapsed) {
+    // Use filtered list (respects repo filter), combine hot + cold
+    const allFiltered = [...hot, ...cold]
+    return (
+      <aside className="sidebar sidebar-collapsed">
+        <div className="sidebar-collapsed-list">
+          {allFiltered.map(session => (
+            <div
+              key={session.id}
+              onMouseEnter={e => showTooltip(session, e)}
+              onMouseLeave={hideTooltip}
+            >
+              <AgentCard
+                session={session}
+                isActive={session.id === selectedId}
+                isPreview={session.id === previewId}
+                isOld={false}
+                compact
+                onClick={() => onSelect(session.id)}
+                onPreview={onPreview}
+                onRename={onRename}
+                onArchive={onRemove}
+              />
+            </div>
+          ))}
+          {allFiltered.length === 0 && sessions.length > 0 && (
+            <div className="sidebar-collapsed-empty" title="No sessions match filter">—</div>
+          )}
+        </div>
+
+        {/* Bottom area: expand toggle takes archive's position */}
+        <div className="sidebar-bottom-collapsed">
+          <button
+            className="sidebar-collapse-btn"
+            onClick={onToggleCollapse}
+            title="Expand sidebar"
+          >›</button>
+        </div>
+
+        <NewSessionFAB onCreateSession={onCreateSession} />
+
+        {/* Flyout tooltip (fixed position, escapes sidebar overflow) */}
+        {tooltip && createPortal(
+          <div className="sidebar-flyout" style={{ top: tooltip.top, left: tooltip.left }}>
+            <div className="sidebar-flyout-title">{tooltip.title}</div>
+            <div className="sidebar-flyout-meta">{tooltip.project} · {tooltip.time}</div>
+            <span className={`status-badge ${tooltip.status}`}>
+              {STATUS_ICON[tooltip.status] ?? '·'} {STATUS_LABEL[tooltip.status] ?? tooltip.status}
+            </span>
+          </div>,
+          document.body
+        )}
+      </aside>
+    )
+  }
+
   if (sessions.length === 0) {
     return (
       <aside className="sidebar">
@@ -373,6 +418,14 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
             No sessions found.<br />
             Run <code>devin</code> to start an agent.
           </div>
+        </div>
+        <div className="sidebar-archive-row">
+          <div style={{ flex: 1 }} />
+          <button
+            className="sidebar-collapse-btn"
+            onClick={onToggleCollapse}
+            title="Collapse sidebar"
+          >‹</button>
         </div>
         <NewSessionFAB onCreateSession={onCreateSession} />
       </aside>
@@ -508,21 +561,53 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
       ) : (
         <>
           {/* ── Repo filter pills ────────────────────────────────────── */}
-          {allRepos.length > 1 && visibleRepos && (
+          {allRepos.length > 1 && repoFilter && (
             <div className="sidebar-repo-filters">
-              {[...visibleRepos].filter(r => allRepos.includes(r)).map(repo => (
-                <button key={repo} className="repo-chip on" onClick={() => removeRepo(repo)} title={`Hide ${repo}`}>
-                  {repo} <span className="repo-chip-count">({repoSessionCounts[repo] || 0})</span><span className="repo-chip-x">×</span>
-                </button>
-              ))}
-              {hiddenRepos.length > 0 && (
+              {addedRepos.map(repo => {
+                const state = repoFilter.get(repo)
+                return (
+                  <span key={repo} className={`repo-chip ${state === 'active' ? 'on' : 'off'}`}>
+                    <span
+                      className="repo-chip-body"
+                      onClick={() => toggleRepo(repo)}
+                      title={state === 'active'
+                        ? `Disable ${repo} (hide sessions)`
+                        : `Enable ${repo} (show sessions)`}
+                    >
+                      {repo} <span className="repo-chip-count">({repoSessionCounts[repo] || 0})</span>
+                    </span>
+                    <span
+                      className="repo-chip-x"
+                      onClick={(e) => { e.stopPropagation(); removeRepo(repo) }}
+                      title={`Remove ${repo} filter`}
+                    >×</span>
+                  </span>
+                )
+              })}
+              {sortedHiddenRepos.length > 0 && (
                 <div className="repo-add-wrap" ref={addRef}>
                   <button className="repo-chip repo-chip-add" onClick={() => setAddOpen(v => !v)} title="Add a project">+</button>
                   {addOpen && (
                     <div className="repo-add-dropdown">
-                      {hiddenRepos.map(repo => (
-                        <button key={repo} className="repo-add-option" onClick={() => addRepo(repo)}>
-                          {repo} <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>({repoSessionCounts[repo] || 0})</span>
+                      <div className="repo-add-search-wrap">
+                        <input
+                          className="repo-add-search"
+                          type="text"
+                          placeholder="filter…"
+                          value={dropdownSearch}
+                          onChange={e => setDropdownSearch(e.target.value)}
+                          autoFocus
+                          onKeyDown={e => {
+                            if (e.key === 'Escape') { setAddOpen(false); setDropdownSearch('') }
+                          }}
+                        />
+                      </div>
+                      {filteredDropdown.length === 0 && (
+                        <div className="repo-add-empty">No matches</div>
+                      )}
+                      {filteredDropdown.map(repo => (
+                        <button key={repo} className="repo-add-option" onClick={() => handleAddRepo(repo)}>
+                          {repo} <span className="repo-chip-count">({repoSessionCounts[repo] || 0})</span>
                         </button>
                       ))}
                     </div>
@@ -577,8 +662,15 @@ export default function Sidebar({ sessions, selectedId, previewId, onSelect, onP
         </>
       )}
 
-      {/* ── Archive drawer ───────────────────────────────────────── */}
-      <ArchiveDrawer onRestore={onRestore} />
+      {/* ── Archive drawer + collapse toggle ────────────────────────── */}
+      <div className="sidebar-archive-row">
+        <ArchiveDrawer onRestore={onRestore} />
+        <button
+          className="sidebar-collapse-btn"
+          onClick={onToggleCollapse}
+          title="Collapse sidebar"
+        >‹</button>
+      </div>
 
       {/* ── Floating new session button ──────────────────────────── */}
       <NewSessionFAB onCreateSession={onCreateSession} />

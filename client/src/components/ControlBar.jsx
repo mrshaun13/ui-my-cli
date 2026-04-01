@@ -10,6 +10,7 @@
  */
 
 import { useState } from 'react'
+import ContextPieChart from './ContextPieChart.jsx'
 
 const STATUS_EXPLANATION = {
   question: 'Devin finished and is waiting for your reply',
@@ -25,14 +26,14 @@ const STATUS_COLOR = {
   idle:     'var(--text-muted)',
 }
 
-export default function ControlBar({ session, onRename, onRemove }) {
+export default function ControlBar({ session, sessionId, onRename, onRemove }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState('')
   const [confirming, setConfirming] = useState(false)
 
   if (!session) {
     return (
-      <div className="controlbar" style={{ justifyContent: 'center' }}>
+      <div className="controlbar" style={{ justifyContent: 'center', alignItems: 'center', minHeight: '56px' }}>
         <span style={{ fontSize: '11px', color: 'var(--text-muted)', letterSpacing: '0.06em' }}>
           SELECT AN AGENT TO BEGIN
         </span>
@@ -67,55 +68,66 @@ export default function ControlBar({ session, onRename, onRemove }) {
 
   return (
     <div className="controlbar">
-      <div className="controlbar-session-info">
-        <div className="controlbar-status-line">
-          <span className="controlbar-status-dot" style={{ background: statusColor }} />
-          <span style={{ color: statusColor, fontSize: '11px', fontWeight: 600 }}>
-            {explanation}
-          </span>
-          {session.snippet && session.status === 'question' && (
-            <span className="controlbar-snippet" title={session.snippet}>
-              — "{session.snippet}"
+      <div className="controlbar-top-row">
+        <div className="controlbar-session-info">
+          <div className="controlbar-status-line">
+            <span className="controlbar-status-dot" style={{ background: statusColor }} />
+            <span style={{ color: statusColor, fontSize: '11px', fontWeight: 600 }}>
+              {explanation}
             </span>
+            {session.snippet && session.status === 'question' && (
+              <span className="controlbar-snippet" title={session.snippet}>
+                — "{session.snippet}"
+              </span>
+            )}
+          </div>
+          <div className="controlbar-session-path" title={session.workingDir}>
+            <code style={{ color: 'var(--accent-dim)', marginRight: '8px' }}>
+              {session.id.slice(0, 8)}
+            </code>
+            {session.workingDir}
+          </div>
+        </div>
+
+        <div className="controlbar-actions">
+          <div className="controlbar-shortcuts">
+            <span className="shortcut-hint"><kbd>Alt+T</kbd> thinking</span>
+            <span className="shortcut-hint"><kbd>!</kbd> shell</span>
+            <span className="shortcut-hint"><kbd>Ctrl+C</kbd> clear line</span>
+            <span className="shortcut-hint"><kbd>Shift+Enter</kbd> newline</span>
+          </div>
+          <div className="controlbar-divider" />
+          <ContextPieChart sessionId={sessionId} tooltipPosition="above" />
+          <div className="controlbar-divider" />
+          {renaming ? (
+            <>
+              <input
+                autoFocus
+                className="controlbar-rename-input"
+                value={nameValue}
+                onChange={e => setNameValue(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={onKeyDown}
+              />
+              <button className="btn btn-primary" onClick={commitRename}>Save</button>
+              <button className="btn" onClick={() => setRenaming(false)}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <button className="btn" onClick={startRename} title="Rename this session (also double-click in sidebar)">
+                ✎ Rename
+              </button>
+              <button
+                className={`btn ${confirming ? 'btn-danger' : ''}`}
+                onClick={handleArchive}
+                onBlur={() => setConfirming(false)}
+                title="Archive session — hides it from the dashboard (reversible via sidebar)"
+              >
+                {confirming ? '⚠ Confirm archive' : '⊘ Archive'}
+              </button>
+            </>
           )}
         </div>
-        <div className="controlbar-session-path" title={session.workingDir}>
-          <code style={{ color: 'var(--accent-dim)', marginRight: '8px' }}>
-            {session.id.slice(0, 8)}
-          </code>
-          {session.workingDir}
-        </div>
-      </div>
-
-      <div className="controlbar-actions">
-        {renaming ? (
-          <>
-            <input
-              autoFocus
-              className="controlbar-rename-input"
-              value={nameValue}
-              onChange={e => setNameValue(e.target.value)}
-              onBlur={commitRename}
-              onKeyDown={onKeyDown}
-            />
-            <button className="btn btn-primary" onClick={commitRename}>Save</button>
-            <button className="btn" onClick={() => setRenaming(false)}>Cancel</button>
-          </>
-        ) : (
-          <>
-            <button className="btn" onClick={startRename} title="Rename this session (also double-click in sidebar)">
-              ✎ Rename
-            </button>
-            <button
-              className={`btn ${confirming ? 'btn-danger' : ''}`}
-              onClick={handleArchive}
-              onBlur={() => setConfirming(false)}
-              title="Archive session — hides it from the dashboard (reversible via sidebar)"
-            >
-              {confirming ? '⚠ Confirm archive' : '⊘ Archive'}
-            </button>
-          </>
-        )}
       </div>
     </div>
   )

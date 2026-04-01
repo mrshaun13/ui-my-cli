@@ -84,7 +84,6 @@ browser reloads. They are never sent to the server.
 
 | Key | File |
 | --- | --- |
-| `devin-dash:visible-repos` | `Sidebar.jsx` |
 | `devin-dash:cold-days` | `Sidebar.jsx` |
 | `devin-dash:search-archived` | `Sidebar.jsx` |
 | `devin-dash:viewed-at` | `useStatusFeed.js` |

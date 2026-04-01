@@ -5,7 +5,16 @@ import Terminal from './components/Terminal.jsx'
 import ControlBar from './components/ControlBar.jsx'
 import DashboardSplash from './components/DashboardSplash.jsx'
 import SessionPreview from './components/SessionPreview.jsx'
-import ContextPieChart from './components/ContextPieChart.jsx'
+// ContextPieChart is rendered inside ControlBar (not imported here)
+
+// ── Sidebar collapsed state (persisted to localStorage) ──────────────────────
+const STORAGE_COLLAPSED = 'devin-dash:sidebar-collapsed'
+function loadCollapsed() {
+  try { return localStorage.getItem(STORAGE_COLLAPSED) === 'true' } catch { return false }
+}
+function saveCollapsed(v) {
+  try { localStorage.setItem(STORAGE_COLLAPSED, String(v)) } catch {}
+}
 
 // Fetch just the env config fields (MCP servers, skills, plugins) for the topbar.
 // Runs once on mount — these are global config, not session-specific.
@@ -99,7 +108,16 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null)
   const [previewId,  setPreviewId]  = useState(null)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
   const env = useEnv()
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed(prev => {
+      const next = !prev
+      saveCollapsed(next)
+      return next
+    })
+  }, [])
 
   const goHome = () => { setSelectedId(null); setPreviewId(null) }
 
@@ -161,15 +179,28 @@ export default function App() {
   }, [])
 
   const handleSelect = useCallback((id) => {
-    setSelectedId(id)
-    setPreviewId(null)   // close preview when going live
-    markViewed && markViewed(id)
-  }, [markViewed])
+    if (id === selectedId) {
+      // Click-to-toggle: already viewing terminal → switch to preview
+      setPreviewId(id)
+      setSelectedId(null)
+    } else {
+      setSelectedId(id)
+      setPreviewId(null)   // close preview when going live
+      markViewed && markViewed(id)
+    }
+  }, [selectedId, markViewed])
 
   const handlePreview = useCallback((id) => {
-    setPreviewId(id)
-    setSelectedId(null)  // close live terminal when previewing
-  }, [])
+    if (id === previewId) {
+      // Click-to-toggle: already previewing → switch to terminal
+      setSelectedId(id)
+      setPreviewId(null)
+      markViewed && markViewed(id)
+    } else {
+      setPreviewId(id)
+      setSelectedId(null)  // close live terminal when previewing
+    }
+  }, [previewId, markViewed])
 
   // Resume from preview → open live terminal
   const handleResume = useCallback((id) => {
@@ -184,7 +215,7 @@ export default function App() {
   const mainView = selectedId ? 'terminal' : previewId ? 'preview' : 'splash'
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <header className="topbar">
         <div className="topbar-logo" onClick={goHome} style={{ cursor: 'pointer' }} title="Go to dashboard">
           <div className="topbar-dot" />
@@ -198,7 +229,6 @@ export default function App() {
         )}
 
         <div className="topbar-right">
-          <ContextPieChart sessionId={selectedId || previewId} />
           {needsYouCount > 0 && (
             <div className="topbar-meta">
               <span style={{ color: 'var(--yellow)' }}>⚡ {needsYouCount}</span> waiting
@@ -211,6 +241,8 @@ export default function App() {
         sessions={sessions}
         selectedId={selectedId}
         previewId={previewId}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={toggleSidebar}
         onSelect={handleSelect}
         onPreview={handlePreview}
         onRename={handleRename}
@@ -248,6 +280,7 @@ export default function App() {
 
       <ControlBar
         session={selectedSession}
+        sessionId={selectedId || previewId}
         onRename={handleRename}
         onRemove={handleRemove}
       />

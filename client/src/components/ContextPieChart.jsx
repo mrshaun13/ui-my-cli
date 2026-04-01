@@ -44,7 +44,7 @@ function arcPath(cx, cy, r, startAngle, endAngle) {
   ].join(' ')
 }
 
-export default function ContextPieChart({ sessionId }) {
+export default function ContextPieChart({ sessionId, tooltipPosition }) {
   const [data, setData] = useState(null)
   const [hover, setHover] = useState(null)
   const wrapRef = useRef(null)
@@ -132,10 +132,11 @@ export default function ContextPieChart({ sessionId }) {
       {hovered && (() => {
         const r = wrapRef.current?.getBoundingClientRect()
         if (!r) return null
-        const top = r.bottom + 6
-        const right = window.innerWidth - r.right
+        const style = tooltipPosition === 'above'
+          ? { bottom: window.innerHeight - r.top + 6, right: window.innerWidth - r.right }
+          : { top: r.bottom + 6, right: window.innerWidth - r.right }
         return createPortal(
-          <div className="ctx-pie-tooltip ctx-pie-tooltip-portal" style={{ top, right }}>
+          <div className="ctx-pie-tooltip ctx-pie-tooltip-portal" style={style}>
             <span className="ctx-pie-tooltip-dot" style={{ background: hovered.color }} />
             <span className="ctx-pie-tooltip-label">{hovered.label}</span>
             <span className="ctx-pie-tooltip-value">{formatTokens(hovered.tokens)}</span>

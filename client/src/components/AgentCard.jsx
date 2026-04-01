@@ -13,14 +13,14 @@
 
 import { useState, useRef, useEffect, memo } from 'react'
 
-const STATUS_ICON = {
+export const STATUS_ICON = {
   question: '⚡',
   active:   '⚙',
   finished: '✓',
   idle:     '·',
 }
 
-const STATUS_LABEL = {
+export const STATUS_LABEL = {
   question: 'needs you',
   active:   'running',
   finished: 'finished',
@@ -36,7 +36,7 @@ export function StatusBadge({ status }) {
   )
 }
 
-export default memo(function AgentCard({ session, isActive, isPreview, isOld, onClick, onPreview, onRename, onArchive }) {
+export default memo(function AgentCard({ session, isActive, isPreview, isOld, compact, onClick, onPreview, onRename, onArchive }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState(session.title)
   const inputRef = useRef(null)
@@ -48,6 +48,20 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, on
   useEffect(() => {
     if (renaming) inputRef.current?.select()
   }, [renaming])
+
+  // ── Compact mode (collapsed sidebar) ─────────────────────────────
+  if (compact) {
+    return (
+      <div
+        className={`agent-card-compact ${session.status}${isActive ? ' active' : ''}${isPreview ? ' previewing' : ''}`}
+        onClick={onClick}
+      >
+        <div className={`agent-status-icon ${session.status}${isPreview ? ' previewing' : ''}`}>
+          {STATUS_ICON[session.status] ?? '·'}
+        </div>
+      </div>
+    )
+  }
 
   const startRename = (e) => {
     e.stopPropagation()
