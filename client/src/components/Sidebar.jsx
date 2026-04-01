@@ -382,7 +382,7 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
           )}
         </div>
 
-        {/* Bottom area: expand toggle takes archive's position */}
+        {/* Bottom area: expand toggle — no FAB in collapsed mode */}
         <div className="sidebar-bottom-collapsed">
           <button
             className="sidebar-collapse-btn"
@@ -390,8 +390,6 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
             title="Expand sidebar"
           >›</button>
         </div>
-
-        <NewSessionFAB onCreateSession={onCreateSession} />
 
         {/* Flyout tooltip (fixed position, escapes sidebar overflow) */}
         {tooltip && createPortal(

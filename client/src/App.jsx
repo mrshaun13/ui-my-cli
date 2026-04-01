@@ -179,15 +179,10 @@ export default function App() {
   }, [])
 
   const handleSelect = useCallback((id) => {
-    if (id === selectedId) {
-      // Click-to-toggle: already viewing terminal → switch to preview
-      setPreviewId(id)
-      setSelectedId(null)
-    } else {
-      setSelectedId(id)
-      setPreviewId(null)   // close preview when going live
-      markViewed && markViewed(id)
-    }
+    if (id === selectedId) return   // already viewing — no-op
+    setSelectedId(id)
+    setPreviewId(null)   // close preview when going live
+    markViewed && markViewed(id)
   }, [selectedId, markViewed])
 
   const handlePreview = useCallback((id) => {

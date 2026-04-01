@@ -2900,8 +2900,8 @@ html, body, #root {
 }
 
 .sidebar-collapse-btn {
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -2910,7 +2910,7 @@ html, body, #root {
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 18px;
   border-radius: var(--radius);
   transition: all 0.12s;
   margin: 4px;
@@ -2943,12 +2943,6 @@ html, body, #root {
   padding: 12px 0;
   color: var(--text-muted);
   font-size: 14px;
-}
-
-/* Collapsed sidebar: center the FAB */
-.sidebar.sidebar-collapsed .new-session-fab-wrap {
-  align-self: center;
-  margin-right: 0;
 }
 
 /* Hide scroll-fade pseudo on collapsed sidebar */
