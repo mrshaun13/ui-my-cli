@@ -1038,6 +1038,15 @@ html, body, #root {
   overflow-y: auto;
 }
 
+/* Portal variant — escapes sidebar overflow clipping */
+.repo-add-dropdown-portal {
+  position: fixed;
+  top: auto;
+  right: auto;
+  left: auto;
+  z-index: 10000;
+}
+
 .repo-add-option {
   display: block;
   width: 100%;

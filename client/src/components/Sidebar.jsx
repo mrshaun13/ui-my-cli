@@ -211,8 +211,9 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
   const [coldDays, setColdDays]         = useState(loadColdDays)
   const [editingCold, setEditingCold]   = useState(false)
   const [coldInput, setColdInput]       = useState(String(coldDays))
-  const addRef  = useRef(null)
-  const coldRef = useRef(null)
+  const addRef      = useRef(null)
+  const addDropRef  = useRef(null)
+  const coldRef     = useRef(null)
 
   // ── Search state ────────────────────────────────────────────────────────────
   const [searchQuery,    setSearchQuery]    = useState('')
@@ -274,10 +275,10 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
   useEffect(() => {
     if (!addOpen) return
     const handler = (e) => {
-      if (addRef.current && !addRef.current.contains(e.target)) {
-        setAddOpen(false)
-        setDropdownSearch('')
-      }
+      if (addRef.current?.contains(e.target)) return
+      if (addDropRef.current?.contains(e.target)) return
+      setAddOpen(false)
+      setDropdownSearch('')
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -305,6 +306,30 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
     const q = dropdownSearch.toLowerCase()
     return sortedHiddenRepos.filter(r => r.toLowerCase().includes(q))
   }, [sortedHiddenRepos, dropdownSearch])
+
+  // Compute portal position for the repo-add dropdown (tracks scroll + resize)
+  const [addDropdownStyle, setAddDropdownStyle] = useState({})
+  useEffect(() => {
+    if (!addOpen || !addRef.current) {
+      setAddDropdownStyle({})
+      return
+    }
+    const reposition = () => {
+      const rect = addRef.current.getBoundingClientRect()
+      setAddDropdownStyle({
+        position: 'fixed',
+        top: rect.bottom + 4,
+        left: rect.left,
+      })
+    }
+    reposition()
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [addOpen])
 
   const commitCold = () => {
     const n = parseInt(coldInput, 10)
@@ -602,8 +627,8 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
               {sortedHiddenRepos.length > 0 && (
                 <div className="repo-add-wrap" ref={addRef}>
                   <button className="repo-chip repo-chip-add" onClick={() => setAddOpen(v => !v)} title="Add a project">+</button>
-                  {addOpen && (
-                    <div className="repo-add-dropdown">
+                  {addOpen && createPortal(
+                    <div className="repo-add-dropdown repo-add-dropdown-portal" ref={addDropRef} style={addDropdownStyle}>
                       <div className="repo-add-search-wrap">
                         <input
                           className="repo-add-search"
@@ -625,7 +650,8 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
                           {repo} <span className="repo-chip-count">({repoSessionCounts[repo] || 0})</span>
                         </button>
                       ))}
-                    </div>
+                    </div>,
+                    document.body
                   )}
                 </div>
               )}
