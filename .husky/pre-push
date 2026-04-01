@@ -1,0 +1,138 @@
+#!/bin/sh
+# ── Auto-rewrite author/committer for the cisco remote ─────────────────────
+#
+# When pushing to the "cisco" remote, this hook:
+#   1. Finds which local commits are missing from cisco/main by matching
+#      commit subjects (SHAs differ because of identity rewriting)
+#   2. Cherry-picks the missing commits onto a temp branch from cisco/main
+#   3. Rewrites author+committer to the Cisco identity
+#   4. Pushes the rewritten branch to cisco (with HUSKY=0 to avoid recursion)
+#   5. Exits 1 to cancel git's original (unrewritten) push
+#
+# If cisco is already up to date, exits 0 (nothing to do, no error noise).
+# Pushes to any other remote pass through unchanged (exit 0).
+#
+# Identity mapping:
+#   origin (github.com)              → user <user@example.com>
+#   cisco  (internal-github.example.com)  → Shaun Robbins <user@example.com>
+
+REMOTE="$1"
+URL="$2"
+
+# Only intercept pushes to the cisco remote
+if [ "$REMOTE" != "cisco" ]; then
+  exit 0
+fi
+
+REMOTE_NAME="Redacted"
+CISCO_EMAIL="user@example.com"
+ORIG_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
+DID_PUSH=0
+TEMP_BRANCH=""
+
+# Stash any dirty working tree so branch checkout succeeds
+STASHED=0
+if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+  git stash push --quiet --include-untracked -m "pre-push: auto-stash"
+  STASHED=1
+fi
+
+cleanup() {
+  git checkout "$ORIG_BRANCH" --quiet 2>/dev/null
+  [ -n "$TEMP_BRANCH" ] && git branch -D "$TEMP_BRANCH" --quiet 2>/dev/null
+  if [ "$STASHED" -eq 1 ]; then
+    git stash pop --quiet 2>/dev/null
+  fi
+}
+
+# Read stdin — git sends: <local_ref> <local_sha> <remote_ref> <remote_sha>
+while read local_ref local_sha remote_ref remote_sha; do
+  # Skip delete pushes
+  if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+
+  branch_name=$(echo "$remote_ref" | sed 's|refs/heads/||')
+  TEMP_BRANCH="__cisco-push-$$"
+
+  # Fetch latest cisco state
+  git fetch cisco --quiet 2>/dev/null
+
+  # Find the last commit subject on cisco/branch
+  cisco_tip_subject=$(git log -1 --format='%s' "cisco/$branch_name" 2>/dev/null)
+
+  if [ -z "$cisco_tip_subject" ]; then
+    echo "pre-push: cisco — cisco/$branch_name not found, skipping"
+    continue
+  fi
+
+  # Walk local history to count how many commits are new (not yet on cisco).
+  # Match by commit subject since SHAs differ across the two remotes.
+  NEW_COUNT=0
+  for commit_sha in $(git log --format='%H' "$local_sha"); do
+    this_subject=$(git log -1 --format='%s' "$commit_sha")
+    if [ "$this_subject" = "$cisco_tip_subject" ]; then
+      break
+    fi
+    NEW_COUNT=$((NEW_COUNT + 1))
+  done
+
+  if [ "$NEW_COUNT" -eq 0 ]; then
+    echo "pre-push: cisco — $branch_name already up to date"
+    continue
+  fi
+
+  echo "pre-push: cisco — rewriting $NEW_COUNT new commit(s) for $branch_name"
+
+  # Get the list of SHAs to cherry-pick (oldest first)
+  COMMITS=$(git log --format='%H' -n "$NEW_COUNT" "$local_sha" | tac)
+
+  # Create temp branch from cisco's current tip
+  git checkout -b "$TEMP_BRANCH" "cisco/$branch_name" --quiet 2>/dev/null
+  if [ $? -ne 0 ]; then
+    echo "pre-push: cisco — failed to create temp branch"
+    cleanup
+    exit 1
+  fi
+
+  # Cherry-pick each commit, then amend author identity
+  for sha in $COMMITS; do
+    GIT_COMMITTER_NAME="$CISCO_NAME" \
+    GIT_COMMITTER_EMAIL="$CISCO_EMAIL" \
+    git cherry-pick "$sha" --no-edit 2>/dev/null
+    if [ $? -ne 0 ]; then
+      echo "pre-push: cisco — cherry-pick failed on $(git log -1 --format='%s' "$sha")"
+      git cherry-pick --abort 2>/dev/null
+      cleanup
+      exit 1
+    fi
+    # cherry-pick keeps original author — amend to Cisco identity
+    GIT_AUTHOR_NAME="$CISCO_NAME" \
+    GIT_AUTHOR_EMAIL="$CISCO_EMAIL" \
+    GIT_COMMITTER_NAME="$CISCO_NAME" \
+    GIT_COMMITTER_EMAIL="$CISCO_EMAIL" \
+    git commit --amend --no-edit --reset-author --quiet 2>/dev/null
+  done
+
+  # Push rewritten commits (HUSKY=0 prevents recursive hook invocation)
+  HUSKY=0 git push cisco "$TEMP_BRANCH:$branch_name" --force-with-lease 2>&1
+  PUSH_RC=$?
+
+  # Clean up temp branch, restore original branch + stash
+  cleanup
+
+  if [ "$PUSH_RC" -ne 0 ]; then
+    echo "pre-push: cisco — push failed (exit $PUSH_RC)"
+    exit 1
+  fi
+
+  DID_PUSH=1
+  echo "pre-push: cisco — pushed $branch_name ✓ ($NEW_COUNT commits as $CISCO_NAME)"
+done
+
+# If we pushed rewritten commits, exit 1 to cancel git's original push.
+# If nothing needed pushing, exit 0 so git doesn't print a scary error.
+if [ "$DID_PUSH" -eq 1 ]; then
+  exit 1
+fi
+exit 0
