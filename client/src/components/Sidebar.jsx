@@ -664,12 +664,12 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
 
       {/* ── Archive drawer + collapse toggle ────────────────────────── */}
       <div className="sidebar-archive-row">
-        <ArchiveDrawer onRestore={onRestore} />
         <button
           className="sidebar-collapse-btn"
           onClick={onToggleCollapse}
           title="Collapse sidebar"
         >‹</button>
+        <ArchiveDrawer onRestore={onRestore} />
       </div>
 
       {/* ── Floating new session button ──────────────────────────── */}
