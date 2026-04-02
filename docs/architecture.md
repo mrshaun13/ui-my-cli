@@ -48,9 +48,9 @@ Browser  →  xterm.js keystrokes  →  WebSocket  →  node-pty  →  devin --r
 
 | Package | Version |
 | --- | --- |
-| `@xterm/xterm` | `^5.5.0` |
 | `@xterm/addon-fit` | `^0.10.0` |
 | `@xterm/addon-web-links` | `^0.11.0` |
+| `@xterm/xterm` | `^5.5.0` |
 | `react` | `^19.0.0` |
 | `react-dom` | `^19.0.0` |
 
