@@ -286,7 +286,7 @@ if (!IS_DEV) {
 
 // ─── WebSocket Server ─────────────────────────────────────────────────────────
 
-const wss = new WebSocketServer({ server, path: undefined });
+const wss = new WebSocketServer({ server, path: undefined, maxPayload: 1 * 1024 * 1024 });
 
 // Track all active status feed clients so we can push to them immediately
 // after mutations (rename, etc.) without waiting for the next 3s tick.

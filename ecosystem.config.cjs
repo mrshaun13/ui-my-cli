@@ -24,8 +24,11 @@ module.exports = {
         PORT: '7575',
       },
       // Restart on crash, but not if it's crashing repeatedly (port conflict, etc.)
+      autorestart: true,
+      min_uptime: '10s',
       max_restarts: 5,
       restart_delay: 1000,
+      kill_timeout: 6000, // server graceful shutdown is 5s
       // Watch server/ directory only — client changes require a manual `npm run build`
       watch: false,
       // Log to pm2 default paths (~/.pm2/logs/)

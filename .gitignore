@@ -5,3 +5,12 @@ client/dist/
 test-results/
 playwright-report/
 playwright/.cache/
+
+# SQLite runtime databases
+*.db
+*.db-wal
+*.db-shm
+
+# OS files
+.DS_Store
+Thumbs.db
