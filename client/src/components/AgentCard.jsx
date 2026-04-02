@@ -98,7 +98,10 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, co
       {/* ── Status icon — click = preview, no PTY spawn ─────────── */}
       <div
         className={`agent-status-icon ${session.status}${isPreview ? ' previewing' : ''}`}
+        role="button"
+        tabIndex={0}
         onClick={e => { e.stopPropagation(); onPreview && onPreview(session.id) }}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onPreview && onPreview(session.id) } }}
         title="Click to preview session (read-only, no PTY)"
       >
         {STATUS_ICON[session.status] ?? '·'}

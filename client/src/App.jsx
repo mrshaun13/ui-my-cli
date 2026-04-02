@@ -292,7 +292,9 @@ export default function App() {
   return (
     <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <header className="topbar">
-        <div className="topbar-logo" onClick={goHome} style={{ cursor: 'pointer' }} title="Go to dashboard">
+        <div className="topbar-logo" role="button" tabIndex={0} onClick={goHome}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goHome() } }}
+          style={{ cursor: 'pointer' }} title="Go to dashboard">
           <div className="topbar-dot" />
           Devin <span className="accent">Dashboard</span>
         </div>

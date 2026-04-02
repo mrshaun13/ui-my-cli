@@ -696,17 +696,25 @@ function ProjectComboChart({ projects }) {
       {/* Legend */}
       <div className="activity-chart-legend" style={{ marginTop: 2 }}>
         <span className={`legend-toggle${hidden.has('duration') ? ' legend-off' : ''}`}
-          onClick={() => toggleSeries('duration')}>
+          role="button" tabIndex={0}
+          onClick={() => toggleSeries('duration')}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSeries('duration') } }}>
           <span className="legend-dot" style={{ background: 'var(--cyan)' }} />
           <span className="legend-label">duration</span>
         </span>
         <span className={`legend-toggle${hidden.has('turns') ? ' legend-off' : ''}`}
-          onClick={() => toggleSeries('turns')} style={{ marginLeft: 8 }}>
+          role="button" tabIndex={0}
+          onClick={() => toggleSeries('turns')}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSeries('turns') } }}
+          style={{ marginLeft: 8 }}>
           <span className="legend-dot" style={{ background: 'var(--purple)' }} />
           <span className="legend-label">turns</span>
         </span>
         <span className={`legend-toggle${hidden.has('sessions') ? ' legend-off' : ''}`}
-          onClick={() => toggleSeries('sessions')} style={{ marginLeft: 8 }}>
+          role="button" tabIndex={0}
+          onClick={() => toggleSeries('sessions')}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSeries('sessions') } }}
+          style={{ marginLeft: 8 }}>
           <span className="legend-dot" style={{ background: 'var(--yellow)' }} />
           <span className="legend-label">sessions (right axis)</span>
         </span>
@@ -844,7 +852,9 @@ function ModelUsageTable({ models }) {
         ].map(c => (
           <span key={c.key}
             className={`legend-toggle${hidden.has(c.key) ? ' legend-off' : ''}`}
-            onClick={() => toggleCat(c.key)}>
+            role="button" tabIndex={0}
+            onClick={() => toggleCat(c.key)}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCat(c.key) } }}>
             <span className={`model-detail-dot ${c.cls}`} />{c.label}
           </span>
         ))}
@@ -922,7 +932,10 @@ function LeaderboardChart({ entries, valueFn, color, onSelectSession }) {
                 fontSize="9" fontFamily="var(--font-mono)"
                 className={onSelectSession ? 'lb-clickable-label' : undefined}
                 style={onSelectSession ? { cursor: 'pointer' } : undefined}
-                onClick={onSelectSession ? () => onSelectSession(e.id) : undefined}>
+                tabIndex={onSelectSession ? 0 : undefined}
+                role={onSelectSession ? 'button' : undefined}
+                onClick={onSelectSession ? () => onSelectSession(e.id) : undefined}
+                onKeyDown={onSelectSession ? (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onSelectSession(e.id) } } : undefined}>
                 {lbLabel(e)}
               </text>
               <text x={LB_LABEL_W + LB_VALUE_W - 2} y={y + LB_BAR_H * 0.78} textAnchor="end"
@@ -1007,7 +1020,10 @@ function LeaderboardTokenChart({ entries, onSelectSession }) {
                 fontSize="9" fontFamily="var(--font-mono)"
                 className={onSelectSession ? 'lb-clickable-label' : undefined}
                 style={onSelectSession ? { cursor: 'pointer' } : undefined}
-                onClick={onSelectSession ? () => onSelectSession(e.id) : undefined}>
+                tabIndex={onSelectSession ? 0 : undefined}
+                role={onSelectSession ? 'button' : undefined}
+                onClick={onSelectSession ? () => onSelectSession(e.id) : undefined}
+                onKeyDown={onSelectSession ? (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onSelectSession(e.id) } } : undefined}>
                 {lbLabel(e)}
               </text>
               <text x={LB_LABEL_W + LB_VALUE_W - 2} y={y + LB_BAR_H * 0.78} textAnchor="end"
@@ -1029,7 +1045,9 @@ function LeaderboardTokenChart({ entries, onSelectSession }) {
         {TOKEN_CATEGORIES.map(c => (
           <span key={c.key}
             className={`legend-toggle${hidden.has(c.key) ? ' legend-off' : ''}`}
-            onClick={() => toggleCat(c.key)}>
+            role="button" tabIndex={0}
+            onClick={() => toggleCat(c.key)}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCat(c.key) } }}>
             <span className={`model-detail-dot model-bar-${c.key === 'output' ? 'output' : c.key === 'input' ? 'input' : c.key === 'cwrite' ? 'cwrite' : 'cread'}`} />
             {c.label}
           </span>

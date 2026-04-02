@@ -87,14 +87,24 @@ function NewSessionFAB({ onCreateSession }) {
   }
 
   // Compute dropdown position from the FAB button's bounding rect
-  const dropdownStyle = useMemo(() => {
-    if (!open || !fabRef.current) return {}
-    const rect = fabRef.current.getBoundingClientRect()
-    // Open to the right of the FAB, bottom-aligned
-    return {
-      position: 'fixed',
-      bottom: window.innerHeight - rect.bottom,
-      left: rect.right + 6,
+  // Reposition on scroll/resize to avoid stale coordinates
+  const [dropdownStyle, setDropdownStyle] = useState({})
+  useEffect(() => {
+    if (!open || !fabRef.current) { setDropdownStyle({}); return }
+    const reposition = () => {
+      const rect = fabRef.current.getBoundingClientRect()
+      setDropdownStyle({
+        position: 'fixed',
+        bottom: window.innerHeight - rect.bottom,
+        left: rect.right + 6,
+      })
+    }
+    reposition()
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
     }
   }, [open])
 
@@ -612,7 +622,10 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
                   <span key={repo} className={`repo-chip ${state === 'active' ? 'on' : 'off'}`}>
                     <span
                       className="repo-chip-body"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => toggleRepo(repo)}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRepo(repo) } }}
                       title={state === 'active'
                         ? `Disable ${repo} (hide sessions)`
                         : `Enable ${repo} (show sessions)`}
@@ -621,7 +634,10 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
                     </span>
                     <span
                       className="repo-chip-x"
+                      role="button"
+                      tabIndex={0}
                       onClick={(e) => { e.stopPropagation(); removeRepo(repo) }}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); removeRepo(repo) } }}
                       title={`Remove ${repo} filter`}
                     >×</span>
                   </span>
