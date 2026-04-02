@@ -258,7 +258,7 @@ function doSpawn(shell, args, cwd, cols, rows, ws) {
  * so Devin doesn't show the workspace trust prompt.
  * ws: initial WebSocket client to attach.
  */
-function spawnPty(sessionId, workingDir, ws, cols = 220, rows = 50) {
+function spawnPty(sessionId, workingDir, ws, cols = 80, rows = 24) {
   if (ptys.has(sessionId)) {
     // Attach new client to existing PTY — replay scrollback so the terminal
     // isn't blank after a session switch.
@@ -365,7 +365,7 @@ function activePtySessions() {
  * No WebSocket client is attached initially — the client will connect via the
  * standard /ws/terminal/:sessionId path once the real ID is known.
  */
-function spawnNewSession(tempKey, workingDir, cols = 220, rows = 50) {
+function spawnNewSession(tempKey, workingDir, cols = 80, rows = 24) {
   const shell = getShell();
   const args = getShellArgs(null);  // no sessionId → bare `devin`
   const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();

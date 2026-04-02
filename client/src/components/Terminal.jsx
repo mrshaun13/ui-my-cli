@@ -261,6 +261,17 @@ export default function Terminal({ sessionId }) {
       retryCountRef.current = 0
       setWsState('open')
       setExitCode(null)
+      // Sync PTY to actual terminal dimensions immediately on connect.
+      // The initial cols/rows are sent as query params in the WS URL, but
+      // if the PTY already existed (e.g. reconnect, second tab) the server
+      // resize only happens inside spawnPty — this explicit message covers
+      // any race where the container resized between URL construction and
+      // the socket actually opening.
+      ws.send(JSON.stringify({
+        type: 'resize',
+        cols: xterm.cols,
+        rows: xterm.rows,
+      }))
       xterm.focus()
     }
 

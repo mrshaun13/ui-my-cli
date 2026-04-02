@@ -418,7 +418,7 @@ ${routeTable}
 PTY bridge — bidirectional terminal I/O. Connect with a session ID to attach
 to (or spawn) that session's terminal process.
 
-**Optional query parameters:** \`?cols=220&rows=50\`
+**Optional query parameters:** \`?cols=80&rows=24\`
 
 **Client → Server:**
 

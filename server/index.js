@@ -376,8 +376,8 @@ wss.on('connection', (ws, req) => {
 
     // Parse initial dimensions from query string
     const params = new URLSearchParams(parsedUrl.query || '');
-    const cols = parseInt(params.get('cols') || '220', 10);
-    const rows = parseInt(params.get('rows') || '50', 10);
+    const cols = parseInt(params.get('cols') || '80', 10);
+    const rows = parseInt(params.get('rows') || '24', 10);
 
     // For pending sessions (from "New Session"), the PTY already exists in the
     // map under the temp key — attachClient will find it and attach the WS client.
