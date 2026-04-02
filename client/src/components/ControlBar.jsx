@@ -9,7 +9,7 @@
  *   - Archive session button (hides from dashboard, kills PTY — reversible via sidebar drawer)
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import ContextPieChart from './ContextPieChart.jsx'
 
 const STATUS_EXPLANATION = {
@@ -30,6 +30,12 @@ export default function ControlBar({ session, sessionId, onRename, onRemove }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState('')
   const [confirming, setConfirming] = useState(false)
+
+  // Reset transient UI state when switching sessions
+  useEffect(() => {
+    setConfirming(false)
+    setRenaming(false)
+  }, [sessionId])
 
   if (!session) {
     return (

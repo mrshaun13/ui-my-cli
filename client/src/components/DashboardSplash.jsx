@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
-export function useStats() {
+function useStats() {
   const [stats, setStats] = useState(null)
   const [error, setError] = useState(null)
 

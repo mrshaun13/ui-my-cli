@@ -117,7 +117,7 @@ function PromptStrip({ prompt }) {
 }
 
 export default function App() {
-  const { sessions, connected, error, latestPrompt, viewedAt, markViewed, rekeyMap } = useStatusFeed()
+  const { sessions, connected, error, latestPrompt, rekeyMap } = useStatusFeed()
   const [selectedId, setSelectedId] = useState(null)
   const [previewId,  setPreviewId]  = useState(null)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
@@ -169,9 +169,18 @@ export default function App() {
   }, [])
 
   const handleRemove = useCallback(async (id) => {
+    const prevSelected = selectedId
+    const prevPreview = previewId
     if (selectedId === id) setSelectedId(null)
     if (previewId  === id) setPreviewId(null)
-    await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+    try {
+      const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Archive failed')
+    } catch {
+      // Rollback UI state on failure
+      if (prevSelected === id) setSelectedId(prevSelected)
+      if (prevPreview === id)  setPreviewId(prevPreview)
+    }
   }, [selectedId, previewId])
 
   const handleRestore = useCallback(async (id) => {
@@ -206,8 +215,7 @@ export default function App() {
     terminalKeyRef.current = id     // stable key for this session
     setSelectedId(id)
     setPreviewId(null)   // close preview when going live
-    markViewed && markViewed(id)
-  }, [selectedId, markViewed])
+  }, [selectedId])
 
   const handlePreview = useCallback((id) => {
     if (id === previewId) {
@@ -215,20 +223,18 @@ export default function App() {
       terminalKeyRef.current = id
       setSelectedId(id)
       setPreviewId(null)
-      markViewed && markViewed(id)
     } else {
       setPreviewId(id)
       setSelectedId(null)  // close live terminal when previewing
     }
-  }, [previewId, markViewed])
+  }, [previewId])
 
   // Resume from preview → open live terminal
   const handleResume = useCallback((id) => {
     setPreviewId(null)
     terminalKeyRef.current = id
     setSelectedId(id)
-    markViewed && markViewed(id)
-  }, [markViewed])
+  }, [])
 
   const needsYouCount = sessions.filter(s => s.status === 'question').length
 
@@ -339,7 +345,7 @@ export default function App() {
           />
         )}
         {mainView === 'splash' && (
-          <DashboardSplash sessions={sessions} connected={connected} latestPrompt={latestPrompt} onSelectSession={handlePreview} />
+          <DashboardSplash connected={connected} latestPrompt={latestPrompt} onSelectSession={handlePreview} />
         )}
 
         {selectedSession && (

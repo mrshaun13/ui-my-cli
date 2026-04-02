@@ -321,6 +321,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
   const [nextBatch, setNextBatch]       = useState(INITIAL_BATCH)  // doubles each "load more"
   const threadColRef = useRef(null)
   const fetchingRef  = useRef(false)     // ref guard — survives React batching
+  const convoTurnsLenRef = useRef(0)     // ref for offset to avoid stale closures
 
   // ── Subagent timeline state ─────────────────────────────────────────────────
   const [subagents, setSubagents] = useState(null)  // null = not loaded, [] = no subagents
@@ -414,13 +415,16 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
   }
 
   // ── Conversation loader ─────────────────────────────────────────────────────
+  // Keep ref in sync so fetchConversation always has the latest offset
+  useEffect(() => { convoTurnsLenRef.current = convoTurns.length }, [convoTurns.length])
+
   const fetchConversation = useCallback((limit, loadAll = false) => {
     if (!sessionId || fetchingRef.current) return
     fetchingRef.current = true
     setConvoLoading(true)
     setConvoError(null)
 
-    const offset = convoTurns.length
+    const offset = convoTurnsLenRef.current
     const url = loadAll
       ? `/api/sessions/${sessionId}/conversation?offset=0&limit=0`
       : `/api/sessions/${sessionId}/conversation?offset=${offset}&limit=${limit}`
@@ -454,7 +458,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
       })
       .catch(e => setConvoError(e.message))
       .finally(() => { fetchingRef.current = false; setConvoLoading(false) })
-  }, [sessionId, convoTurns.length])
+  }, [sessionId])
 
   const loadMore    = useCallback(() => fetchConversation(nextBatch), [fetchConversation, nextBatch])
   const loadAll     = useCallback(() => fetchConversation(0, true), [fetchConversation])

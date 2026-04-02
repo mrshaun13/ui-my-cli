@@ -53,11 +53,18 @@ export default function ContextPieChart({ sessionId, tooltipPosition }) {
     if (!sessionId) { setData(null); return }
     setHover(null)
     let cancelled = false
-    fetch(`/api/sessions/${sessionId}/context`)
-      .then(r => { if (!r.ok) throw new Error('context fetch failed'); return r.json() })
-      .then(d => { if (!cancelled) setData(d) })
-      .catch(() => { if (!cancelled) setData(null) })
-    return () => { cancelled = true }
+
+    const fetchContext = () => {
+      fetch(`/api/sessions/${sessionId}/context`)
+        .then(r => { if (!r.ok) throw new Error('context fetch failed'); return r.json() })
+        .then(d => { if (!cancelled) setData(d) })
+        .catch(() => { if (!cancelled) setData(null) })
+    }
+
+    fetchContext()
+    const interval = setInterval(fetchContext, 15_000) // refresh every 15s
+
+    return () => { cancelled = true; clearInterval(interval) }
   }, [sessionId])
 
   if (!data) return null
