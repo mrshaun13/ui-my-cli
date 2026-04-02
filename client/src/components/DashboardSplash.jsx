@@ -4,7 +4,7 @@
  * Layout:
  *   Top: latest-prompt live banner
  *   Two-column body:
- *     Left:  tabbed activity chart (24h / 48h / 7-day) · project breakdown
+ *     Left:  tabbed token chart (1d / 2d / 7d / 14d / 30d / All / Heatmap) · project breakdown
  *     Right: tool call bar chart · model usage
  */
 
@@ -102,12 +102,18 @@ function LatestPromptBanner({ prompt }) {
 
 // ── Shared chart constants ────────────────────────────────────────────────────
 
-const CHART_H = 72
-const CHART_W = 420
+const CHART_H = 150
+const CHART_W = 520
+const PAD_L = 44    // left axis labels (output tokens)
+const PAD_R = 44    // right axis labels (input tokens)
+const PAD_T = 10    // top breathing room
+const PAD_B = 18    // bottom hour labels
+const PLOT_W = CHART_W - PAD_L - PAD_R
+const PLOT_H = CHART_H - PAD_T - PAD_B
 
 const HOUR_LABELS = [0, 3, 6, 9, 12, 15, 18, 21].map(h => ({
   h,
-  x: ((h / 23) * (CHART_W - 8) + 4).toFixed(1),
+  x: (PAD_L + (h / 23) * PLOT_W).toFixed(1),
   label: h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`,
 }))
 
@@ -118,62 +124,128 @@ function fmtHour(h) {
   return `${h - 12}pm`
 }
 
-// ── 24h / 48h line chart ──────────────────────────────────────────────────────
+// ── Dual-axis token line chart ────────────────────────────────────────────────
 
-function HourLineChart({ series, color, label }) {
-  const max = Math.max(...series, 1)
+function HourLineChart({ inputSeries, outputSeries, label }) {
+  const maxInput  = Math.max(...inputSeries, 1)
+  const maxOutput = Math.max(...outputSeries, 1)
   const [hover, setHover] = useState(null)
 
-  const pts = series.map((v, i) => {
-    const x = (i / 23) * (CHART_W - 8) + 4
-    const y = CHART_H - 4 - (v / max) * (CHART_H - 8)
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  }).join(' ')
+  function plotX(i) { return PAD_L + (i / 23) * PLOT_W }
+  function yOut(v) { return PAD_T + PLOT_H - (v / maxOutput) * PLOT_H }
+  function yIn(v)  { return PAD_T + PLOT_H - (v / maxInput)  * PLOT_H }
+
+  const outPts = outputSeries.map((v, i) =>
+    `${plotX(i).toFixed(1)},${yOut(v).toFixed(1)}`
+  ).join(' ')
+
+  const inPts = inputSeries.map((v, i) =>
+    `${plotX(i).toFixed(1)},${yIn(v).toFixed(1)}`
+  ).join(' ')
+
+  // Polygon for area fills (reuse line points + baseline closure)
+  const baseY = PAD_T + PLOT_H
+  const baseClose = ` ${plotX(23).toFixed(1)},${baseY} ${plotX(0).toFixed(1)},${baseY}`
+  const outArea = outPts + baseClose
+  const inArea  = inPts  + baseClose
+
+  // Y-axis ticks
+  const axisTicks = [0.25, 0.5, 0.75, 1]
 
   return (
     <div className="activity-chart-wrap">
       <svg
-        viewBox={`0 0 ${CHART_W} ${CHART_H + 16}`}
-        preserveAspectRatio="none"
+        viewBox={`0 0 ${CHART_W} ${CHART_H + PAD_B}`}
+        preserveAspectRatio="xMidYMid meet"
         className="activity-chart-svg"
       >
-        {[0.25, 0.5, 0.75, 1].map(f => {
-          const y = (CHART_H - 4 - f * (CHART_H - 8)).toFixed(1)
-          return <line key={f} x1="4" x2={CHART_W - 4} y1={y} y2={y}
+        <defs>
+          <linearGradient id="grad-output" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.25" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
+          </linearGradient>
+          <linearGradient id="grad-input" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="var(--blue)" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="var(--blue)" stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+
+        {/* Horizontal grid lines */}
+        {axisTicks.map(f => {
+          const y = (PAD_T + PLOT_H - f * PLOT_H).toFixed(1)
+          return <line key={f} x1={PAD_L} x2={CHART_W - PAD_R} y1={y} y2={y}
             stroke="var(--border)" strokeWidth="0.5" />
         })}
 
+        {/* Left Y-axis labels (output tokens — green) */}
+        {[0.5, 1].map(f => (
+          <text key={f} x={PAD_L - 4} y={yOut(maxOutput * f) + 3}
+            textAnchor="end" fill="var(--accent)" fontSize="7.5"
+            fontFamily="var(--font-mono)" opacity="0.8">
+            {fmtTokens(Math.round(maxOutput * f))}
+          </text>
+        ))}
+
+        {/* Right Y-axis labels (input tokens — blue) */}
+        {[0.5, 1].map(f => (
+          <text key={f} x={CHART_W - PAD_R + 4} y={yIn(maxInput * f) + 3}
+            textAnchor="start" fill="var(--blue)" fontSize="7.5"
+            fontFamily="var(--font-mono)" opacity="0.8">
+            {fmtTokens(Math.round(maxInput * f))}
+          </text>
+        ))}
+
+        {/* Hour labels along bottom */}
         {HOUR_LABELS.map(({ h, x, label: lbl }) => (
-          <text key={h} x={x} y={CHART_H + 13} textAnchor="middle"
+          <text key={h} x={x} y={CHART_H + PAD_B - 2} textAnchor="middle"
             fill="var(--text-muted)" fontSize="7" fontFamily="var(--font-mono)">
             {lbl}
           </text>
         ))}
 
-        <polyline points={pts} fill="none" stroke={color}
+        {/* Area fills */}
+        <polygon points={outArea} fill="url(#grad-output)" />
+        <polygon points={inArea}  fill="url(#grad-input)" />
+
+        {/* Output line (left axis — solid green) */}
+        <polyline points={outPts} fill="none" stroke="var(--accent)"
           strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
 
-        {series.map((v, i) => {
-          const x = (i / 23) * (CHART_W - 8) + 4
-          const y = CHART_H - 4 - (v / max) * (CHART_H - 8)
-          const tipW = 110
-          const tipX = Math.max(4, Math.min(x - tipW / 2, CHART_W - tipW - 4))
+        {/* Input line (right axis — dashed blue) */}
+        <polyline points={inPts} fill="none" stroke="var(--blue)"
+          strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round"
+          strokeDasharray="6,3" />
+
+        {/* Hover hit areas + tooltips */}
+        {inputSeries.map((_, i) => {
+          const x = plotX(i)
+          const inp = inputSeries[i]
+          const out = outputSeries[i]
+          const tipW = 160
+          const tipX = Math.max(PAD_L, Math.min(x - tipW / 2, CHART_W - PAD_R - tipW))
           return (
             <g key={i}
-              onMouseEnter={() => setHover({ i, v, x, y })}
+              onMouseEnter={() => setHover(i)}
               onMouseLeave={() => setHover(null)}
               style={{ cursor: 'default' }}>
-              <rect x={x - 7} y={0} width={14} height={CHART_H + 2} fill="transparent" />
-              {hover?.i === i && (
+              <rect x={x - 10} y={0} width={20} height={CHART_H}
+                fill="transparent" />
+              {hover === i && (
                 <>
-                  <line x1={x} x2={x} y1={4} y2={CHART_H - 4}
-                    stroke={color} strokeWidth="0.8" strokeDasharray="2,2" opacity="0.5" />
-                  {v > 0 && <circle cx={x} cy={y} r={3} fill={color} />}
-                  <rect x={tipX} y={2} width={tipW} height={15} rx={3}
+                  <line x1={x} x2={x} y1={PAD_T} y2={PAD_T + PLOT_H}
+                    stroke="var(--text-muted)" strokeWidth="0.6"
+                    strokeDasharray="2,2" opacity="0.4" />
+                  {out > 0 && <circle cx={x} cy={yOut(out)} r={3.5} fill="var(--accent)" />}
+                  {inp > 0 && <circle cx={x} cy={yIn(inp)} r={3.5} fill="var(--blue)" />}
+                  <rect x={tipX} y={PAD_T + 2} width={tipW} height={24} rx={4}
                     fill="var(--bg-elevated)" stroke="var(--border-bright)" strokeWidth="0.8" />
-                  <text x={tipX + tipW / 2} y={13} textAnchor="middle"
-                    fill="var(--text-primary)" fontSize="8" fontFamily="var(--font-mono)">
-                    {fmtHour(i)}–{fmtHour((i + 1) % 24)}: {v} AI turns
+                  <text x={tipX + tipW / 2} y={PAD_T + 11} textAnchor="middle"
+                    fill="var(--text-primary)" fontSize="7.5" fontFamily="var(--font-mono)">
+                    {fmtHour(i)}–{fmtHour((i + 1) % 24)}
+                  </text>
+                  <text x={tipX + tipW / 2} y={PAD_T + 22} textAnchor="middle"
+                    fill="var(--text-secondary)" fontSize="7" fontFamily="var(--font-mono)">
+                    {fmtTokens(out)} out · {fmtTokens(inp)} in
                   </text>
                 </>
               )}
@@ -182,33 +254,41 @@ function HourLineChart({ series, color, label }) {
         })}
       </svg>
       <div className="activity-chart-legend">
-        <span className="legend-dot" style={{ background: color }} />
-        <span className="legend-label">{label} · hover for counts</span>
+        <span className="legend-dot" style={{ background: 'var(--accent)' }} />
+        <span className="legend-label">output (left axis)</span>
+        <span className="legend-dot" style={{ background: 'var(--blue)', marginLeft: 10 }} />
+        <span className="legend-label">input (right axis)</span>
+        <span className="legend-label" style={{ marginLeft: 10, color: 'var(--text-muted)' }}>
+          · {label}
+        </span>
       </div>
     </div>
   )
 }
 
-// ── 7-day heatmap (hour × day grid) ──────────────────────────────────────────
+// ── 30-day weekday heatmap (weekday × hour grid, input tokens) ────────────────
 
-function WeekHeatmap({ days }) {
+const DOW_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+function WeekHeatmap({ heatmap }) {
   const [hover, setHover] = useState(null)
-  const allVals = days.flatMap(d => d.hours)
+  const allVals = heatmap.flat().map(c => c.windows['30d'])
   const maxVal = Math.max(...allVals, 1)
 
-  const CELL_W = 15
-  const CELL_H = 9
-  const LABEL_W = 26
-  const HOUR_HEADER = 12
+  const CELL_W = 16
+  const CELL_H = 16
+  const LABEL_W = 28
+  const HOUR_HEADER = 14
   const GRID_W = 24 * CELL_W
 
   const hourLabelIdxs = [0, 3, 6, 9, 12, 15, 18, 21]
 
   function cellColor(v) {
     if (v === 0) return 'var(--bg-elevated)'
-    const intensity = v / maxVal
-    const alpha = 0.12 + intensity * 0.88
-    return `rgba(56, 217, 169, ${alpha.toFixed(2)})`
+    // Log scale to handle extreme variance in token counts
+    const norm = Math.log1p(v) / Math.log1p(maxVal)
+    const alpha = 0.12 + norm * 0.88
+    return `rgba(77, 159, 255, ${alpha.toFixed(2)})`
   }
 
   return (
@@ -216,37 +296,37 @@ function WeekHeatmap({ days }) {
       <svg
         viewBox={`0 0 ${LABEL_W + GRID_W + 4} ${HOUR_HEADER + 7 * CELL_H + 2}`}
         className="activity-chart-svg"
-        style={{ height: '92px' }}
+        style={{ height: `${HOUR_HEADER + 7 * CELL_H + 8}px` }}
       >
         {hourLabelIdxs.map(h => {
           const x = LABEL_W + h * CELL_W + CELL_W / 2
           const lbl = h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`
           return (
-            <text key={h} x={x} y={9} textAnchor="middle"
+            <text key={h} x={x} y={10} textAnchor="middle"
               fill="var(--text-muted)" fontSize="6.5" fontFamily="var(--font-mono)">
               {lbl}
             </text>
           )
         })}
 
-        {days.map((day, di) => {
+        {heatmap.map((row, di) => {
           const y = HOUR_HEADER + di * CELL_H
           return (
-            <g key={day.date}>
-              <text x={LABEL_W - 4} y={y + CELL_H * 0.72} textAnchor="end"
+            <g key={di}>
+              <text x={LABEL_W - 4} y={y + CELL_H * 0.68} textAnchor="end"
                 fill="var(--text-muted)" fontSize="6.5" fontFamily="var(--font-mono)">
-                {day.label}
+                {DOW_LABELS[di]}
               </text>
-              {day.hours.map((v, hi) => {
+              {row.map((cell, hi) => {
                 const cx = LABEL_W + hi * CELL_W
                 const isHov = hover?.di === di && hover?.hi === hi
                 return (
                   <g key={hi}
                     onMouseEnter={(e) => {
                       setHover({
-                        di, hi, v, day,
-                        px: e.clientX + 8,
-                        py: e.clientY - 36,
+                        di, hi, cell,
+                        px: Math.min(e.clientX + 10, window.innerWidth - 190),
+                        py: Math.max(e.clientY - 80, 8),
                       })
                     }}
                     onMouseLeave={() => setHover(null)}
@@ -254,10 +334,10 @@ function WeekHeatmap({ days }) {
                     <rect
                       x={cx + 0.5} y={y + 0.5}
                       width={CELL_W - 1} height={CELL_H - 1}
-                      rx={1}
-                      fill={cellColor(v)}
+                      rx={2}
+                      fill={cellColor(cell.windows['30d'])}
                       stroke={isHov ? 'var(--accent)' : 'transparent'}
-                      strokeWidth="0.8"
+                      strokeWidth="1"
                     />
                   </g>
                 )
@@ -265,24 +345,34 @@ function WeekHeatmap({ days }) {
             </g>
           )
         })}
-
       </svg>
 
       {/* HTML tooltip — rendered via portal so it's never clipped */}
       {hover && createPortal(
-        <div className="heatmap-tooltip heatmap-tooltip-portal" style={{ left: hover.px, top: hover.py }}>
-          <span className="heatmap-tooltip-day">{hover.day.label} {hover.day.date.slice(5)}</span>
-          <span className="heatmap-tooltip-sep">·</span>
-          <span>{fmtHour(hover.hi)}–{fmtHour((hover.hi + 1) % 24)}</span>
-          <span className="heatmap-tooltip-sep">·</span>
-          <span className="heatmap-tooltip-count">{hover.v} turn{hover.v !== 1 ? 's' : ''}</span>
+        <div className="heatmap-tooltip heatmap-tooltip-portal heatmap-flyout-multi" style={{ left: hover.px, top: hover.py }}>
+          <div className="heatmap-flyout-header">
+            {DOW_LABELS[hover.di]} · {fmtHour(hover.hi)}–{fmtHour((hover.hi + 1) % 24)}
+          </div>
+          <div className="heatmap-flyout-windows">
+            {[
+              { key: '1d',  label: '24h' },
+              { key: '7d',  label: '7d' },
+              { key: '14d', label: '14d' },
+              { key: '30d', label: '30d' },
+            ].map(w => (
+              <span key={w.key} className="heatmap-flyout-window-item">
+                <span className="heatmap-flyout-window-label">{w.label}</span>
+                <span className="heatmap-flyout-window-value">{fmtTokens(hover.cell.windows[w.key])}</span>
+              </span>
+            ))}
+          </div>
         </div>,
         document.body
       )}
 
       <div className="activity-chart-legend">
         <span className="legend-label" style={{ color: 'var(--text-muted)' }}>
-          last 7 days · darker = more activity · hover for counts
+          30-day aggregate by weekday · color = input token intensity · hover for breakdown
         </span>
       </div>
     </div>
@@ -292,19 +382,23 @@ function WeekHeatmap({ days }) {
 // ── Tabbed Activity Chart container ──────────────────────────────────────────
 
 const ACTIVITY_TABS = [
-  { key: '24h', label: 'Last 24h' },
-  { key: '48h', label: '24–48h' },
-  { key: '7d',  label: '7-day grid' },
+  { key: '1d',   label: '1d' },
+  { key: '2d',   label: '2d' },
+  { key: '7d',   label: '7d' },
+  { key: '14d',  label: '14d' },
+  { key: '30d',  label: '30d' },
+  { key: 'all',  label: 'All' },
+  { key: 'heat', label: 'Heatmap' },
 ]
 
 const ACTIVITY_TIP =
-  'An "AI turn" is one message node in a Devin conversation — every assistant reply, ' +
-  'tool call, or tool result counts as one turn. A single prompt you type may generate ' +
-  '10–50 turns as the agent reasons and uses tools. High counts = heavy activity.'
+  'Token consumption by hour of day across all sessions. Output tokens (green, left axis) ' +
+  'show how much the model generated. Input tokens (blue, right axis) show context sent to ' +
+  'the model. Each tab selects a different time window. The heatmap aggregates all same-weekdays ' +
+  'from the last 30 days, colored by input token intensity.'
 
-function ActivityChart({ data }) {
-  const [tab, setTab] = useState('24h')
-  const { b24, b48, b7d } = data
+function ActivityChart({ tokensByHour, tokenHeatmap }) {
+  const [tab, setTab] = useState('7d')
 
   return (
     <div className="act-tabs-wrap">
@@ -319,9 +413,16 @@ function ActivityChart({ data }) {
           </button>
         ))}
       </div>
-      {tab === '24h' && <HourLineChart series={b24} color="var(--accent)" label="last 24 h" />}
-      {tab === '48h' && <HourLineChart series={b48} color="var(--blue)" label="24–48 h ago" />}
-      {tab === '7d'  && <WeekHeatmap days={b7d} />}
+      {tab === 'heat'
+        ? (tokenHeatmap
+            ? <WeekHeatmap heatmap={tokenHeatmap} />
+            : <div className="splash-empty-note">No heatmap data yet.</div>)
+        : <HourLineChart
+            inputSeries={tokensByHour[tab].input}
+            outputSeries={tokensByHour[tab].output}
+            label={tab === 'all' ? 'all time' : `last ${tab}`}
+          />
+      }
     </div>
   )
 }
@@ -984,7 +1085,7 @@ export default function DashboardSplash({ connected, latestPrompt, onSelectSessi
     <div className="splash-loading"><div className="spinner" /><LoadingMsg /></div>
   )
 
-  const { projects, tools, activityByHour, models, totalSubagents,
+  const { projects, tools, tokensByHour, tokenHeatmap, models, totalSubagents,
           topSessionsByDuration, topSessionsByUserMsgs, topSessionsByTokens } = stats
 
   // Pre-format leaderboard display values
@@ -999,8 +1100,11 @@ export default function DashboardSplash({ connected, latestPrompt, onSelectSessi
         {/* ── Left column ──────────────────────────────────────────── */}
         <div className="splash-col">
 
-          <Section title="AI Activity by Hour" tip={ACTIVITY_TIP}>
-            <ActivityChart data={activityByHour} />
+          <Section title="Token Usage by Hour" tip={ACTIVITY_TIP}>
+            {tokensByHour
+              ? <ActivityChart tokensByHour={tokensByHour} tokenHeatmap={tokenHeatmap} />
+              : <div className="splash-empty-note">No token data yet.</div>
+            }
           </Section>
 
           <Section title="Projects" tip={PROJECT_TIP}>

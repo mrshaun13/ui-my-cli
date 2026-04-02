@@ -176,12 +176,27 @@ function activityByHour(db) {
  *   bySession — per-session token totals for leaderboard ranking
  */
 function tokenBreakdown(db) {
+  const now = Math.floor(Date.now() / 1000);
   const rows = db.prepare(
-    "SELECT session_id, chat_message FROM message_nodes WHERE chat_message LIKE '%generation_model%'"
+    "SELECT session_id, created_at, chat_message FROM message_nodes WHERE chat_message LIKE '%generation_model%'"
   ).all();
 
   const byModel   = {};
   const bySession = {};
+
+  // ── Time-window hourly buckets (token usage by hour-of-day) ──
+  const WINDOWS = { '1d': 86400, '2d': 172800, '7d': 7 * 86400, '14d': 14 * 86400, '30d': 30 * 86400 };
+  const byHour = {};
+  for (const w of [...Object.keys(WINDOWS), 'all']) {
+    byHour[w] = { input: new Array(24).fill(0), output: new Array(24).fill(0) };
+  }
+
+  // ── 30-day weekday×hour heatmap (Mon=0 .. Sun=6) ──
+  const heatmap = Array.from({ length: 7 }, () =>
+    Array.from({ length: 24 }, () => ({
+      windows: { '1d': 0, '7d': 0, '14d': 0, '30d': 0 },
+    }))
+  );
 
   for (const r of rows) {
     let msg;
@@ -209,7 +224,7 @@ function tokenBreakdown(db) {
     m.cacheReadTokens  += cRead;
     m.cacheWriteTokens += cWrite;
 
-    // Per-session (new — for leaderboards)
+    // Per-session (for leaderboards)
     const sid = r.session_id;
     if (!bySession[sid]) {
       bySession[sid] = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 };
@@ -220,11 +235,37 @@ function tokenBreakdown(db) {
     s.cacheReadTokens  += cRead;
     s.cacheWriteTokens += cWrite;
     s.totalTokens      += input + output + cRead + cWrite;
+
+    // ── Per-hour bucketing (tokens by hour-of-day across time windows) ──
+    const age = now - r.created_at;
+    const dt  = new Date(r.created_at * 1000);
+    const h   = dt.getHours();
+
+    byHour['all'].input[h]  += input;
+    byHour['all'].output[h] += output;
+    for (const [w, cutoff] of Object.entries(WINDOWS)) {
+      if (age <= cutoff) {
+        byHour[w].input[h]  += input;
+        byHour[w].output[h] += output;
+      }
+    }
+
+    // ── Weekday×hour heatmap (30d, with per-window flyout data) ──
+    if (age <= WINDOWS['30d']) {
+      const dow = (dt.getDay() + 6) % 7; // JS 0=Sun → ISO 0=Mon
+      const cell = heatmap[dow][h];
+      cell.windows['30d'] += input;
+      if (age <= WINDOWS['14d']) cell.windows['14d'] += input;
+      if (age <= WINDOWS['7d'])  cell.windows['7d']  += input;
+      if (age <= WINDOWS['1d'])  cell.windows['1d']  += input;
+    }
   }
 
   return {
     byModel: Object.values(byModel).sort((a, b) => b.outputTokens - a.outputTokens),
     bySession,
+    byHour,
+    heatmap,
   };
 }
 
@@ -318,8 +359,8 @@ function getStats() {
     'SELECT id, working_directory, model, created_at, last_activity_at, title FROM sessions'
   ).all();
 
-  // Unified token scan — per-model (for ModelUsageTable) + per-session (for leaderboard)
-  const { byModel, bySession: tokensBySession } = tokenBreakdown(db);
+  // Unified token scan — per-model, per-session, per-hour, and weekday heatmap
+  const { byModel, bySession: tokensBySession, byHour: tokensByHour, heatmap: tokenHeatmap } = tokenBreakdown(db);
 
   // Per-session user message counts (for leaderboard)
   const userMsgRows = db.prepare(
@@ -374,6 +415,8 @@ function getStats() {
     projects:    projectBreakdown(db, sessions),
     tools:       topTools(db),
     activityByHour: activityByHour(db),
+    tokensByHour,
+    tokenHeatmap,
     models:      byModel,
     recentPrompts: recentPrompts(db),
     mcpServers:  mcpServers(config),

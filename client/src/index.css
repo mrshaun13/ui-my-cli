@@ -1223,6 +1223,47 @@ html, body, #root {
   color: var(--text-primary);
 }
 
+/* ── Multi-line heatmap flyout (token breakdown) ────────────────── */
+.heatmap-flyout-multi {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 8px 12px;
+  min-width: 170px;
+  transform: none;
+}
+.heatmap-flyout-header {
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 10px;
+}
+.heatmap-flyout-total {
+  color: var(--text-primary);
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+.heatmap-flyout-windows {
+  display: flex;
+  gap: 8px;
+}
+.heatmap-flyout-window-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.heatmap-flyout-window-label {
+  font-size: 8px;
+  color: var(--text-muted);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.heatmap-flyout-window-value {
+  font-size: 9px;
+  color: var(--blue);
+  font-weight: 700;
+}
+
 
 .splash-loading {
   flex: 1;
@@ -1422,7 +1463,7 @@ html, body, #root {
 
 .activity-chart-svg {
   width: 100%;
-  height: 94px;
+  height: auto;
   display: block;
   overflow: visible;
 }
