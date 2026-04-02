@@ -20,10 +20,14 @@ const CACHE_TTL_MS = 60_000;
 
 let readDb;
 
+/** Returns a read-only connection that always sees the latest WAL state.
+ *  Closes and reopens on every call (~1ms) like sessions.js getReadDb(). */
 function getReadDb() {
-  if (!readDb) {
-    readDb = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
+  if (readDb) {
+    try { readDb.close(); } catch { /* already closed */ }
+    readDb = null;
   }
+  readDb = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
   return readDb;
 }
 

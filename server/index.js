@@ -23,7 +23,6 @@ const fs   = require('fs');
 const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
-const url = require('url');
 
 const { listSessions, listArchivedSessions, getSession, getSessionPreview, getSessionConversation, getSessionContextBreakdown, getSessionConfig, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions } = require('./sessions');
 const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
@@ -298,7 +297,8 @@ function broadcastSessions() {
   let payload;
   try {
     payload = JSON.stringify({ type: 'sessions', data: listSessions() });
-  } catch {
+  } catch (err) {
+    console.error('[broadcast] sessions error:', err.message);
     return;
   }
   for (const client of statusClients) {
@@ -328,7 +328,8 @@ function broadcastLatestPrompt() {
     const p = getLatestPrompt();
     if (!p) return;
     payload = JSON.stringify({ type: 'latest-prompt', data: p });
-  } catch {
+  } catch (err) {
+    console.error('[broadcast] latest-prompt error:', err.message);
     return;
   }
   for (const client of statusClients) {
@@ -338,6 +339,7 @@ function broadcastLatestPrompt() {
 
 // Watch the SQLite WAL file — the Devin CLI writes here every time a prompt
 // is submitted. Debounce 120ms to avoid double-fires on WAL + SHM updates.
+// Returns watcher references so they can be closed on shutdown.
 function watchDbForPrompts() {
   const { resolveDbPath } = require('./db-path');
   const dbPath = resolveDbPath();
@@ -346,6 +348,7 @@ function watchDbForPrompts() {
   // Watch both the main DB and WAL — depending on SQLite journal mode either
   // one may be the first file to change after a write.
   let debounceTimer = null;
+  const watchers = [];
   function onDbChange() {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
@@ -357,16 +360,17 @@ function watchDbForPrompts() {
   for (const p of [dbPath, walPath]) {
     if (fs.existsSync(p)) {
       try {
-        fs.watch(p, onDbChange);
+        watchers.push(fs.watch(p, onDbChange));
       } catch (e) {
         console.warn(`[prompt-watch] could not watch ${p}:`, e.message);
       }
     }
   }
+  return watchers;
 }
 
 wss.on('connection', (ws, req) => {
-  const parsedUrl = url.parse(req.url);
+  const parsedUrl = new URL(req.url, 'http://localhost');
   const pathname = parsedUrl.pathname || '';
 
   // Terminal PTY connection: /ws/terminal/:sessionId
@@ -375,9 +379,8 @@ wss.on('connection', (ws, req) => {
     const sessionId = termMatch[1];
 
     // Parse initial dimensions from query string
-    const params = new URLSearchParams(parsedUrl.query || '');
-    const cols = parseInt(params.get('cols') || '80', 10);
-    const rows = parseInt(params.get('rows') || '24', 10);
+    const cols = parseInt(parsedUrl.searchParams.get('cols') || '80', 10);
+    const rows = parseInt(parsedUrl.searchParams.get('rows') || '24', 10);
 
     // For pending sessions (from "New Session"), the PTY already exists in the
     // map under the temp key — attachClient will find it and attach the WS client.
@@ -438,7 +441,49 @@ server.listen(PORT, '127.0.0.1', () => {
   }
   console.log(`Press Ctrl+C to stop.\n`);
   validatePty();
-  watchDbForPrompts();
+  const dbWatchers = watchDbForPrompts();
+
+  // ── Graceful shutdown ─────────────────────────────────────────────────────
+  let shuttingDown = false;
+  function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n[shutdown] ${signal} received — cleaning up…`);
+
+    // Close fs.watch watchers
+    for (const w of dbWatchers) {
+      try { w.close(); } catch { /* ignore */ }
+    }
+
+    // Kill all PTY processes
+    for (const id of activePtySessions()) {
+      try { killPty(id); } catch { /* ignore */ }
+    }
+
+    // Close all WebSocket clients
+    for (const client of statusClients) {
+      try { client.close(1001, 'Server shutting down'); } catch { /* ignore */ }
+    }
+    statusClients.clear();
+
+    // Close WebSocket server
+    wss.close(() => {
+      // Close HTTP server
+      server.close(() => {
+        console.log('[shutdown] clean exit');
+        process.exit(0);
+      });
+    });
+
+    // Force exit after 5s if graceful shutdown stalls
+    setTimeout(() => {
+      console.warn('[shutdown] forced exit after timeout');
+      process.exit(1);
+    }, 5000).unref();
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
 });
 
 server.on('error', err => {

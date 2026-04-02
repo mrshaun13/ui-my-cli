@@ -17,8 +17,14 @@ const DEVIN_DIR    = resolveDevinDir();
 const { countAllSubagents } = require('./subagents');
 
 let db;
+/** Returns a read-only connection that always sees the latest WAL state.
+ *  Closes and reopens on every call (~1ms) like sessions.js getReadDb(). */
 function getDb() {
-  if (!db) db = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
+  if (db) {
+    try { db.close(); } catch { /* already closed */ }
+    db = null;
+  }
+  db = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
   return db;
 }
 
@@ -53,7 +59,6 @@ function sessionActivityBuckets(sessions) {
 /** Sessions created per calendar day, last 14 days, ISO date keys */
 function sessionsByDay(sessions) {
   const now = Date.now();
-  const cutoff = now - 14 * 86400 * 1000;
   const byDay = {};
   // Pre-fill last 14 days with 0
   for (let i = 13; i >= 0; i--) {

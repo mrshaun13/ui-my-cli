@@ -315,36 +315,97 @@ function listSessions() {
     ORDER BY last_activity_at DESC
   `).all();
 
-  return sessions
-    .filter(session => !hidden.has(session.id))
-    .map(session => {
-      const nodes = db.prepare(`
-        SELECT chat_message FROM message_nodes
-        WHERE session_id = ?
-        ORDER BY row_id DESC LIMIT 5
-      `).all(session.id).reverse();
+  const visible = sessions.filter(session => !hidden.has(session.id));
+  if (visible.length === 0) return [];
 
-      const status = deriveStatus(nodes, session.last_activity_at);
-      const snippet = extractSnippet(nodes);
-      const firstUserPrompt = extractFirstUserPrompt(db, session.id);
-      const lastUserPrompt  = extractLastUserPrompt(db, session.id);
+  // ── Bulk-fetch last 5 nodes per visible session (replaces N individual queries) ──
+  const visibleIds = visible.map(s => s.id);
+  const placeholders = visibleIds.map(() => '?').join(',');
+  const tailRows = db.prepare(`
+    SELECT session_id, chat_message FROM (
+      SELECT session_id, chat_message,
+        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY row_id DESC) AS rn
+      FROM message_nodes
+      WHERE session_id IN (${placeholders})
+    ) WHERE rn <= 5
+  `).all(...visibleIds);
 
-      return {
-        id: session.id,
-        title: session.title || session.id.slice(0, 8),
-        workingDir: session.working_directory,
-        project: projectName(session.working_directory),
-        model: session.model,
-        status,
-        snippet,
-        firstUserPrompt,
-        lastUserPrompt,
-        hasSubagents: subagentSessions.has(session.id),
-        lastActivityAt: session.last_activity_at,
-        lastActivityAgo: relativeTime(session.last_activity_at),
-        createdAt: session.created_at,
-      };
-    });
+  const tailBySession = {};
+  for (const r of tailRows) {
+    (tailBySession[r.session_id] ||= []).push(r);
+  }
+  // Reverse each group (query returned DESC order)
+  for (const id of Object.keys(tailBySession)) tailBySession[id].reverse();
+
+  // ── Bulk-fetch first user prompt per session ──
+  const firstPromptRows = db.prepare(`
+    SELECT session_id, chat_message FROM (
+      SELECT session_id, chat_message,
+        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY row_id ASC) AS rn
+      FROM message_nodes
+      WHERE session_id IN (${placeholders})
+        AND chat_message LIKE '%"role":"user"%'
+    ) WHERE rn <= 3
+  `).all(...visibleIds);
+
+  const firstPromptBySession = {};
+  for (const r of firstPromptRows) {
+    if (firstPromptBySession[r.session_id]) continue; // already found
+    const text = _extractUserText(r.chat_message);
+    if (text) firstPromptBySession[r.session_id] = text;
+  }
+
+  // ── Bulk-fetch last user prompt per session ──
+  const lastPromptRows = db.prepare(`
+    SELECT session_id, chat_message FROM (
+      SELECT session_id, chat_message,
+        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY row_id DESC) AS rn
+      FROM message_nodes
+      WHERE session_id IN (${placeholders})
+        AND chat_message LIKE '%"role":"user"%'
+    ) WHERE rn <= 3
+  `).all(...visibleIds);
+
+  const lastPromptBySession = {};
+  for (const r of lastPromptRows) {
+    if (lastPromptBySession[r.session_id]) continue; // already found
+    const text = _extractUserText(r.chat_message);
+    if (text) lastPromptBySession[r.session_id] = text;
+  }
+
+  return visible.map(session => {
+    const nodes = tailBySession[session.id] || [];
+    const status = deriveStatus(nodes, session.last_activity_at);
+    const snippet = extractSnippet(nodes);
+
+    return {
+      id: session.id,
+      title: session.title || session.id.slice(0, 8),
+      workingDir: session.working_directory,
+      project: projectName(session.working_directory),
+      model: session.model,
+      status,
+      snippet,
+      firstUserPrompt: firstPromptBySession[session.id] || null,
+      lastUserPrompt:  lastPromptBySession[session.id] || null,
+      hasSubagents: subagentSessions.has(session.id),
+      lastActivityAt: session.last_activity_at,
+      lastActivityAgo: relativeTime(session.last_activity_at),
+      createdAt: session.created_at,
+    };
+  });
+}
+
+/** Extracts user text from a raw chat_message JSON string. */
+function _extractUserText(chatMessage) {
+  let msg;
+  try { msg = JSON.parse(chatMessage); } catch { return null; }
+  if (msg?.role !== 'user') return null;
+  const rawContent = msg.content;
+  const text = Array.isArray(rawContent)
+    ? rawContent.find(c => c.type === 'text')?.text
+    : typeof rawContent === 'string' ? rawContent : null;
+  return (text && text.trim().length > 2) ? text.trim() : null;
 }
 
 function getSession(id) {
@@ -397,7 +458,10 @@ function getSession(id) {
 function renameSession(id, title) {
   const db = getWriteDb();
   const trimmed = (title || '').trim();
-  if (!trimmed) return { id, title: null };
+  if (!trimmed) {
+    db.prepare('UPDATE sessions SET title = NULL WHERE id = ?').run(id);
+    return { id, title: null };
+  }
   db.prepare('UPDATE sessions SET title = ? WHERE id = ?').run(trimmed, id);
   return { id, title: trimmed };
 }
@@ -430,13 +494,13 @@ function listArchivedSessions() {
 
   if (hidden.size === 0) return [];
 
-  const placeholders = [...hidden].map(() => '?').join(',');
+  // Use json_each() for a stable prepared statement (cacheable regardless of set size)
   const sessions = db.prepare(`
     SELECT id, working_directory, model, created_at, last_activity_at, title
     FROM sessions
-    WHERE id IN (${placeholders})
+    WHERE id IN (SELECT value FROM json_each(?))
     ORDER BY last_activity_at DESC
-  `).all(...hidden);
+  `).all(JSON.stringify([...hidden]));
 
   return sessions.map(session => {
     const firstUserPrompt = extractFirstUserPrompt(db, session.id);
@@ -767,22 +831,24 @@ function getSessionConversation(id, offset = 0, limit = 50) {
 function searchSessions(query, includeArchived) {
   const db = getReadDb();
   const hidden = loadHidden();
-  const term = `%${query}%`;
+  // Escape LIKE wildcards so user-supplied % and _ are treated as literals
+  const escaped = query.replace(/[%_]/g, ch => '\\' + ch);
+  const term = `%${escaped}%`;
 
   const rows = db.prepare(`
     SELECT DISTINCT s.id, s.working_directory, s.model, s.created_at, s.last_activity_at, s.title
     FROM sessions s
     WHERE (
-      s.title LIKE ? COLLATE NOCASE
-      OR s.working_directory LIKE ? COLLATE NOCASE
+      s.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+      OR s.working_directory LIKE ? ESCAPE '\\' COLLATE NOCASE
       OR EXISTS (
         SELECT 1 FROM prompt_history ph
-        WHERE ph.session_id = s.id AND ph.content LIKE ? COLLATE NOCASE
+        WHERE ph.session_id = s.id AND ph.content LIKE ? ESCAPE '\\' COLLATE NOCASE
       )
       OR EXISTS (
         SELECT 1 FROM message_nodes mn
         WHERE mn.session_id = s.id
-          AND mn.chat_message LIKE ? COLLATE NOCASE
+          AND mn.chat_message LIKE ? ESCAPE '\\' COLLATE NOCASE
           AND mn.chat_message LIKE '%"role":"user"%'
       )
     )
