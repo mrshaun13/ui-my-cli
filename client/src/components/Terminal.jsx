@@ -42,34 +42,23 @@ const XTERM_THEME = {
 const RECONNECT_DELAYS = [500, 1000, 2000, 4000, 8000]
 
 /**
- * Wrapper around fitAddon.fit() that preserves the user's scroll position.
+ * Wrapper around fitAddon.fit() that always re-anchors the viewport to the
+ * bottom of the buffer after a resize.
  *
- * xterm.js's resize path (triggered by fit()) modifies the internal `ydisp`
- * offset as it reflows buffer content, then syncs the DOM scrollTop to match.
- * This can yank the viewport to the top of the scrollback when the user has
- * scrolled up to read earlier output.
+ * Why not preserve scroll position?  Reading the viewport's scroll state
+ * inside a ResizeObserver callback is unreliable: when the container gets
+ * taller, the browser clamps `.xterm-viewport` scrollTop to 0 before our
+ * callback fires, making xterm report viewportY = 0 even if the user was
+ * at the bottom.  The previous "preserve offset-from-bottom" logic would
+ * then lock the viewport to the top — the exact bug users see.
  *
- * Strategy: save the user's offset-from-bottom before fit(), then restore it.
- * If the user was already at the bottom (following live output), explicitly
- * re-anchor after fit() — xterm's internal reflow can lose the bottom position
- * when column changes cause baseY to shift unpredictably.
+ * Unconditionally scrolling to the bottom matches standard terminal UX
+ * (iTerm2, Windows Terminal, etc.) where resize always keeps the prompt
+ * visible.
  */
 function safeFit(term, fitAddon) {
-  const buf = term.buffer.active
-  const viewportY = buf.viewportY
-  const baseY     = buf.baseY
-  const wasAtBottom = (viewportY >= baseY)
-
   try { fitAddon.fit() } catch { return }
-
-  if (wasAtBottom) {
-    term.scrollToBottom()
-  } else {
-    const offsetFromBottom = baseY - viewportY
-    const newBaseY = term.buffer.active.baseY
-    const target = Math.max(0, newBaseY - offsetFromBottom)
-    term.scrollToLine(target)
-  }
+  term.scrollToBottom()
 }
 
 /**
@@ -135,10 +124,6 @@ export default function Terminal({ sessionId }) {
   // Timestamp of last resize sent to PTY — used to auto-anchor viewport
   // when async SIGWINCH output arrives shortly after a resize.
   const lastResizeAtRef = useRef(0)
-  // Whether the user was at the bottom when the last resize occurred.
-  // Only anchor post-resize output if they were — otherwise we'd override
-  // their deliberate scroll-up position.
-  const wasAtBottomAtResizeRef = useRef(true)
 
   // sessionIdRef tracks the latest sessionId (may change on rekey from
   // pending-xxx → real UUID) without causing effect re-runs.  The connect
@@ -231,10 +216,6 @@ export default function Terminal({ sessionId }) {
         if (!fitAddonRef.current || !xtermRef.current) return
         const prevCols = xtermRef.current.cols
         const prevRows = xtermRef.current.rows
-        // Capture scroll state before fit() changes it — used by the
-        // post-resize output anchor to decide whether to re-anchor.
-        const buf = xtermRef.current.buffer.active
-        wasAtBottomAtResizeRef.current = (buf.viewportY >= buf.baseY)
         safeFit(xtermRef.current, fitAddonRef.current)
         // Only notify the PTY if the grid actually changed dimensions
         if (xtermRef.current.cols === prevCols && xtermRef.current.rows === prevRows) return
@@ -311,14 +292,9 @@ export default function Terminal({ sessionId }) {
           // After a resize, the PTY child redraws via SIGWINCH. That async
           // output can contain cursor-home escape sequences that yank the
           // viewport to the top.  Re-anchor to the bottom during the settle
-          // window — but only if the user was already at the bottom when the
-          // resize occurred (don't override a deliberate scroll-up).
-          //
-          // The anchor is passed as a write() callback so it runs AFTER
-          // xterm's async WriteBuffer parses the data — calling scrollToBottom
-          // synchronously after write() would race against the internal parser.
-          const shouldAnchor = wasAtBottomAtResizeRef.current
-            && (Date.now() - lastResizeAtRef.current < RESIZE_ANCHOR_MS)
+          // window.  The anchor is passed as a write() callback so it runs
+          // AFTER xterm's async WriteBuffer parses the data.
+          const shouldAnchor = (Date.now() - lastResizeAtRef.current < RESIZE_ANCHOR_MS)
           xterm.write(msg.data, shouldAnchor ? () => xterm.scrollToBottom() : undefined)
         }
         if (msg.type === 'exit')   { setExitCode(msg.exitCode); setWsState('exited') }
