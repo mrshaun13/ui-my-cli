@@ -339,7 +339,7 @@ export default function App() {
           />
         )}
         {mainView === 'splash' && (
-          <DashboardSplash sessions={sessions} connected={connected} onSelectSession={handlePreview} />
+          <DashboardSplash sessions={sessions} connected={connected} latestPrompt={latestPrompt} onSelectSession={handlePreview} />
         )}
 
         {selectedSession && (
