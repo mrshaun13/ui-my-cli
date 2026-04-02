@@ -1684,7 +1684,7 @@ html, body, #root {
   font-size: 10px;
   font-family: var(--font-mono);
   background: var(--bg-base);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-secondary);
   outline: none;
@@ -1720,7 +1720,7 @@ html, body, #root {
   align-items: center;
   padding: 3px 10px 4px;
   background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border);
 }
 .sidebar-search-option-label {
   display: flex;
@@ -2772,7 +2772,7 @@ html, body, #root {
   align-items: center;
   gap: 5px;
   padding: 4px 8px;
-  background: var(--bg-card);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-bright);
   border-radius: 6px;
   font-family: var(--font-mono);

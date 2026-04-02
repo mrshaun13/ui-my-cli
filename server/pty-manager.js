@@ -109,10 +109,19 @@ function getShell() {
 }
 
 /**
+ * Validates that a session ID looks like a UUID (hex + hyphens only).
+ * Prevents shell injection when the ID is interpolated into a command string.
+ */
+const SESSION_ID_RE = /^[a-f0-9-]+$/i;
+
+/**
  * Returns the args to pass to the shell for launching devin.
  * If sessionId is provided, uses --resume; otherwise starts a new session.
  */
 function getShellArgs(sessionId) {
+  if (sessionId && !SESSION_ID_RE.test(sessionId)) {
+    throw new Error(`Invalid session ID: ${sessionId}`);
+  }
   const cmd = sessionId
     ? `devin --resume ${sessionId} --respect-workspace-trust false`
     : `devin --respect-workspace-trust false`;
@@ -306,12 +315,17 @@ function attachClient(sessionId, workingDir, ws, cols, rows) {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'input') {
+        // Guard against writing to a dead PTY (exit handler may have fired)
+        const entry = ptys.get(sessionId);
+        if (!entry) return;
         // Strip any xterm.js programmatic responses that slipped through
         // the client-side filter (defense in depth).
         const cleaned = msg.data.replace(XTERM_RESPONSE_RE, '');
-        if (cleaned) p.write(cleaned);
+        if (cleaned) entry.pty.write(cleaned);
       } else if (msg.type === 'resize') {
-        p.resize(
+        const entry = ptys.get(sessionId);
+        if (!entry) return;
+        entry.pty.resize(
           Math.max(1, msg.cols || 80),
           Math.max(1, msg.rows || 24)
         );
@@ -321,10 +335,14 @@ function attachClient(sessionId, workingDir, ws, cols, rows) {
     }
   });
 
-  ws.on('close', () => {
-    const entry = ptys.get(sessionId);
-    if (entry) entry.clients.delete(ws);
-  });
+  const removeClient = () => {
+    // Look up by identity scan in case the entry was re-keyed
+    for (const [, entry] of ptys) {
+      if (entry.clients.delete(ws)) break;
+    }
+  };
+  ws.on('close', removeClient);
+  ws.on('error', removeClient);
 }
 
 /**

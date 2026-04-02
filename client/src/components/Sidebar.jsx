@@ -284,6 +284,13 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
     return () => document.removeEventListener('mousedown', handler)
   }, [addOpen])
 
+  const commitCold = useCallback(() => {
+    const n = parseInt(coldInput, 10)
+    if (!isNaN(n) && n > 0) { setColdDays(n); saveColdDays(n) }
+    else setColdInput(String(coldDays))
+    setEditingCold(false)
+  }, [coldInput, coldDays])
+
   // Close cold-days editor on outside click
   useEffect(() => {
     if (!editingCold) return
@@ -292,7 +299,7 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [editingCold])
+  }, [editingCold, commitCold])
 
   const handleAddRepo = (repo) => {
     addRepo(repo)
@@ -330,13 +337,6 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
       window.removeEventListener('resize', reposition)
     }
   }, [addOpen])
-
-  const commitCold = () => {
-    const n = parseInt(coldInput, 10)
-    if (!isNaN(n) && n > 0) { setColdDays(n); saveColdDays(n) }
-    else setColdInput(String(coldDays))
-    setEditingCold(false)
-  }
 
   // Round to 60s granularity — the hot/cold boundary is measured in days,
   // so per-second precision just busts the useMemo cache on every render.
