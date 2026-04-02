@@ -50,8 +50,9 @@ const RECONNECT_DELAYS = [500, 1000, 2000, 4000, 8000]
  * scrolled up to read earlier output.
  *
  * Strategy: save the user's offset-from-bottom before fit(), then restore it.
- * If the user was already at the bottom (following live output), we let xterm
- * do its natural auto-follow — no intervention needed.
+ * If the user was already at the bottom (following live output), explicitly
+ * re-anchor after fit() — xterm's internal reflow can lose the bottom position
+ * when column changes cause baseY to shift unpredictably.
  */
 function safeFit(term, fitAddon) {
   const buf = term.buffer.active
@@ -61,7 +62,9 @@ function safeFit(term, fitAddon) {
 
   try { fitAddon.fit() } catch { return }
 
-  if (!wasAtBottom) {
+  if (wasAtBottom) {
+    term.scrollToBottom()
+  } else {
     const offsetFromBottom = baseY - viewportY
     const newBaseY = term.buffer.active.baseY
     const target = Math.max(0, newBaseY - offsetFromBottom)
@@ -113,6 +116,11 @@ const XTERM_RESPONSE_RE = new RegExp(
   'g'
 )
 
+// How long after a resize to auto-anchor incoming PTY output to the bottom.
+// SIGWINCH causes the child process to redraw, and that async output can
+// contain cursor-home sequences that clobber the viewport position.
+const RESIZE_ANCHOR_MS = 500
+
 export default function Terminal({ sessionId }) {
   const containerRef  = useRef(null)
   const xtermRef      = useRef(null)
@@ -123,6 +131,14 @@ export default function Terminal({ sessionId }) {
   const retryRef      = useRef(null)
   const retryCountRef = useRef(0)
   const mountedRef    = useRef(true)  // false after unmount
+  const resizeTimerRef = useRef(null) // debounce timer for ResizeObserver
+  // Timestamp of last resize sent to PTY — used to auto-anchor viewport
+  // when async SIGWINCH output arrives shortly after a resize.
+  const lastResizeAtRef = useRef(0)
+  // Whether the user was at the bottom when the last resize occurred.
+  // Only anchor post-resize output if they were — otherwise we'd override
+  // their deliberate scroll-up position.
+  const wasAtBottomAtResizeRef = useRef(true)
 
   // sessionIdRef tracks the latest sessionId (may change on rekey from
   // pending-xxx → real UUID) without causing effect re-runs.  The connect
@@ -201,16 +217,28 @@ export default function Terminal({ sessionId }) {
       }
     })
 
-    // Resize observer — debounced
+    // Resize observer — trailing-edge debounce.
+    //
+    // During a window drag the observer fires every animation frame (~16ms).
+    // We collapse the entire cascade into ONE fit + ONE PTY resize message by
+    // waiting until no resize events have fired for 150ms.  This is long
+    // enough to absorb the sidebar CSS transition (150ms ease) too, so the
+    // terminal only reflows once after the animation finishes.
+    const RESIZE_DEBOUNCE_MS = 150
     const observer = new ResizeObserver(() => {
-      clearTimeout(observer._t)
-      observer._t = setTimeout(() => {
+      clearTimeout(resizeTimerRef.current)
+      resizeTimerRef.current = setTimeout(() => {
         if (!fitAddonRef.current || !xtermRef.current) return
         const prevCols = xtermRef.current.cols
         const prevRows = xtermRef.current.rows
+        // Capture scroll state before fit() changes it — used by the
+        // post-resize output anchor to decide whether to re-anchor.
+        const buf = xtermRef.current.buffer.active
+        wasAtBottomAtResizeRef.current = (buf.viewportY >= buf.baseY)
         safeFit(xtermRef.current, fitAddonRef.current)
         // Only notify the PTY if the grid actually changed dimensions
         if (xtermRef.current.cols === prevCols && xtermRef.current.rows === prevRows) return
+        lastResizeAtRef.current = Date.now()
         const ws = wsRef.current
         if (ws?.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
@@ -219,13 +247,14 @@ export default function Terminal({ sessionId }) {
             rows: xtermRef.current.rows,
           }))
         }
-      }, 60)
+      }, RESIZE_DEBOUNCE_MS)
     })
     observer.observe(containerRef.current)
 
     return () => {
       mountedRef.current = false
       clearTimeout(retryRef.current)
+      clearTimeout(resizeTimerRef.current)
       observer.disconnect()
       // Close socket cleanly — onclose will fire but mountedRef guards the retry
       wsRef.current?.close()
@@ -278,7 +307,20 @@ export default function Terminal({ sessionId }) {
     ws.onmessage = ({ data: raw }) => {
       try {
         const msg = JSON.parse(raw)
-        if (msg.type === 'output') xterm.write(msg.data)
+        if (msg.type === 'output') {
+          // After a resize, the PTY child redraws via SIGWINCH. That async
+          // output can contain cursor-home escape sequences that yank the
+          // viewport to the top.  Re-anchor to the bottom during the settle
+          // window — but only if the user was already at the bottom when the
+          // resize occurred (don't override a deliberate scroll-up).
+          //
+          // The anchor is passed as a write() callback so it runs AFTER
+          // xterm's async WriteBuffer parses the data — calling scrollToBottom
+          // synchronously after write() would race against the internal parser.
+          const shouldAnchor = wasAtBottomAtResizeRef.current
+            && (Date.now() - lastResizeAtRef.current < RESIZE_ANCHOR_MS)
+          xterm.write(msg.data, shouldAnchor ? () => xterm.scrollToBottom() : undefined)
+        }
         if (msg.type === 'exit')   { setExitCode(msg.exitCode); setWsState('exited') }
       } catch {
         xterm.write(raw)
