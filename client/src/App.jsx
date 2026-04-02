@@ -160,8 +160,6 @@ export default function App() {
     if (realId) setSelectedId(realId)
   }, [selectedId, rekeyMap])
 
-  const selectedSession = sidebarSessions.find(s => s.id === selectedId) || null
-
   const handleRename = useCallback(async (id, title) => {
     await fetch(`/api/sessions/${id}/rename`, {
       method: 'POST',
@@ -279,6 +277,8 @@ export default function App() {
 
     return synthetics.length > 0 ? [...synthetics, ...sessions] : sessions
   }, [sessions, pendingMeta, rekeyMap])
+
+  const selectedSession = sidebarSessions.find(s => s.id === selectedId) || null
 
   // What to show in the main area
   const mainView = selectedId ? 'terminal' : previewId ? 'preview' : 'splash'
