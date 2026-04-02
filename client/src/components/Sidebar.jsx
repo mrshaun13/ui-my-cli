@@ -343,11 +343,14 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
   const nowSec = Math.floor(Date.now() / 60000) * 60
   const coldSec = coldDays * 86400
 
-  // Filter by active repos + question toggle
+  // Filter by active repos + question toggle.
+  // Pending sessions (synthetic cards for not-yet-in-DB sessions) always pass
+  // through — the user just created them, so hiding behind a filter is confusing.
   const filtered = useMemo(() => {
     if (!repoFilter) return []
-    let list = sessions.filter(s => activeRepos.has(s.project))
-    if (filterNeedsYou) list = list.filter(s => s.status === 'question')
+    const isPending = s => s.id.startsWith('pending-')
+    let list = sessions.filter(s => isPending(s) || activeRepos.has(s.project))
+    if (filterNeedsYou) list = list.filter(s => isPending(s) || s.status === 'question')
     return list
   }, [sessions, repoFilter, activeRepos, filterNeedsYou])
 

@@ -348,7 +348,10 @@ function watchDbForPrompts() {
   let debounceTimer = null;
   function onDbChange() {
     clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(broadcastLatestPrompt, 120);
+    debounceTimer = setTimeout(() => {
+      broadcastLatestPrompt();
+      broadcastSessions();
+    }, 120);
   }
 
   for (const p of [dbPath, walPath]) {

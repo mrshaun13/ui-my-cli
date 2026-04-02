@@ -27,10 +27,22 @@ const { sessionsWithSubagents, countSubagents } = require('./subagents');
 let readDb;
 let writeDb;
 
+/**
+ * Returns a readonly connection to sessions.db.
+ *
+ * Closes and reopens the connection on every call (~1ms) so queries always
+ * read the latest WAL state.  A long-lived cached connection holds a stale
+ * read snapshot in WAL mode, which means writes from the Devin CLI process
+ * are invisible until the connection is recycled.  listSessionIds() and
+ * findNewSessionInDir() already used fresh connections for this reason —
+ * now all read paths behave the same way.
+ */
 function getReadDb() {
-  if (!readDb) {
-    readDb = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
+  if (readDb) {
+    try { readDb.close(); } catch { /* already closed */ }
+    readDb = null;
   }
+  readDb = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
   return readDb;
 }
 
@@ -453,7 +465,7 @@ function getSessionPreview(id) {
   const db = getReadDb();
 
   const session = db.prepare(
-    'SELECT id, working_directory, model, created_at, last_activity_at, title, permission_mode, backend_type, cogs_json FROM sessions WHERE id = ?'
+    'SELECT id, working_directory, model, created_at, last_activity_at, title, agent_mode, backend_type, cogs_json FROM sessions WHERE id = ?'
   ).get(id);
   if (!session) return null;
 
@@ -620,7 +632,7 @@ function getSessionPreview(id) {
     startingModel,
     currentModel,
     modelSwitches,
-    permissionMode: session.permission_mode,
+    permissionMode: session.agent_mode,
     backendType: session.backend_type,
     status: deriveStatus(
       allNodes.slice(-5).map(n => ({ chat_message: n.chat_message })),
@@ -999,7 +1011,7 @@ function getSessionConfig(id) {
   const db = getReadDb();
 
   const session = db.prepare(
-    'SELECT id, cogs_json, permission_mode, model FROM sessions WHERE id = ?'
+    'SELECT id, cogs_json, agent_mode, model FROM sessions WHERE id = ?'
   ).get(id);
   if (!session) return null;
 
@@ -1011,7 +1023,7 @@ function getSessionConfig(id) {
   const rules = [];
   const permissions = [];
   let model = session.model;
-  let permissionMode = session.permission_mode;
+  let permissionMode = session.agent_mode;
 
   for (const cog of cogs) {
     const lifetime = cog.lifetime?.Unique || '';

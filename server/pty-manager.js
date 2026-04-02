@@ -216,6 +216,10 @@ function doSpawn(shell, args, cwd, cols, rows, ws) {
         COLORTERM: 'truecolor',
         // Prevent nested devin dashboard from launching
         DEVIN_DASHBOARD: '1',
+        // Strip Homebrew's npm_config_prefix so NVM loads cleanly in the PTY.
+        // On macOS, Homebrew sets this to /opt/homebrew which makes NVM refuse
+        // to start. Empty string effectively unsets it; harmless on Linux/WSL.
+        npm_config_prefix: '',
       },
     });
 

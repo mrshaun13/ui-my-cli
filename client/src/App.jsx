@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useStatusFeed } from './hooks/useStatusFeed.js'
 import Sidebar from './components/Sidebar.jsx'
 import Terminal from './components/Terminal.jsx'
@@ -6,6 +6,19 @@ import ControlBar from './components/ControlBar.jsx'
 import DashboardSplash from './components/DashboardSplash.jsx'
 import SessionPreview from './components/SessionPreview.jsx'
 // ContextPieChart is rendered inside ControlBar (not imported here)
+
+/**
+ * Cross-platform project name extraction.
+ * Handles both Unix (/) and Windows (\) path separators so the
+ * synthetic sidebar card shows the correct project name regardless
+ * of the server's OS.
+ */
+function projectFromDir(dir) {
+  if (!dir) return 'unknown'
+  // Normalise backslashes → forward slashes, strip trailing slash
+  const norm = dir.replace(/\\/g, '/').replace(/\/+$/, '')
+  return norm.split('/').pop() || 'unknown'
+}
 
 // ── Sidebar collapsed state (persisted to localStorage) ──────────────────────
 const STORAGE_COLLAPSED = 'devin-dash:sidebar-collapsed'
@@ -111,6 +124,15 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
   const env = useEnv()
 
+  // Track metadata for pending sessions not yet in the DB.
+  // Keys are temp keys (e.g. "pending-123-abc"), values are { workingDir, project, createdAt }.
+  const [pendingMeta, setPendingMeta] = useState({})
+
+  // Stable Terminal key — set once when a session is first opened, never changed
+  // on rekey. This prevents React from remounting the Terminal (and losing
+  // scrollback + WebSocket) when selectedId swaps from pending-xxx to real UUID.
+  const terminalKeyRef = useRef(null)
+
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => {
       const next = !prev
@@ -138,7 +160,7 @@ export default function App() {
     if (realId) setSelectedId(realId)
   }, [selectedId, rekeyMap])
 
-  const selectedSession = sessions.find(s => s.id === selectedId) || null
+  const selectedSession = sidebarSessions.find(s => s.id === selectedId) || null
 
   const handleRename = useCallback(async (id, title) => {
     await fetch(`/api/sessions/${id}/rename`, {
@@ -169,17 +191,21 @@ export default function App() {
       throw new Error(data.error || 'Failed to create session')
     }
     const { tempKey } = await res.json()
-    // Use the temp key as the selectedId — Terminal.jsx will connect to
-    // /ws/terminal/<tempKey> where the PTY is already waiting.
-    // Once the user types their first prompt, the Devin CLI writes a session
-    // record. The server re-keys the PTY in the background, and the session
-    // appears in the sidebar via the 3s status poll.
+    // Track metadata so we can inject a synthetic sidebar card immediately
+    const nowSec = Math.floor(Date.now() / 1000)
+    setPendingMeta(prev => ({
+      ...prev,
+      [tempKey]: { workingDir, project: projectFromDir(workingDir), createdAt: nowSec },
+    }))
+    // Set the stable Terminal key — this won't change on rekey
+    terminalKeyRef.current = tempKey
     setSelectedId(tempKey)
     setPreviewId(null)
   }, [])
 
   const handleSelect = useCallback((id) => {
     if (id === selectedId) return   // already viewing — no-op
+    terminalKeyRef.current = id     // stable key for this session
     setSelectedId(id)
     setPreviewId(null)   // close preview when going live
     markViewed && markViewed(id)
@@ -188,6 +214,7 @@ export default function App() {
   const handlePreview = useCallback((id) => {
     if (id === previewId) {
       // Click-to-toggle: already previewing → switch to terminal
+      terminalKeyRef.current = id
       setSelectedId(id)
       setPreviewId(null)
       markViewed && markViewed(id)
@@ -200,11 +227,58 @@ export default function App() {
   // Resume from preview → open live terminal
   const handleResume = useCallback((id) => {
     setPreviewId(null)
+    terminalKeyRef.current = id
     setSelectedId(id)
     markViewed && markViewed(id)
   }, [markViewed])
 
   const needsYouCount = sessions.filter(s => s.status === 'question').length
+
+  // ── Synthetic sidebar entries for pending sessions ─────────────────────────
+  // Injects a placeholder card so the sidebar shows the new session immediately
+  // (before the Devin CLI writes a DB record).  Three detection methods prevent
+  // duplicate cards when the real session arrives before the rekey poll fires.
+  const sidebarSessions = useMemo(() => {
+    const pendingKeys = Object.keys(pendingMeta)
+    if (pendingKeys.length === 0) return sessions
+
+    const dbIds = new Set(sessions.map(s => s.id))
+
+    const synthetics = pendingKeys
+      .filter(key => {
+        const meta = pendingMeta[key]
+        // Method 1: re-keyed and real session is in DB
+        const realId = rekeyMap[key]
+        if (realId && dbIds.has(realId)) return false
+        // Method 2: pending key itself appeared in DB (unusual, but safe)
+        if (dbIds.has(key)) return false
+        // Method 3: WAL watcher pushed the real session before rekey poll —
+        // match by workingDir + creation time (within 30s window)
+        const hasDbMatch = sessions.some(s =>
+          s.workingDir === meta.workingDir &&
+          Math.abs(s.createdAt - meta.createdAt) < 30
+        )
+        if (hasDbMatch) return false
+        return true
+      })
+      .map(key => ({
+        id: rekeyMap[key] || key,
+        title: 'New Session',
+        workingDir: pendingMeta[key].workingDir,
+        project: pendingMeta[key].project,
+        model: '',
+        status: 'active',
+        snippet: 'Starting…',
+        firstUserPrompt: null,
+        lastUserPrompt: null,
+        hasSubagents: false,
+        lastActivityAt: pendingMeta[key].createdAt,
+        lastActivityAgo: 'just now',
+        createdAt: pendingMeta[key].createdAt,
+      }))
+
+    return synthetics.length > 0 ? [...synthetics, ...sessions] : sessions
+  }, [sessions, pendingMeta, rekeyMap])
 
   // What to show in the main area
   const mainView = selectedId ? 'terminal' : previewId ? 'preview' : 'splash'
@@ -233,7 +307,7 @@ export default function App() {
       </header>
 
       <Sidebar
-        sessions={sessions}
+        sessions={sidebarSessions}
         selectedId={selectedId}
         previewId={previewId}
         collapsed={sidebarCollapsed}
@@ -254,7 +328,7 @@ export default function App() {
         )}
 
         {mainView === 'terminal' && (
-          <Terminal key={selectedId} sessionId={selectedId} />
+          <Terminal key={terminalKeyRef.current} sessionId={selectedId} />
         )}
         {mainView === 'preview' && (
           <SessionPreview

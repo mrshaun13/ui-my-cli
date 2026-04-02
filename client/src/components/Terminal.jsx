@@ -124,8 +124,16 @@ export default function Terminal({ sessionId }) {
   const retryCountRef = useRef(0)
   const mountedRef    = useRef(true)  // false after unmount
 
+  // sessionIdRef tracks the latest sessionId (may change on rekey from
+  // pending-xxx → real UUID) without causing effect re-runs.  The connect
+  // callback reads this ref so reconnect URLs always use the current ID.
+  const sessionIdRef  = useRef(sessionId)
+
   const [wsState, setWsState]   = useState('connecting')
   const [exitCode, setExitCode] = useState(null)
+
+  // Keep the ref in sync whenever the prop changes (rekey)
+  useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
   // ── Create xterm once per sessionId ──────────────────────────────────────
   useEffect(() => {
@@ -237,11 +245,15 @@ export default function Terminal({ sessionId }) {
 
     setWsState('connecting')
 
+    // Read the LATEST sessionId from the ref (may have changed via rekey)
+    // rather than capturing it in the closure. This ensures reconnect URLs
+    // point at the real session ID after a pending → real transition.
+    const currentId = sessionIdRef.current
     const params = new URLSearchParams({
       cols: String(xterm.cols),
       rows: String(xterm.rows),
     })
-    const ws = new WebSocket(`${WS_BASE}/ws/terminal/${sessionId}?${params}`)
+    const ws = new WebSocket(`${WS_BASE}/ws/terminal/${currentId}?${params}`)
     wsRef.current = ws  // point the ref at the new socket immediately
 
     ws.onopen = () => {
@@ -278,7 +290,7 @@ export default function Terminal({ sessionId }) {
     }
 
     ws.onerror = () => { /* onclose always follows — handled there */ }
-  }, [sessionId])
+  }, []) // no sessionId dep — reads from sessionIdRef
 
   // Start connection after xterm is mounted (next tick)
   useEffect(() => {
