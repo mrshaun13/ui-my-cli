@@ -687,6 +687,9 @@ function getSessionPreview(id) {
   );
   const projectDurationStr = formatDuration(projectDurationSec);
 
+  const hidden = loadHidden();
+  const isArchived = hidden.has(id);
+
   return {
     id: session.id,
     title: session.title || session.id.slice(0, 8),
@@ -698,10 +701,11 @@ function getSessionPreview(id) {
     modelSwitches,
     permissionMode: session.agent_mode,
     backendType: session.backend_type,
-    status: deriveStatus(
+    status: isArchived ? 'archived' : deriveStatus(
       allNodes.slice(-5).map(n => ({ chat_message: n.chat_message })),
       session.last_activity_at
     ),
+    archived: isArchived,
     createdAt: session.created_at,
     createdAtStr: new Date(session.created_at * 1000).toLocaleString(),
     lastActivityAt: session.last_activity_at,
@@ -885,6 +889,7 @@ function searchSessions(query, includeArchived) {
       lastActivityAgo: relativeTime(session.last_activity_at),
       createdAt: session.created_at,
       hasSubagents: sessionsWithSubagents().has(session.id),
+      archived: hidden.has(session.id),
     };
   });
 }

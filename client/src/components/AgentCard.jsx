@@ -6,9 +6,11 @@
  *   Rest of card               → onClick(id)    — opens live terminal (existing behavior)
  *
  * Props:
- *   isOld     — true when idle + older than cold threshold. Dims card, shows Archive btn.
- *   onArchive — called with session.id to archive the session.
- *   onPreview — called with session.id to open the read-only preview panel.
+ *   isOld      — true when idle + older than cold threshold. Dims card, shows Archive btn.
+ *   isArchived — true for archived sessions in search results. Dims card, shows Restore btn.
+ *   onArchive  — called with session.id to archive the session.
+ *   onRestore  — called with session.id to restore an archived session.
+ *   onPreview  — called with session.id to open the read-only preview panel.
  */
 
 import { useState, useRef, useEffect, memo } from 'react'
@@ -36,7 +38,7 @@ export function StatusBadge({ status }) {
   )
 }
 
-export default memo(function AgentCard({ session, isActive, isPreview, isOld, compact, onClick, onPreview, onRename, onArchive }) {
+export default memo(function AgentCard({ session, isActive, isPreview, isOld, isArchived, compact, onClick, onPreview, onRename, onArchive, onRestore }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState(session.title)
   const inputRef = useRef(null)
@@ -83,10 +85,11 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, co
 
   const cardClasses = [
     'agent-card',
-    isActive   ? 'active'           : '',
-    isPreview  ? 'previewing'       : '',
+    isActive   ? 'active'               : '',
+    isPreview  ? 'previewing'           : '',
     session.status,
-    isOld      ? 'agent-card-old'   : '',
+    isOld      ? 'agent-card-old'       : '',
+    isArchived ? 'agent-card-archived'  : '',
   ].filter(Boolean).join(' ')
 
   return (
@@ -128,6 +131,7 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, co
           </span>
         )}
         <span className="agent-time">{session.lastActivityAgo}</span>
+        {isArchived && <span className="agent-archived-badge">archived</span>}
       </div>
 
       <div className="agent-project">
@@ -139,7 +143,15 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, co
       </div>
 
       {/* Old+idle: one-click archive button (no confirm — reversible) */}
-      {isOld ? (
+      {isArchived ? (
+        <button
+          className="agent-archive-btn agent-restore-btn"
+          title="Restore to active sessions"
+          onClick={e => { e.stopPropagation(); onRestore(session.id) }}
+        >
+          ↩ Restore
+        </button>
+      ) : isOld ? (
         <button
           className="agent-archive-btn agent-archive-btn-old"
           title="Archive session (reversible)"

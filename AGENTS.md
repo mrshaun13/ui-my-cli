@@ -86,6 +86,32 @@ list" but is not stored in the database.
 - Development: `node --watch server/index.js` + `cd client && npm run dev`.
 - **PM2 caveat** — PM2 keeps the old process in memory until explicitly restarted. After any server-side code change, always run `npm run pm2:restart` (which rebuilds the client and restarts the process). A bare `npm run build` is **not enough** — the running Node process still executes the old code.
 
+## Decision-Making Philosophy
+
+This is a **single-user, single-developer project**. The sole consumer is the person who built it. That changes the calculus on every decision:
+
+- There is no legacy team to retrain, no migration guide to write, no deprecation cycle.
+- Breaking changes are free — the user will simply rebuild and restart.
+- "Correct" means "best long-term outcome for this one person," not "safest for a committee."
+
+### Principles
+
+- **Challenge the premise before implementing.** When asked to add a feature or fix a bug, first ask: is the current architecture the right foundation for this change? If the underlying abstraction is wrong, patching on top just creates well-organized tech debt. Propose the structural fix, explain the trade-off, and let the user decide.
+- **"Best possible" over "least disruptive."** Do not default to the smallest diff. Evaluate whether a larger refactor would leave the codebase in a fundamentally better state. If so, present that option (with effort estimate) alongside the minimal fix. The user can always choose the quick path, but they should know the better one exists.
+- **Technology choices are not sacred.** If a library, pattern, or architectural decision is the wrong tool for where the project is heading, say so. Sorted and well-organized "wrong tech" is still wrong tech. Propose the migration path and let the user weigh the cost.
+- **Think in trajectories, not snapshots.** Each change shapes what future changes are easy or hard. Prefer changes that open up future possibilities over those that close them off, even if the immediate task doesn't require it.
+- **Explain the "why" behind the recommendation.** The user wants to learn and make informed decisions. Don't just say "I recommend X" — explain what makes X better than the alternatives and what you'd lose by choosing them.
+
+### Pre-Implementation Checklist
+
+Before writing code, run through these questions:
+
+- Is the current abstraction the right one, or am I papering over a design gap?
+- Would a different data model, component structure, or API shape make this and *future* changes simpler?
+- Am I reaching for a pattern because it's familiar, or because it's optimal for this project?
+- If I were starting this feature from scratch today, would I build it the same way?
+- What does this change make easier to do next? What does it make harder?
+
 ## Adding a New REST Endpoint
 
 1. Add `app.METHOD('/api/path', handler)` in `server/index.js`

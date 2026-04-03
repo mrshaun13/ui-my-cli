@@ -661,7 +661,27 @@ list" but is not stored in the database.
 
 ${conventionList}
 
-## Adding a New REST Endpoint
+${(() => {
+  const dp = prose.decision_philosophy;
+  if (!dp) return '';
+  const principleList = (dp.principles || []).map(p => `- ${p}`).join('\n');
+  const checklistItems = (dp.checklist || []).map(c => `- ${c}`).join('\n');
+  return `## Decision-Making Philosophy
+
+${dp.preamble}
+
+### Principles
+
+${principleList}
+
+### Pre-Implementation Checklist
+
+Before writing code, run through these questions:
+
+${checklistItems}
+
+`;
+})()}## Adding a New REST Endpoint
 
 1. Add \`app.METHOD('/api/path', handler)\` in \`server/index.js\`
 2. If it mutates session data, call \`broadcastSessions()\` to push an update

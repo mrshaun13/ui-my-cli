@@ -90,6 +90,49 @@ module.exports = {
       ' A bare `npm run build` is **not enough** — the running Node process still executes the old code.',
   ],
 
+  // ── Decision-making philosophy ───────────────────────────────────────────────
+  // This section generates the "Decision-Making Philosophy" block in AGENTS.md.
+  // It teaches agents to evaluate whether the *best possible* approach is being
+  // taken, not just the most expedient one.
+
+  decision_philosophy: {
+    preamble:
+      'This is a **single-user, single-developer project**. The sole consumer is the person ' +
+      'who built it. That changes the calculus on every decision:\n\n' +
+      '- There is no legacy team to retrain, no migration guide to write, no deprecation cycle.\n' +
+      '- Breaking changes are free — the user will simply rebuild and restart.\n' +
+      '- "Correct" means "best long-term outcome for this one person," not "safest for a committee."',
+
+    principles: [
+      '**Challenge the premise before implementing.** When asked to add a feature or fix a bug, ' +
+        'first ask: is the current architecture the right foundation for this change? ' +
+        'If the underlying abstraction is wrong, patching on top just creates well-organized tech debt. ' +
+        'Propose the structural fix, explain the trade-off, and let the user decide.',
+      '**"Best possible" over "least disruptive."** Do not default to the smallest diff. ' +
+        'Evaluate whether a larger refactor would leave the codebase in a fundamentally better state. ' +
+        'If so, present that option (with effort estimate) alongside the minimal fix. ' +
+        'The user can always choose the quick path, but they should know the better one exists.',
+      '**Technology choices are not sacred.** If a library, pattern, or architectural decision ' +
+        'is the wrong tool for where the project is heading, say so. ' +
+        'Sorted and well-organized "wrong tech" is still wrong tech. ' +
+        'Propose the migration path and let the user weigh the cost.',
+      '**Think in trajectories, not snapshots.** Each change shapes what future changes are easy ' +
+        'or hard. Prefer changes that open up future possibilities over those that close them off, ' +
+        'even if the immediate task doesn\'t require it.',
+      '**Explain the "why" behind the recommendation.** The user wants to learn and make informed ' +
+        'decisions. Don\'t just say "I recommend X" — explain what makes X better than the alternatives ' +
+        'and what you\'d lose by choosing them.',
+    ],
+
+    checklist: [
+      'Is the current abstraction the right one, or am I papering over a design gap?',
+      'Would a different data model, component structure, or API shape make this and *future* changes simpler?',
+      'Am I reaching for a pattern because it\'s familiar, or because it\'s optimal for this project?',
+      'If I were starting this feature from scratch today, would I build it the same way?',
+      'What does this change make easier to do next? What does it make harder?',
+    ],
+  },
+
   // Descriptions for REST routes — keyed as "METHOD /path"
   routeDescriptions: {
     'GET /api/status':               'Server health check — returns `ok`, active PTY count, uptime seconds',

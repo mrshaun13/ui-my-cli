@@ -603,10 +603,15 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
                 isActive={session.id === selectedId}
                 isPreview={session.id === previewId}
                 isOld={false}
-                onClick={() => onSelect(session.id)}
+                isArchived={!!session.archived}
+                onClick={() => session.archived
+                  ? onPreview(session.id)
+                  : onSelect(session.id)
+                }
                 onPreview={onPreview}
                 onRename={onRename}
                 onArchive={onRemove}
+                onRestore={onRestore}
               />
             ))
           )}

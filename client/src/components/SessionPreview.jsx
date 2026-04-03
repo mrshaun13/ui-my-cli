@@ -305,7 +305,7 @@ function ChatBubble({ turn, index, total }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function SessionPreview({ sessionId, onResume, onArchive, onRename }) {
+export default function SessionPreview({ sessionId, onResume, onArchive, onRestore, onRename }) {
   const [data, setData]       = useState(null)
   const [error, setError]     = useState(null)
   const [renaming, setRenaming] = useState(false)
@@ -772,20 +772,36 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onRenam
 
       {/* ── Footer actions ───────────────────────────────────────────── */}
       <div className="preview-footer">
-        <button
-          className="btn preview-btn-archive"
-          onClick={() => onArchive(data.id)}
-          title="Archive this session (reversible)"
-        >
-          ⊘ Archive
-        </button>
-        <button
-          className="btn btn-primary preview-btn-resume"
-          onClick={() => onResume(data.id)}
-          title="Open live terminal for this session"
-        >
-          ▶ Resume session
-        </button>
+        {data.archived ? (
+          <button
+            className="btn btn-restore"
+            onClick={() => {
+              onRestore(data.id)
+              // Optimistically flip archived state so buttons update immediately
+              setData(prev => prev ? { ...prev, archived: false, status: 'idle' } : prev)
+            }}
+            title="Restore to active sessions"
+          >
+            ↩ Restore
+          </button>
+        ) : (
+          <button
+            className="btn preview-btn-archive"
+            onClick={() => onArchive(data.id)}
+            title="Archive this session (reversible)"
+          >
+            ⊘ Archive
+          </button>
+        )}
+        {!data.archived && (
+          <button
+            className="btn btn-primary preview-btn-resume"
+            onClick={() => onResume(data.id)}
+            title="Open live terminal for this session"
+          >
+            ▶ Resume session
+          </button>
+        )}
       </div>
 
     </div>

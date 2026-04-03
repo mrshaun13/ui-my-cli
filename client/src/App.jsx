@@ -143,13 +143,15 @@ export default function App() {
 
   const goHome = () => { setSelectedId(null); setPreviewId(null) }
 
-  // If the selected/previewed session disappears, go back to splash.
+  // If the selected session disappears from the live list, go back to splash.
   // Skip this check for pending sessions (not yet in the DB).
+  // Note: previewId is NOT cleared here — archived sessions won't be in the
+  // live sessions list, and SessionPreview handles missing sessions via its
+  // own error state.
   useEffect(() => {
     if (sessions.length === 0) return
     if (selectedId && !selectedId.startsWith('pending-') && !sessions.find(s => s.id === selectedId)) setSelectedId(null)
-    if (previewId  && !sessions.find(s => s.id === previewId))  setPreviewId(null)
-  }, [sessions, selectedId, previewId])
+  }, [sessions, selectedId])
 
   // When the server re-keys a pending session to its real ID, swap selectedId
   // so the sidebar highlights the correct card and the Terminal remounts with
@@ -220,14 +222,17 @@ export default function App() {
   const handlePreview = useCallback((id) => {
     if (id === previewId) {
       // Click-to-toggle: already previewing → switch to terminal
-      terminalKeyRef.current = id
-      setSelectedId(id)
-      setPreviewId(null)
+      // (only if session is in the live list — archived sessions can't open a terminal)
+      if (sessions.find(s => s.id === id)) {
+        terminalKeyRef.current = id
+        setSelectedId(id)
+        setPreviewId(null)
+      }
     } else {
       setPreviewId(id)
       setSelectedId(null)  // close live terminal when previewing
     }
-  }, [previewId])
+  }, [previewId, sessions])
 
   // Resume from preview → open live terminal
   const handleResume = useCallback((id) => {
@@ -343,6 +348,7 @@ export default function App() {
             sessionId={previewId}
             onResume={handleResume}
             onArchive={handleRemove}
+            onRestore={handleRestore}
             onRename={handleRename}
           />
         )}
