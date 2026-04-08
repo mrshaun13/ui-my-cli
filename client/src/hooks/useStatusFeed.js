@@ -21,6 +21,8 @@ export function useStatusFeed() {
   const [error, setError] = useState(null)
   // rekeyMap: { [tempKey]: realId } — pending sessions that have been re-keyed
   const [rekeyMap, setRekeyMap] = useState({})
+  // expiredPending: Set of temp keys whose rekey poll expired (session never started)
+  const [expiredPending, setExpiredPending] = useState(() => new Set())
   const wsRef = useRef(null)
   const backoffRef = useRef(INITIAL_BACKOFF)
   const retryRef = useRef(null)
@@ -71,6 +73,9 @@ export function useStatusFeed() {
         else if (msg.type === 'rekey' && msg.tempKey && msg.realId) {
           setRekeyMap(prev => ({ ...prev, [msg.tempKey]: msg.realId }))
         }
+        else if (msg.type === 'pending-expired' && msg.tempKey) {
+          setExpiredPending(prev => new Set(prev).add(msg.tempKey))
+        }
       } catch {
         // Ignore malformed frames
       }
@@ -101,5 +106,5 @@ export function useStatusFeed() {
     }
   }, [connect])
 
-  return { sessions, connected, error, latestPrompt, rekeyMap }
+  return { sessions, connected, error, latestPrompt, rekeyMap, expiredPending }
 }

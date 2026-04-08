@@ -250,10 +250,10 @@ function ChatBubble({ turn, index, total }) {
   const USER_LIMIT   = 220
   const ASSIST_LIMIT = 320
 
-  const userTrunc   = turn.userText.length > USER_LIMIT
+  const userTrunc   = turn.userText && turn.userText.length > USER_LIMIT
   const assistTrunc = turn.assistantText && turn.assistantText.length > ASSIST_LIMIT
 
-  const userDisplay   = expanded || !userTrunc   ? turn.userText   : turn.userText.slice(0, USER_LIMIT) + '…'
+  const userDisplay   = expanded || !userTrunc   ? (turn.userText || '')   : turn.userText.slice(0, USER_LIMIT) + '…'
   const assistDisplay = expanded || !assistTrunc
     ? turn.assistantText
     : turn.assistantText?.slice(0, ASSIST_LIMIT) + '…'
@@ -343,7 +343,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
     setSubagents(null)
     setSessionConfig(null)
     fetch(`/api/sessions/${sessionId}/preview`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error('Session not found'); return r.json() })
       .then(d => { setData(d); setNameValue(d.title) })
       .catch(e => setError(e.message))
   }, [sessionId])
@@ -666,7 +666,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
           ) : (
             convoTurns.map((turn, i) => (
               <ChatBubble
-                key={`${turn.createdAt}-${turn.userText.slice(0, 24)}`}
+                key={`${turn.createdAt}-${(turn.userText || '').slice(0, 24)}`}
                 turn={turn}
                 index={i}
                 total={convoTurns.length}

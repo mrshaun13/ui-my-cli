@@ -216,7 +216,7 @@ function PromptStrip({ prompt }) {
 }
 
 export default function App() {
-  const { sessions, connected, error, latestPrompt, rekeyMap } = useStatusFeed()
+  const { sessions, connected, error, latestPrompt, rekeyMap, expiredPending } = useStatusFeed()
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
   const env = useEnv()
@@ -293,11 +293,33 @@ export default function App() {
   }, [sessions, tabs])
 
   // When the server re-keys a pending session to its real ID, update the tab
+  // and clean up the pendingMeta entry (the real session is now in the DB feed).
   useEffect(() => {
     for (const [oldId, newId] of Object.entries(rekeyMap)) {
       dispatch({ type: 'rekey', oldId, newId })
+      setPendingMeta(prev => {
+        if (!prev[oldId]) return prev
+        const next = { ...prev }
+        delete next[oldId]
+        return next
+      })
     }
   }, [rekeyMap])
+
+  // When the server reports a pending session's rekey poll expired (session
+  // never got a real ID), close the orphaned tab and clean up pendingMeta.
+  useEffect(() => {
+    if (expiredPending.size === 0) return
+    for (const tempKey of expiredPending) {
+      dispatch({ type: 'close', id: tempKey })
+      setPendingMeta(prev => {
+        if (!prev[tempKey]) return prev
+        const next = { ...prev }
+        delete next[tempKey]
+        return next
+      })
+    }
+  }, [expiredPending])
 
   const handleRename = useCallback(async (id, title) => {
     await fetch(`/api/sessions/${id}/rename`, {

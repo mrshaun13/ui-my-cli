@@ -33,6 +33,11 @@ const PORT = parseInt(process.env.PORT || '7575', 10);
 const IS_DEV = process.env.NODE_ENV !== 'production';
 const CLIENT_DIST = path.resolve(__dirname, '..', 'client', 'dist');
 
+// Server-side map of pending temp keys → real session UUIDs.
+// Populated when the background rekey poll detects the real ID.
+// Used by the DELETE handler so archiving a pending session targets the right ID.
+const pendingToReal = new Map();
+
 const app = express();
 const server = http.createServer(app);
 
@@ -147,6 +152,7 @@ app.post('/api/sessions/create', (req, res) => {
       const realId = findNewSessionInDir(workingDir, before);
       if (realId) {
         clearInterval(bgPoll);
+        pendingToReal.set(tempKey, realId);
         if (rekeyPty(tempKey, realId)) {
           console.log(`[create] re-keyed ${tempKey.slice(0, 20)}… → ${realId.slice(0, 8)}…`);
         }
@@ -155,6 +161,10 @@ app.post('/api/sessions/create', (req, res) => {
       } else if (polls >= MAX_POLLS) {
         clearInterval(bgPoll);
         console.warn(`[create] gave up re-keying ${tempKey.slice(0, 20)}… after ${MAX_POLLS} polls`);
+        // Kill the orphaned PTY — it will never get a real session ID
+        killPty(tempKey);
+        // Notify clients so they can clean up the pending tab/card
+        broadcastPendingExpired(tempKey);
       }
     }, POLL_INTERVAL);
 
@@ -255,9 +265,17 @@ app.post('/api/sessions/:id/kill-pty', (req, res) => {
 
 app.delete('/api/sessions/:id', (req, res) => {
   try {
-    // Kill any running PTY first so the process doesn't linger
-    killPty(req.params.id);
-    hideSession(req.params.id);  // "archive" in user-facing terms
+    const reqId = req.params.id;
+    // Resolve pending temp keys to real session UUIDs so both killPty and
+    // hideSession target the correct entry after a rekey.
+    const realId = reqId.startsWith('pending-') ? (pendingToReal.get(reqId) || reqId) : reqId;
+    // Kill PTY under both keys — the entry may be under either depending on
+    // whether the rekey has fired yet.
+    killPty(realId);
+    if (realId !== reqId) killPty(reqId);
+    hideSession(realId);
+    // Clean up the server-side rekey map entry
+    if (reqId.startsWith('pending-')) pendingToReal.delete(reqId);
     broadcastSessions();
     res.json({ ok: true });
   } catch (err) {
@@ -316,6 +334,21 @@ function broadcastSessions() {
 function broadcastRekey(tempKey, realId) {
   if (statusClients.size === 0) return;
   const payload = JSON.stringify({ type: 'rekey', tempKey, realId });
+  for (const client of statusClients) {
+    if (client.readyState === 1) client.send(payload);
+  }
+}
+
+/**
+ * Notify all status-feed clients that a pending session's rekey poll expired
+ * without finding a real session ID.  The client uses this to dismiss the
+ * orphaned pending tab/card and show a "session failed to start" message.
+ *
+ * Message shape: { type: 'pending-expired', tempKey: string }
+ */
+function broadcastPendingExpired(tempKey) {
+  if (statusClients.size === 0) return;
+  const payload = JSON.stringify({ type: 'pending-expired', tempKey });
   for (const client of statusClients) {
     if (client.readyState === 1) client.send(payload);
   }

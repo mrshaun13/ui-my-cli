@@ -314,17 +314,22 @@ function attachClient(sessionId, workingDir, ws, cols, rows) {
   ws.on('message', raw => {
     try {
       const msg = JSON.parse(raw);
+      // Look up the PTY by scanning for the entry that owns this WS client.
+      // This survives rekey (where the map key changes from pending-xxx to
+      // the real session UUID) — ptys.get(sessionId) would use the stale
+      // closure-captured key and return undefined after rekey.
+      let entry = null;
+      for (const [, e] of ptys) {
+        if (e.clients.has(ws)) { entry = e; break; }
+      }
+      if (!entry) return;
+
       if (msg.type === 'input') {
-        // Guard against writing to a dead PTY (exit handler may have fired)
-        const entry = ptys.get(sessionId);
-        if (!entry) return;
         // Strip any xterm.js programmatic responses that slipped through
         // the client-side filter (defense in depth).
         const cleaned = msg.data.replace(XTERM_RESPONSE_RE, '');
         if (cleaned) entry.pty.write(cleaned);
       } else if (msg.type === 'resize') {
-        const entry = ptys.get(sessionId);
-        if (!entry) return;
         entry.pty.resize(
           Math.max(1, msg.cols || 80),
           Math.max(1, msg.rows || 24)

@@ -50,7 +50,8 @@ export default function ContextPieChart({ sessionId, tooltipPosition }) {
   const wrapRef = useRef(null)
 
   useEffect(() => {
-    if (!sessionId) { setData(null); return }
+    // Pending sessions don't exist in the DB yet — skip polling to avoid 404 spam
+    if (!sessionId || sessionId.startsWith('pending-')) { setData(null); return }
     setHover(null)
     let cancelled = false
 
