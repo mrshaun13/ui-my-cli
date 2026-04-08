@@ -2,13 +2,20 @@
  * Terminal — xterm.js terminal connected to the server PTY via WebSocket.
  *
  * Design constraints:
- *   - xterm instance is created ONCE per sessionId and never recreated on reconnect.
- *     This preserves scrollback history across connection drops.
+ *   - xterm instance is created ONCE per component mount (one per tab) and
+ *     never recreated.  This preserves scrollback history across tab switches
+ *     and connection drops.
+ *   - Multiple Terminal instances coexist (one per open tab), rendered with
+ *     visibility:hidden + position:absolute for inactive tabs.  This means:
+ *       • Tab switch doesn't change element dimensions → ResizeObserver
+ *         doesn't fire → safeFit() doesn't run → scroll position preserved.
+ *       • Window resize fires ResizeObserver for ALL terminals (even hidden
+ *         ones) → all stay in sync.
  *   - onData (keyboard → PTY) is registered ONCE on xterm, held in a ref.
  *     The ref always points at the current live WebSocket so we never leak listeners.
  *   - WebSocket is torn down and rebuilt on reconnect without touching xterm.
- *   - key={sessionId} on this component in App.jsx guarantees a full remount
- *     when switching sessions, so there is no cross-session state bleed.
+ *   - The `active` prop controls focus management: only the active tab's
+ *     terminal receives focus on WS connect and tab switch.
  *
  * WebSocket protocol:
  *   Client → Server: { type: 'input', data } | { type: 'resize', cols, rows }
@@ -110,7 +117,7 @@ const XTERM_RESPONSE_RE = new RegExp(
 // contain cursor-home sequences that clobber the viewport position.
 const RESIZE_ANCHOR_MS = 500
 
-export default function Terminal({ sessionId }) {
+export default function Terminal({ sessionId, active }) {
   const containerRef  = useRef(null)
   const xtermRef      = useRef(null)
   const fitAddonRef   = useRef(null)
@@ -130,11 +137,21 @@ export default function Terminal({ sessionId }) {
   // callback reads this ref so reconnect URLs always use the current ID.
   const sessionIdRef  = useRef(sessionId)
 
+  // activeRef tracks whether this terminal's tab is the active visible one.
+  // Read by the WS onopen handler to avoid stealing focus from other tabs.
+  const activeRef     = useRef(active)
+
   const [wsState, setWsState]   = useState('connecting')
   const [exitCode, setExitCode] = useState(null)
 
-  // Keep the ref in sync whenever the prop changes (rekey)
+  // Keep refs in sync whenever props change
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
+  useEffect(() => { activeRef.current = active }, [active])
+
+  // Focus terminal when it becomes the active tab
+  useEffect(() => {
+    if (active && xtermRef.current) xtermRef.current.focus()
+  }, [active])
 
   // ── Create xterm once per sessionId ──────────────────────────────────────
   useEffect(() => {
@@ -244,7 +261,7 @@ export default function Terminal({ sessionId }) {
       xtermRef.current    = null
       fitAddonRef.current = null
     }
-  }, [sessionId]) // full remount on session switch — guaranteed by key={sessionId} in App
+  }, []) // mount once — each Terminal instance corresponds to one tab
 
   // ── WebSocket connect / auto-reconnect ───────────────────────────────────
   const connect = useCallback(() => {
@@ -282,7 +299,9 @@ export default function Terminal({ sessionId }) {
         cols: xterm.cols,
         rows: xterm.rows,
       }))
-      xterm.focus()
+      // Only focus if this terminal's tab is currently active — avoids
+      // stealing focus from the active tab when background tabs reconnect.
+      if (activeRef.current) xterm.focus()
     }
 
     ws.onmessage = ({ data: raw }) => {

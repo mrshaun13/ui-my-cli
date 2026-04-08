@@ -1,7 +1,8 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo, useReducer } from 'react'
 import { useStatusFeed } from './hooks/useStatusFeed.js'
 import Sidebar from './components/Sidebar.jsx'
 import Terminal from './components/Terminal.jsx'
+import TabBar from './components/TabBar.jsx'
 import ControlBar from './components/ControlBar.jsx'
 import DashboardSplash from './components/DashboardSplash.jsx'
 import SessionPreview from './components/SessionPreview.jsx'
@@ -27,6 +28,104 @@ function loadCollapsed() {
 }
 function saveCollapsed(v) {
   try { localStorage.setItem(STORAGE_COLLAPSED, String(v)) } catch {}
+}
+
+// ── Tab persistence (localStorage) ───────────────────────────────────────────
+const STORAGE_TABS = 'devin-dash:open-tabs'
+function loadStoredTabs() {
+  try {
+    const raw = localStorage.getItem(STORAGE_TABS)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed?.tabs)) return parsed
+  } catch { /* ignore */ }
+  return null
+}
+function saveStoredTabs(tabs, activeTabId) {
+  try {
+    localStorage.setItem(STORAGE_TABS, JSON.stringify({ tabs, activeTabId }))
+  } catch { /* ignore */ }
+}
+
+// ── Tab state reducer ────────────────────────────────────────────────────────
+// Combines tabs[] and activeTabId into one atomic state to avoid
+// coordination bugs between multiple useState setters.
+
+function tabReducer(state, action) {
+  switch (action.type) {
+    case 'open': {
+      // Open a session in a tab (or activate existing tab)
+      const { id, mode } = action
+      const exists = state.tabs.find(t => t.id === id)
+      if (exists) {
+        return {
+          tabs: state.tabs.map(t => t.id === id ? { ...t, mode } : t),
+          activeTabId: id,
+        }
+      }
+      // New tab — mountKey is set once and never changes (survives rekey)
+      return {
+        tabs: [...state.tabs, { id, mode, mountKey: id }],
+        activeTabId: id,
+      }
+    }
+    case 'activate': {
+      // Click on tab title — activate in terminal mode
+      const tab = state.tabs.find(t => t.id === action.id)
+      if (!tab) return state
+      return {
+        tabs: state.tabs.map(t => t.id === action.id ? { ...t, mode: 'terminal' } : t),
+        activeTabId: action.id,
+      }
+    }
+    case 'togglePreview': {
+      // Click the info icon on a tab — toggle between terminal and preview
+      const tab = state.tabs.find(t => t.id === action.id)
+      if (!tab) return state
+      return {
+        tabs: state.tabs.map(t =>
+          t.id === action.id
+            ? { ...t, mode: t.mode === 'preview' ? 'terminal' : 'preview' }
+            : t
+        ),
+        activeTabId: action.id,
+      }
+    }
+    case 'close': {
+      // Close a tab — pick a neighbor if it was active
+      const idx = state.tabs.findIndex(t => t.id === action.id)
+      if (idx === -1) return state
+      const next = state.tabs.filter(t => t.id !== action.id)
+      let nextActive = state.activeTabId
+      if (state.activeTabId === action.id) {
+        if (next.length === 0) {
+          nextActive = null
+        } else {
+          nextActive = next[Math.min(idx, next.length - 1)].id
+        }
+      }
+      return { tabs: next, activeTabId: nextActive }
+    }
+    case 'rekey': {
+      // Pending session got its real UUID — update tab ID, keep mountKey stable
+      const { oldId, newId } = action
+      if (!state.tabs.some(t => t.id === oldId)) return state
+      return {
+        tabs: state.tabs.map(t => t.id === oldId ? { ...t, id: newId } : t),
+        activeTabId: state.activeTabId === oldId ? newId : state.activeTabId,
+      }
+    }
+    case 'deactivate': {
+      // Logo click — go to splash, keep tabs open
+      return { ...state, activeTabId: null }
+    }
+    case 'restore': {
+      // Restore from localStorage on initial load
+      return { tabs: action.tabs, activeTabId: action.activeTabId }
+    }
+    default:
+      return state
+  }
 }
 
 // Fetch just the env config fields (MCP servers, skills, plugins) for the topbar.
@@ -118,20 +217,20 @@ function PromptStrip({ prompt }) {
 
 export default function App() {
   const { sessions, connected, error, latestPrompt, rekeyMap } = useStatusFeed()
-  const [selectedId, setSelectedId] = useState(null)
-  const [previewId,  setPreviewId]  = useState(null)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
   const env = useEnv()
 
+  // ── Tab state (replaces selectedId / previewId) ────────────────────────────
+  const [tabState, dispatch] = useReducer(tabReducer, { tabs: [], activeTabId: null })
+  const { tabs, activeTabId } = tabState
+
+  // Track whether we've restored tabs from localStorage
+  const tabsRestoredRef = useRef(false)
+
   // Track metadata for pending sessions not yet in the DB.
   // Keys are temp keys (e.g. "pending-123-abc"), values are { workingDir, project, createdAt }.
   const [pendingMeta, setPendingMeta] = useState({})
-
-  // Stable Terminal key — set once when a session is first opened, never changed
-  // on rekey. This prevents React from remounting the Terminal (and losing
-  // scrollback + WebSocket) when selectedId swaps from pending-xxx to real UUID.
-  const terminalKeyRef = useRef(null)
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => {
@@ -141,26 +240,64 @@ export default function App() {
     })
   }, [])
 
-  const goHome = () => { setSelectedId(null); setPreviewId(null) }
+  const goHome = useCallback(() => dispatch({ type: 'deactivate' }), [])
 
-  // If the selected session disappears from the live list, go back to splash.
-  // Skip this check for pending sessions (not yet in the DB).
-  // Note: previewId is NOT cleared here — archived sessions won't be in the
-  // live sessions list, and SessionPreview handles missing sessions via its
-  // own error state.
+  // ── Persist tabs to localStorage on every change ───────────────────────────
+  useEffect(() => {
+    // Don't overwrite stored tabs before we've had a chance to restore them
+    if (!tabsRestoredRef.current) return
+    saveStoredTabs(tabs, activeTabId)
+  }, [tabs, activeTabId])
+
+  // ── Restore tabs from localStorage once sessions arrive ────────────────────
+  useEffect(() => {
+    if (tabsRestoredRef.current || sessions.length === 0) return
+    tabsRestoredRef.current = true
+    const stored = loadStoredTabs()
+    if (!stored || stored.tabs.length === 0) return
+    const sessionIds = new Set(sessions.map(s => s.id))
+    // Keep only tabs whose sessions still exist
+    const validTabs = stored.tabs
+      .filter(t => sessionIds.has(t.id))
+      .map(t => ({
+        id: t.id,
+        mode: t.mode || 'terminal',
+        mountKey: t.mountKey || t.id,
+      }))
+    if (validTabs.length === 0) return
+    const activeId = validTabs.find(t => t.id === stored.activeTabId)
+      ? stored.activeTabId
+      : validTabs[0].id
+    dispatch({ type: 'restore', tabs: validTabs, activeTabId: activeId })
+  }, [sessions])
+
+  // Mark restored immediately if there will never be sessions
+  // (tabsRestoredRef prevents the persist effect from running until we've restored)
+  useEffect(() => {
+    // If no stored tabs exist, mark as restored immediately so persistence starts
+    if (!tabsRestoredRef.current && !loadStoredTabs()) {
+      tabsRestoredRef.current = true
+    }
+  }, [])
+
+  // If a tabbed session disappears from the live list, close its tab.
+  // Skip pending sessions (not yet in the DB).
   useEffect(() => {
     if (sessions.length === 0) return
-    if (selectedId && !selectedId.startsWith('pending-') && !sessions.find(s => s.id === selectedId)) setSelectedId(null)
-  }, [sessions, selectedId])
+    const sessionIds = new Set(sessions.map(s => s.id))
+    for (const tab of tabs) {
+      if (!tab.id.startsWith('pending-') && !sessionIds.has(tab.id)) {
+        dispatch({ type: 'close', id: tab.id })
+      }
+    }
+  }, [sessions, tabs])
 
-  // When the server re-keys a pending session to its real ID, swap selectedId
-  // so the sidebar highlights the correct card and the Terminal remounts with
-  // the real session ID (which the PTY is now keyed under).
+  // When the server re-keys a pending session to its real ID, update the tab
   useEffect(() => {
-    if (!selectedId || !selectedId.startsWith('pending-')) return
-    const realId = rekeyMap[selectedId]
-    if (realId) setSelectedId(realId)
-  }, [selectedId, rekeyMap])
+    for (const [oldId, newId] of Object.entries(rekeyMap)) {
+      dispatch({ type: 'rekey', oldId, newId })
+    }
+  }, [rekeyMap])
 
   const handleRename = useCallback(async (id, title) => {
     await fetch(`/api/sessions/${id}/rename`, {
@@ -171,19 +308,15 @@ export default function App() {
   }, [])
 
   const handleRemove = useCallback(async (id) => {
-    const prevSelected = selectedId
-    const prevPreview = previewId
-    if (selectedId === id) setSelectedId(null)
-    if (previewId  === id) setPreviewId(null)
+    // Optimistically close the tab
+    dispatch({ type: 'close', id })
     try {
       const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Archive failed')
     } catch {
-      // Rollback UI state on failure
-      if (prevSelected === id) setSelectedId(prevSelected)
-      if (prevPreview === id)  setPreviewId(prevPreview)
+      // Session will reappear in next WS push if archive actually failed
     }
-  }, [selectedId, previewId])
+  }, [])
 
   const handleRestore = useCallback(async (id) => {
     await fetch(`/api/sessions/${id}/restore`, { method: 'POST' })
@@ -206,39 +339,37 @@ export default function App() {
       ...prev,
       [tempKey]: { workingDir, project: projectFromDir(workingDir), createdAt: nowSec },
     }))
-    // Set the stable Terminal key — this won't change on rekey
-    terminalKeyRef.current = tempKey
-    setSelectedId(tempKey)
-    setPreviewId(null)
+    // Open the pending session in a new tab
+    dispatch({ type: 'open', id: tempKey, mode: 'terminal' })
   }, [])
 
+  // ── Sidebar callbacks (routed to tab management) ───────────────────────────
+
   const handleSelect = useCallback((id) => {
-    if (id === selectedId) return   // already viewing — no-op
-    terminalKeyRef.current = id     // stable key for this session
-    setSelectedId(id)
-    setPreviewId(null)   // close preview when going live
-  }, [selectedId])
+    dispatch({ type: 'open', id, mode: 'terminal' })
+  }, [])
 
   const handlePreview = useCallback((id) => {
-    if (id === previewId) {
-      // Click-to-toggle: already previewing → switch to terminal
-      // (only if session is in the live list — archived sessions can't open a terminal)
-      if (sessions.find(s => s.id === id)) {
-        terminalKeyRef.current = id
-        setSelectedId(id)
-        setPreviewId(null)
-      }
-    } else {
-      setPreviewId(id)
-      setSelectedId(null)  // close live terminal when previewing
-    }
-  }, [previewId, sessions])
+    dispatch({ type: 'open', id, mode: 'preview' })
+  }, [])
 
-  // Resume from preview → open live terminal
+  // Resume from preview → switch tab to terminal mode
   const handleResume = useCallback((id) => {
-    setPreviewId(null)
-    terminalKeyRef.current = id
-    setSelectedId(id)
+    dispatch({ type: 'open', id, mode: 'terminal' })
+  }, [])
+
+  // ── Tab bar callbacks ──────────────────────────────────────────────────────
+
+  const handleActivateTab = useCallback((id) => {
+    dispatch({ type: 'activate', id })
+  }, [])
+
+  const handleTogglePreview = useCallback((id) => {
+    dispatch({ type: 'togglePreview', id })
+  }, [])
+
+  const handleCloseTab = useCallback((id) => {
+    dispatch({ type: 'close', id })
   }, [])
 
   const needsYouCount = sessions.filter(s => s.status === 'question').length
@@ -289,10 +420,18 @@ export default function App() {
     return synthetics.length > 0 ? [...synthetics, ...sessions] : sessions
   }, [sessions, pendingMeta, rekeyMap])
 
-  const selectedSession = sidebarSessions.find(s => s.id === selectedId) || null
+  // ── Derived state ──────────────────────────────────────────────────────────
+  const activeTab = tabs.find(t => t.id === activeTabId) || null
+  const selectedSession = sidebarSessions.find(s => s.id === activeTabId) || null
+
+  // For the Sidebar: derive selectedId/previewId from the active tab's mode
+  const sidebarSelectedId = (activeTab?.mode === 'terminal') ? activeTabId : null
+  const sidebarPreviewId  = (activeTab?.mode === 'preview')  ? activeTabId : null
 
   // What to show in the main area
-  const mainView = selectedId ? 'terminal' : previewId ? 'preview' : 'splash'
+  const mainView = activeTabId
+    ? (activeTab?.mode || 'terminal')
+    : 'splash'
 
   return (
     <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
@@ -321,8 +460,8 @@ export default function App() {
 
       <Sidebar
         sessions={sidebarSessions}
-        selectedId={selectedId}
-        previewId={previewId}
+        selectedId={sidebarSelectedId}
+        previewId={sidebarPreviewId}
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
         onSelect={handleSelect}
@@ -340,30 +479,58 @@ export default function App() {
           <div className="error-banner"><span>⚠</span> {error}</div>
         )}
 
-        {mainView === 'terminal' && (
-          <Terminal key={terminalKeyRef.current} sessionId={selectedId} />
-        )}
-        {mainView === 'preview' && (
-          <SessionPreview
-            sessionId={previewId}
-            onResume={handleResume}
-            onArchive={handleRemove}
-            onRestore={handleRestore}
-            onRename={handleRename}
-          />
-        )}
-        {mainView === 'splash' && (
-          <DashboardSplash connected={connected} latestPrompt={latestPrompt} onSelectSession={handlePreview} />
-        )}
+        <TabBar
+          tabs={tabs}
+          activeTabId={activeTabId}
+          sessions={sidebarSessions}
+          onActivate={handleActivateTab}
+          onTogglePreview={handleTogglePreview}
+          onClose={handleCloseTab}
+        />
 
-        {selectedSession && (
+        <div className="tab-content">
+          {/* Stacked terminal panes — all stay mounted, visibility toggled */}
+          {tabs.map(tab => (
+            <div
+              key={tab.mountKey}
+              className={`tab-pane${tab.id === activeTabId && activeTab?.mode === 'terminal' ? ' tab-pane-active' : ''}`}
+            >
+              <Terminal
+                sessionId={tab.id}
+                active={tab.id === activeTabId && activeTab?.mode === 'terminal'}
+              />
+            </div>
+          ))}
+
+          {/* Preview — only rendered for the active tab in preview mode */}
+          {activeTab?.mode === 'preview' && (
+            <div className="tab-pane tab-pane-active">
+              <SessionPreview
+                sessionId={activeTabId}
+                onResume={handleResume}
+                onArchive={handleRemove}
+                onRestore={handleRestore}
+                onRename={handleRename}
+              />
+            </div>
+          )}
+
+          {/* Splash — shown when no tab is active */}
+          {mainView === 'splash' && (
+            <div className="tab-pane tab-pane-active">
+              <DashboardSplash connected={connected} latestPrompt={latestPrompt} onSelectSession={handlePreview} />
+            </div>
+          )}
+        </div>
+
+        {activeTab?.mode === 'terminal' && selectedSession && (
           <PromptStrip prompt={selectedSession.lastUserPrompt || selectedSession.firstUserPrompt} />
         )}
       </main>
 
       <ControlBar
         session={selectedSession}
-        sessionId={selectedId || previewId}
+        sessionId={activeTabId}
         onRename={handleRename}
         onRemove={handleRemove}
       />

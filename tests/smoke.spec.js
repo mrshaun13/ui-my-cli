@@ -52,10 +52,10 @@ test.describe('Dashboard smoke tests', () => {
   test('clicking status icon opens session preview', async ({ page }) => {
     await waitForSessions(page);
     await page.locator(SELECTORS.statusIcon).first().click();
-    // Preview renders in the main area — should show session detail, not splash
+    // Preview renders inside a tab pane in the main area
     await expect(page.locator(SELECTORS.mainArea)).toBeVisible();
     await expect(
-      page.locator(SELECTORS.mainArea).locator('.session-preview, .preview-header, h2')
+      page.locator(SELECTORS.mainArea).locator(SELECTORS.previewWrap)
     ).toBeVisible({ timeout: 5000 });
   });
 

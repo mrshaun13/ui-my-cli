@@ -68,4 +68,10 @@ export const SELECTORS = {
   statusIcon: '.agent-status-icon',
   topbarLogo: '.topbar-logo',
   terminal: '.xterm',
+  tabBar: '.tab-bar',
+  tabItem: '.tab-item',
+  tabActive: '.tab-item.tab-active',
+  tabInsightsBtn: '.tab-insights-btn',
+  tabCloseBtn: '.tab-close-btn',
+  previewWrap: '.preview-wrap',
 };
