@@ -137,6 +137,9 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, is
       <div className="agent-project">
         <span className="agent-project-icon">▶</span>
         {session.project}
+        <span className="agent-hash" title={session.id}>
+          {session.id.startsWith('pending-') ? 'pending' : session.id.slice(0, 8)}
+        </span>
         {session.hasSubagents && (
           <span className="agent-subagent-badge" title="Session used subagents">⑂</span>
         )}
