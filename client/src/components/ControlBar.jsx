@@ -100,7 +100,7 @@ export default function ControlBar({ session, sessionId, onRename, onRemove }) {
             <span className="shortcut-hint"><kbd>Alt+T</kbd> thinking</span>
             <span className="shortcut-hint"><kbd>!</kbd> shell</span>
             <span className="shortcut-hint"><kbd>Ctrl+C</kbd> clear line</span>
-            <span className="shortcut-hint"><kbd>Shift+Enter</kbd> newline</span>
+            <span className="shortcut-hint"><kbd>Ctrl+Enter</kbd> newline</span>
           </div>
           <div className="controlbar-divider" />
           <ContextPieChart sessionId={sessionId} tooltipPosition="above" />

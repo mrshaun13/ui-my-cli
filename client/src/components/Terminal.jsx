@@ -193,6 +193,19 @@ export default function Terminal({ sessionId, active }) {
     xterm.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
 
+      // Ctrl+Enter → newline.
+      // xterm.js doesn't support the kitty keyboard protocol, so it sends
+      // \r for both Enter and Ctrl+Enter (indistinguishable). The Devin CLI
+      // expects \n (same as Ctrl+J) to insert a newline in its input editor.
+      // We intercept Ctrl+Enter here and inject \n directly into the PTY.
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'Enter') {
+        const ws = wsRef.current
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', data: '\n' }))
+        }
+        return false  // swallow — don't let xterm send \r
+      }
+
       if (e.ctrlKey && e.key === 'c') {
         const sel = xterm.getSelection()
         if (sel) {
