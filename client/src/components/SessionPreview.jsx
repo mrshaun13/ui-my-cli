@@ -243,29 +243,141 @@ function formatTurnTime(epochSec) {
   return { date, time }
 }
 
+// ── CopyButton ───────────────────────────────────────────────────────────────
+// Hover-revealed copy affordance for chat bubbles.  Always copies the FULL
+// original text, never the truncated `…` rendering — that's what users
+// actually want when they click "copy".
+//
+// Uses navigator.clipboard.writeText when available (secure contexts:
+// https, localhost, file://), with a hidden-textarea + execCommand
+// fallback for non-secure contexts.  Feature-detects synchronously
+// because navigator.clipboard is `undefined` (not a rejecting promise)
+// outside secure contexts — calling .writeText would throw a TypeError.
+
+function copyTextFallback(text) {
+  // Last-resort copy via off-screen textarea + the legacy execCommand API.
+  // Required for http:// served from non-localhost hosts.
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    // Position fixed off-screen with no scroll impact; opacity 0 hides it.
+    ta.style.position = 'fixed'
+    ta.style.left = '-9999px'
+    ta.style.top = '0'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    try {
+      ta.focus()
+      ta.select()
+      return document.execCommand('copy')
+    } finally {
+      document.body.removeChild(ta)
+    }
+  } catch {
+    return false
+  }
+}
+
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false)
+  const timerRef = useRef(null)
+
+  // Clear the "copied" timer on unmount so a fast session-switch doesn't
+  // leave the timeout pending against an unmounted component.
+  useEffect(() => () => clearTimeout(timerRef.current), [])
+
+  const onClick = (e) => {
+    // Without this, the click would also trigger the bubble's per-bubble
+    // expand handler — copy should never expand.
+    e.stopPropagation()
+    if (!text) return
+
+    const flash = () => {
+      setCopied(true)
+      clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => setCopied(false), 1400)
+    }
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(flash)
+        .catch(() => { if (copyTextFallback(text)) flash() })
+    } else if (copyTextFallback(text)) {
+      flash()
+    }
+  }
+
+  return (
+    <button
+      className={`preview-copy-btn${copied ? ' copied' : ''}`}
+      onClick={onClick}
+      title={copied ? 'Copied!' : 'Copy bubble contents'}
+      aria-label="Copy bubble contents"
+    >
+      {copied ? '✓ copied' : '⧉ copy'}
+    </button>
+  )
+}
+
 function ChatBubble({ turn, index, total }) {
-  const [expanded, setExpanded] = useState(false)
+  // Per-bubble expansion state — split from a single boolean so each side
+  // can be opened independently.  Both flags are one-way at the bubble level
+  // (the per-bubble click only ever sets to true) so a user mid-selection
+  // can't accidentally collapse the text by clicking again.  The bottom
+  // button is the only way back to a collapsed state.
+  const [userExpanded, setUserExpanded]           = useState(false)
+  const [assistantExpanded, setAssistantExpanded] = useState(false)
   const isLatest = index === total - 1
 
   const USER_LIMIT   = 220
   const ASSIST_LIMIT = 320
 
-  const userTrunc   = turn.userText && turn.userText.length > USER_LIMIT
+  const userTrunc   = turn.userText      && turn.userText.length      > USER_LIMIT
   const assistTrunc = turn.assistantText && turn.assistantText.length > ASSIST_LIMIT
 
-  const userDisplay   = expanded || !userTrunc   ? (turn.userText || '')   : turn.userText.slice(0, USER_LIMIT) + '…'
-  const assistDisplay = expanded || !assistTrunc
-    ? turn.assistantText
-    : turn.assistantText?.slice(0, ASSIST_LIMIT) + '…'
+  const userOpen   = userExpanded   || !userTrunc
+  const assistOpen = assistantExpanded || !assistTrunc
+
+  const userDisplay   = userOpen   ? (turn.userText || '')          : turn.userText.slice(0, USER_LIMIT) + '…'
+  const assistDisplay = assistOpen ? turn.assistantText             : turn.assistantText?.slice(0, ASSIST_LIMIT) + '…'
 
   const canExpand = userTrunc || assistTrunc
+  // "Fully expanded" means nothing is hidden, accounting for sides that
+  // never needed expansion in the first place.  Without this, a turn where
+  // only the assistant is truncated would leave the bottom button stuck on
+  // "show full" forever (since userExpanded would never be set).
+  const fullyExpanded = (!userTrunc || userExpanded) && (!assistTrunc || assistantExpanded)
+
+  const onBottomClick = () => {
+    if (fullyExpanded) {
+      setUserExpanded(false)
+      setAssistantExpanded(false)
+    } else {
+      if (userTrunc)   setUserExpanded(true)
+      if (assistTrunc) setAssistantExpanded(true)
+    }
+  }
+
+  // Per-bubble one-way expand.  No-op once expanded so clicks never
+  // collapse text the user might be selecting.
+  const expandUser   = () => { if (userTrunc   && !userExpanded)      setUserExpanded(true) }
+  const expandAssist = () => { if (assistTrunc && !assistantExpanded) setAssistantExpanded(true) }
+
   const timestamp = formatTurnTime(turn.createdAt)
   const assistTimestamp = formatTurnTime(turn.assistantCreatedAt)
+
+  const userClickable   = userTrunc   && !userExpanded
+  const assistClickable = assistTrunc && !assistantExpanded
 
   return (
     <div className={`preview-turn${isLatest ? ' preview-turn-latest' : ''}`}>
       {/* User bubble */}
-      <div className="preview-bubble preview-bubble-user">
+      <div
+        className={`preview-bubble preview-bubble-user${userClickable ? ' clickable' : ''}`}
+        onClick={userClickable ? expandUser : undefined}
+        title={userClickable ? 'Click to expand' : undefined}
+      >
+        {turn.userText && <CopyButton text={turn.userText} />}
         <span className="preview-bubble-label">
           you
           {timestamp && <span className="preview-bubble-time">{timestamp.date} {timestamp.time}</span>}
@@ -275,7 +387,12 @@ function ChatBubble({ turn, index, total }) {
 
       {/* Assistant bubble */}
       {assistDisplay ? (
-        <div className="preview-bubble preview-bubble-assistant">
+        <div
+          className={`preview-bubble preview-bubble-assistant${assistClickable ? ' clickable' : ''}`}
+          onClick={assistClickable ? expandAssist : undefined}
+          title={assistClickable ? 'Click to expand' : undefined}
+        >
+          <CopyButton text={turn.assistantText} />
           <span className="preview-bubble-label">
             devin
             {assistTimestamp && <span className="preview-bubble-time">{assistTimestamp.time}</span>}
@@ -284,6 +401,8 @@ function ChatBubble({ turn, index, total }) {
         </div>
       ) : (
         <div className="preview-bubble preview-bubble-assistant preview-bubble-dim">
+          {/* No copy button here — there is no real text to copy, just the
+              "(tool calls only)" placeholder. */}
           <span className="preview-bubble-label">devin</span>
           <p className="preview-bubble-text" style={{ fontStyle: 'italic', opacity: 0.4 }}>
             (tool calls only — no text response)
@@ -292,8 +411,8 @@ function ChatBubble({ turn, index, total }) {
       )}
 
       {canExpand && (
-        <button className="preview-expand-btn" onClick={() => setExpanded(v => !v)}>
-          {expanded ? '▲ collapse' : '▼ show full'}
+        <button className="preview-expand-btn" onClick={onBottomClick}>
+          {fullyExpanded ? '▲ collapse' : '▼ show full'}
         </button>
       )}
 
