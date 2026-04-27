@@ -396,6 +396,42 @@ function listSessions() {
   });
 }
 
+/**
+ * For a user message at index `userIdx` in chronologically-ascending `nodes`,
+ * find the "ending" assistant reply for that turn — the LAST assistant text
+ * message (trimmed length > 10) before the next user message or end of thread.
+ *
+ * Devin agents emit many intermediate "thinking" messages between turns
+ * ("OK let me look at this", "I'll check X first", etc.) before producing
+ * the substantive ending reply.  Picking the FIRST match (the previous
+ * behavior) surfaced those intermediates and, worse, bled the same checkpoint
+ * message into multiple consecutive turns when their windows overlapped.
+ * Picking the LAST match surfaces the actual conclusion of each turn.
+ *
+ * Returns { text: string|null, createdAt: number|null }.
+ */
+function _findEndingAssistantReply(nodes, userIdx) {
+  let text = null, createdAt = null;
+  for (let j = userIdx + 1; j < nodes.length; j++) {
+    let am;
+    try { am = JSON.parse(nodes[j].chat_message); } catch { continue; }
+    // Hard boundary: never bleed into the next turn.  This was implicit in
+    // the old break-on-first-match logic; explicit now that we keep scanning.
+    if (am?.role === 'user') break;
+    if (am?.role !== 'assistant') continue;
+    const rawAss = am.content;
+    const candidate = Array.isArray(rawAss)
+      ? rawAss.find(c => c.type === 'text')?.text
+      : typeof rawAss === 'string' ? rawAss : null;
+    if (candidate && candidate.trim().length > 10) {
+      text = candidate.trim();
+      createdAt = nodes[j].created_at;
+      // No break — keep looking, we want the LAST one in this turn.
+    }
+  }
+  return { text, createdAt };
+}
+
 /** Extracts user text from a raw chat_message JSON string. */
 function _extractUserText(chatMessage) {
   let msg;
@@ -641,23 +677,11 @@ function getSessionPreview(id) {
 
     if (!userText || userText.trim().length < 3) { i--; continue; }
 
-    // Find the next assistant text response after this user message
-    let assistantText = null;
-    let assistantCreatedAt = null;
-    for (let j = i + 1; j < Math.min(i + 40, threadNodes.length); j++) {
-      let am;
-      try { am = JSON.parse(threadNodes[j].chat_message); } catch { continue; }
-      if (am?.role !== 'assistant') continue;
-      const rawAss = am.content;
-      const text = Array.isArray(rawAss)
-        ? rawAss.find(c => c.type === 'text')?.text
-        : typeof rawAss === 'string' ? rawAss : null;
-      if (text && text.trim().length > 10) {
-        assistantText = text.trim();
-        assistantCreatedAt = threadNodes[j].created_at;
-        break;
-      }
-    }
+    // Find the ending assistant reply — last assistant text in this turn,
+    // bounded by the next user message.  See _findEndingAssistantReply for
+    // why "last", not "first".
+    const { text: assistantText, createdAt: assistantCreatedAt } =
+      _findEndingAssistantReply(threadNodes, i);
 
     threadTurns.unshift({
       userText: userText.trim(),
@@ -773,23 +797,9 @@ function getSessionConversation(id, offset = 0, limit = 50) {
 
     if (!userText || userText.trim().length < 3) continue;
 
-    // Find the next assistant text response after this user message
-    let assistantText = null;
-    let assistantCreatedAt = null;
-    for (let j = i + 1; j < Math.min(i + 40, allNodes.length); j++) {
-      let am;
-      try { am = JSON.parse(allNodes[j].chat_message); } catch { continue; }
-      if (am?.role !== 'assistant') continue;
-      const rawAss = am.content;
-      const text = Array.isArray(rawAss)
-        ? rawAss.find(c => c.type === 'text')?.text
-        : typeof rawAss === 'string' ? rawAss : null;
-      if (text && text.trim().length > 10) {
-        assistantText = text.trim();
-        assistantCreatedAt = allNodes[j].created_at;
-        break;
-      }
-    }
+    // Same ending-reply logic as getSessionPreview — see helper.
+    const { text: assistantText, createdAt: assistantCreatedAt } =
+      _findEndingAssistantReply(allNodes, i);
 
     allTurns.push({
       userText: userText.trim(),
