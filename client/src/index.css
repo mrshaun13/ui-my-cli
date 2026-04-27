@@ -65,7 +65,7 @@
   --font-mono:     'Berkeley Mono', 'Fira Code', 'Cascadia Code', monospace;
 
   --radius:        6px;
-  --sidebar-w:     300px;
+  --sidebar-w:     360px;
   --topbar-h:      auto;
   --controlbar-h:  auto;
 
@@ -3323,3 +3323,230 @@ html, body, #root {
   }
 }
 
+
+/* ─── Headless sessions ─────────────────────────────────────────────
+   Headless runs are batch / scheduled agents launched out-of-band.
+   They don't have a PTY to attach to and don't follow the question/active/
+   finished/idle status lifecycle.  We give them their own muted color
+   palette and a static glyph so they read as "automated, not interactive". */
+
+.agent-status-icon.headless {
+  background: var(--bg-elevated);
+  color: var(--purple);
+  font-weight: 600;
+}
+
+.agent-card-headless .agent-title {
+  /* slightly de-emphasized — these aren't interactive sessions */
+  color: var(--text-secondary);
+}
+
+/* Headless section divider in the sidebar — visually distinct from "older". */
+.sidebar-headless-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--purple);
+  opacity: 0.85;
+}
+.sidebar-headless-divider::before,
+.sidebar-headless-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--border), transparent);
+}
+
+/* Header toggle button — same shape as .filter-btn but purple-tinted. */
+.headless-toggle-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.headless-toggle-btn:hover {
+  border-color: var(--purple);
+  color: var(--purple);
+}
+.headless-toggle-btn.active {
+  background: var(--purple-dim);
+  border-color: var(--purple);
+  color: var(--purple);
+}
+
+/* Status-badge variant for headless flyout tooltip */
+.status-badge.headless {
+  background: var(--purple-dim);
+  color: var(--purple);
+}
+
+/* ─── "All" repo chip ────────────────────────────────────────────────
+   Bulk-add / bulk-clear so the user doesn't have to click "+" once per
+   repo when they have 14 of them. */
+.repo-chip.repo-chip-all {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  background: var(--bg-elevated);
+  border: 1px dashed var(--accent);
+  color: var(--accent);
+  cursor: pointer;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.repo-chip.repo-chip-all:hover {
+  background: rgba(0, 255, 163, 0.08);
+}
+.repo-chip.repo-chip-all-clear {
+  border-color: var(--text-muted);
+  color: var(--text-muted);
+}
+.repo-chip.repo-chip-all-clear:hover {
+  border-color: var(--red);
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+/* ─── Sidebar drag handle ────────────────────────────────────────────
+   Rendered as a sibling of the sidebar (child of .app-shell), positioned
+   on the boundary between the two grid columns.  This keeps it out of
+   the sidebar's overflow:hidden / overflow-y:auto context, which was
+   clipping the hit area when it lived inside .sidebar. */
+.app-shell { position: relative; }
+
+.sidebar-drag-handle {
+  position: absolute;
+  top: var(--topbar-h, 0);
+  /* Follows the live sidebar width — App.jsx sets --sidebar-w inline on
+     .app-shell when expanded, so this tracks the user's drag in real time. */
+  left: var(--sidebar-w);
+  width: 8px;
+  margin-left: -4px;     /* center the 8px hit-area on the column boundary */
+  height: 100vh;
+  bottom: 0;
+  cursor: col-resize;
+  background: transparent;
+  /* Must sit above .tab-pane (z-index 1) and any splash content; below
+     portals (modals, dropdowns).  Picking 50 leaves room beneath portals. */
+  z-index: 50;
+  transition: background 0.12s;
+  /* Don't let body scroll/highlight while the user is just hovering. */
+  user-select: none;
+}
+.sidebar-drag-handle:hover,
+body.sidebar-resizing .sidebar-drag-handle {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+/* While dragging: prevent text selection and force the resize cursor
+   even when the pointer drifts off the handle. */
+body.sidebar-resizing {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+body.sidebar-resizing * {
+  user-select: none !important;
+}
+
+/* ─── Headless placeholder page ──────────────────────────────────────
+   Shown in the main area when the user clicks a headless session
+   (terminal mode).  The summary view (preview mode) is unchanged. */
+.headless-placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: var(--bg-base);
+  overflow: auto;
+}
+
+.headless-placeholder-card {
+  max-width: 560px;
+  text-align: center;
+  padding: 40px 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.headless-placeholder-icon {
+  font-size: 48px;
+  color: var(--purple);
+  margin-bottom: 16px;
+  line-height: 1;
+}
+
+.headless-placeholder-title {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 6px;
+  /* Defensive: legacy headless sessions can have very long auto-generated
+     titles. Clamp to 3 lines so the card stays a sensible size. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.headless-placeholder-subtitle {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--purple);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 24px;
+}
+
+.headless-placeholder-body {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 12px 0;
+}
+
+.headless-placeholder-body strong {
+  color: var(--text-primary);
+}
+
+.headless-placeholder-cta {
+  margin-top: 20px;
+  padding: 10px 20px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--accent);
+  color: var(--bg-base);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: opacity 0.12s, transform 0.12s;
+}
+.headless-placeholder-cta:hover {
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+
+.headless-placeholder-meta {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  word-break: break-all;
+}

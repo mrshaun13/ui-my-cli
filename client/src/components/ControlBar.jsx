@@ -11,6 +11,7 @@
 
 import { useState, useEffect } from 'react'
 import ContextPieChart from './ContextPieChart.jsx'
+import { isHeadless, displayTitle, HEADLESS_ICON } from '../lib/headless.js'
 
 const STATUS_EXPLANATION = {
   question: 'Devin finished and is waiting for your reply',
@@ -47,8 +48,13 @@ export default function ControlBar({ session, sessionId, onRename, onRemove }) {
     )
   }
 
+  const headless = isHeadless(session)
+
   const startRename = () => {
-    setNameValue(session.title)
+    // Pre-fill the input with the cleaned display title for headless sessions —
+    // the user almost certainly doesn't want to edit the `headless-MMDDYYYY-`
+    // prefix character-by-character. They can still type it back if they want.
+    setNameValue(headless ? displayTitle(session) : session.title)
     setRenaming(true)
   }
 
@@ -69,8 +75,10 @@ export default function ControlBar({ session, sessionId, onRename, onRemove }) {
     onRemove(session.id)
   }
 
-  const statusColor = STATUS_COLOR[session.status] || 'var(--text-muted)'
-  const explanation = STATUS_EXPLANATION[session.status] || session.status
+  const statusColor = headless ? 'var(--purple)' : (STATUS_COLOR[session.status] || 'var(--text-muted)')
+  const explanation = headless
+    ? 'Headless run — no live terminal'
+    : (STATUS_EXPLANATION[session.status] || session.status)
 
   return (
     <div className="controlbar">
@@ -96,13 +104,26 @@ export default function ControlBar({ session, sessionId, onRename, onRemove }) {
         </div>
 
         <div className="controlbar-actions">
-          <div className="controlbar-shortcuts">
-            <span className="shortcut-hint"><kbd>Alt+T</kbd> thinking</span>
-            <span className="shortcut-hint"><kbd>!</kbd> shell</span>
-            <span className="shortcut-hint"><kbd>Ctrl+C</kbd> clear line</span>
-            <span className="shortcut-hint"><kbd>Ctrl+Enter</kbd> newline</span>
-          </div>
-          <div className="controlbar-divider" />
+          {/* PTY shortcuts only apply to interactive sessions — hide for headless. */}
+          {!headless && (
+            <>
+              <div className="controlbar-shortcuts">
+                <span className="shortcut-hint"><kbd>Alt+T</kbd> thinking</span>
+                <span className="shortcut-hint"><kbd>!</kbd> shell</span>
+                <span className="shortcut-hint"><kbd>Ctrl+C</kbd> clear line</span>
+                <span className="shortcut-hint"><kbd>Ctrl+Enter</kbd> newline</span>
+              </div>
+              <div className="controlbar-divider" />
+            </>
+          )}
+          {headless && (
+            <>
+              <span className="shortcut-hint" style={{ color: 'var(--purple)' }}>
+                {HEADLESS_ICON} headless
+              </span>
+              <div className="controlbar-divider" />
+            </>
+          )}
           <ContextPieChart sessionId={sessionId} tooltipPosition="above" />
           <div className="controlbar-divider" />
           {renaming ? (

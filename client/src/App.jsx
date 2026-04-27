@@ -6,6 +6,8 @@ import TabBar from './components/TabBar.jsx'
 import ControlBar from './components/ControlBar.jsx'
 import DashboardSplash from './components/DashboardSplash.jsx'
 import SessionPreview from './components/SessionPreview.jsx'
+import HeadlessPlaceholder from './components/HeadlessPlaceholder.jsx'
+import { isHeadless } from './lib/headless.js'
 // ContextPieChart is rendered inside ControlBar (not imported here)
 
 /**
@@ -28,6 +30,25 @@ function loadCollapsed() {
 }
 function saveCollapsed(v) {
   try { localStorage.setItem(STORAGE_COLLAPSED, String(v)) } catch {}
+}
+
+// ── Sidebar width (persisted to localStorage) ────────────────────────────────
+// Default is 360px — 20% wider than the previous 300px, since the user routinely
+// works with long repo names and many chips.  Clamped to a sane range so a
+// runaway drag can't break the layout.
+const STORAGE_SIDEBAR_W = 'devin-dash:sidebar-width'
+const SIDEBAR_W_DEFAULT = 360
+const SIDEBAR_W_MIN     = 240
+const SIDEBAR_W_MAX     = 640
+function loadSidebarWidth() {
+  try {
+    const v = parseInt(localStorage.getItem(STORAGE_SIDEBAR_W), 10)
+    if (!isNaN(v) && v >= SIDEBAR_W_MIN && v <= SIDEBAR_W_MAX) return v
+  } catch { /* ignore */ }
+  return SIDEBAR_W_DEFAULT
+}
+function saveSidebarWidth(w) {
+  try { localStorage.setItem(STORAGE_SIDEBAR_W, String(w)) } catch {}
 }
 
 // ── Tab persistence (localStorage) ───────────────────────────────────────────
@@ -219,6 +240,7 @@ export default function App() {
   const { sessions, connected, error, latestPrompt, rekeyMap, expiredPending } = useStatusFeed()
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
+  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const env = useEnv()
 
   // ── Tab state (replaces selectedId / previewId) ────────────────────────────
@@ -239,6 +261,35 @@ export default function App() {
       return next
     })
   }, [])
+
+  // Mouse-driven sidebar resize.  We attach move/up listeners on the
+  // document so the drag survives even when the cursor leaves the handle.
+  // Using mouse* (vs pointer*) for cross-browser/automation reliability.
+  const handleSidebarDragStart = useCallback((e) => {
+    if (sidebarCollapsed) return
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = sidebarWidth
+
+    const onMove = (ev) => {
+      const next = Math.max(SIDEBAR_W_MIN, Math.min(SIDEBAR_W_MAX, startW + (ev.clientX - startX)))
+      setSidebarWidth(next)
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.classList.remove('sidebar-resizing')
+    }
+    document.body.classList.add('sidebar-resizing')
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp, { once: true })
+  }, [sidebarCollapsed, sidebarWidth])
+
+  // Persist width whenever it settles (debounced via the trailing edge).
+  useEffect(() => {
+    const t = setTimeout(() => saveSidebarWidth(sidebarWidth), 250)
+    return () => clearTimeout(t)
+  }, [sidebarWidth])
 
   const goHome = useCallback(() => dispatch({ type: 'deactivate' }), [])
 
@@ -445,6 +496,7 @@ export default function App() {
   // ── Derived state ──────────────────────────────────────────────────────────
   const activeTab = tabs.find(t => t.id === activeTabId) || null
   const selectedSession = sidebarSessions.find(s => s.id === activeTabId) || null
+  const selectedIsHeadless = selectedSession ? isHeadless(selectedSession) : false
 
   // For the Sidebar: derive selectedId/previewId from the active tab's mode
   const sidebarSelectedId = (activeTab?.mode === 'terminal') ? activeTabId : null
@@ -456,7 +508,12 @@ export default function App() {
     : 'splash'
 
   return (
-    <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+    <div
+      className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
+      // Only override --sidebar-w when expanded; collapsed mode has its
+      // own 48px rule that we don't want to fight with.
+      style={!sidebarCollapsed ? { '--sidebar-w': `${sidebarWidth}px` } : undefined}
+    >
       <header className="topbar">
         <div className="topbar-logo" role="button" tabIndex={0} onClick={goHome}
           onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goHome() } }}
@@ -496,6 +553,20 @@ export default function App() {
         onToggleFilter={() => setFilterNeedsYou(v => !v)}
       />
 
+      {/* Drag handle — rendered as a sibling of the sidebar so it lives
+          outside the sidebar's overflow:hidden / overflow-y:auto context.
+          Positioned absolutely on the boundary between the two grid columns
+          (see .sidebar-drag-handle in index.css — `left: var(--sidebar-w)`). */}
+      {!sidebarCollapsed && (
+        <div
+          className="sidebar-drag-handle"
+          onMouseDown={handleSidebarDragStart}
+          title="Drag to resize sidebar"
+          role="separator"
+          aria-orientation="vertical"
+        />
+      )}
+
       <main className="main-area">
         {error && (
           <div className="error-banner"><span>⚠</span> {error}</div>
@@ -511,18 +582,27 @@ export default function App() {
         />
 
         <div className="tab-content">
-          {/* Stacked terminal panes — all stay mounted, visibility toggled */}
-          {tabs.map(tab => (
-            <div
-              key={tab.mountKey}
-              className={`tab-pane${tab.id === activeTabId && activeTab?.mode === 'terminal' ? ' tab-pane-active' : ''}`}
-            >
-              <Terminal
-                sessionId={tab.id}
-                active={tab.id === activeTabId && activeTab?.mode === 'terminal'}
-              />
-            </div>
-          ))}
+          {/* Stacked terminal panes — all stay mounted, visibility toggled.
+              Headless tabs render a placeholder instead of <Terminal>:
+              there is no PTY to attach to (the run was launched out-of-band)
+              so spawning the WS would just 404. */}
+          {tabs.map(tab => {
+            const tabSession = sidebarSessions.find(s => s.id === tab.id)
+            const headless = isHeadless(tabSession)
+            const paneActive = tab.id === activeTabId && activeTab?.mode === 'terminal'
+            return (
+              <div
+                key={tab.mountKey}
+                className={`tab-pane${paneActive ? ' tab-pane-active' : ''}`}
+              >
+                {headless ? (
+                  <HeadlessPlaceholder session={tabSession} onPreview={handlePreview} />
+                ) : (
+                  <Terminal sessionId={tab.id} active={paneActive} />
+                )}
+              </div>
+            )
+          })}
 
           {/* Preview — only rendered for the active tab in preview mode */}
           {activeTab?.mode === 'preview' && (
@@ -545,7 +625,7 @@ export default function App() {
           )}
         </div>
 
-        {activeTab?.mode === 'terminal' && selectedSession && (
+        {activeTab?.mode === 'terminal' && selectedSession && !selectedIsHeadless && (
           <PromptStrip prompt={selectedSession.lastUserPrompt || selectedSession.firstUserPrompt} />
         )}
       </main>

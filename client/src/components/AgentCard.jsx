@@ -14,6 +14,12 @@
  */
 
 import { useState, useRef, useEffect, memo } from 'react'
+import { isHeadless, displayTitle, displayProject, HEADLESS_ICON } from '../lib/headless.js'
+
+// Re-exported so Sidebar.jsx can keep its single import-from-AgentCard line
+// alongside STATUS_ICON / STATUS_LABEL.  The canonical definition lives in
+// lib/headless.js.
+export { HEADLESS_ICON }
 
 export const STATUS_ICON = {
   question: '⚡',
@@ -43,6 +49,10 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, is
   const [nameValue, setNameValue] = useState(session.title)
   const inputRef = useRef(null)
 
+  const headless = isHeadless(session)
+  const shownTitle = headless ? displayTitle(session) : session.title
+  const shownProject = headless ? displayProject(session) : session.project
+
   useEffect(() => {
     if (!renaming) setNameValue(session.title)
   }, [session.title, renaming])
@@ -55,11 +65,11 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, is
   if (compact) {
     return (
       <div
-        className={`agent-card-compact ${session.status}${isActive ? ' active' : ''}${isPreview ? ' previewing' : ''}`}
+        className={`agent-card-compact ${session.status}${isActive ? ' active' : ''}${isPreview ? ' previewing' : ''}${headless ? ' headless' : ''}`}
         onClick={onClick}
       >
-        <div className={`agent-status-icon ${session.status}${isPreview ? ' previewing' : ''}`}>
-          {STATUS_ICON[session.status] ?? '·'}
+        <div className={`agent-status-icon ${headless ? 'headless' : session.status}${isPreview ? ' previewing' : ''}`}>
+          {headless ? HEADLESS_ICON : (STATUS_ICON[session.status] ?? '·')}
         </div>
       </div>
     )
@@ -90,6 +100,7 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, is
     session.status,
     isOld      ? 'agent-card-old'       : '',
     isArchived ? 'agent-card-archived'  : '',
+    headless   ? 'agent-card-headless'  : '',
   ].filter(Boolean).join(' ')
 
   return (
@@ -100,14 +111,14 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, is
     >
       {/* ── Status icon — click = preview, no PTY spawn ─────────── */}
       <div
-        className={`agent-status-icon ${session.status}${isPreview ? ' previewing' : ''}`}
+        className={`agent-status-icon ${headless ? 'headless' : session.status}${isPreview ? ' previewing' : ''}`}
         role="button"
         tabIndex={0}
         onClick={e => { e.stopPropagation(); onPreview && onPreview(session.id) }}
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onPreview && onPreview(session.id) } }}
-        title="Click to preview session (read-only, no PTY)"
+        title={headless ? 'Headless run — click to view summary' : 'Click to preview session (read-only, no PTY)'}
       >
-        {STATUS_ICON[session.status] ?? '·'}
+        {headless ? HEADLESS_ICON : (STATUS_ICON[session.status] ?? '·')}
       </div>
 
       <div className="agent-title-row">
@@ -125,9 +136,9 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, is
           <span
             className="agent-title"
             onDoubleClick={startRename}
-            title="Double-click to rename"
+            title={headless ? session.title : 'Double-click to rename'}
           >
-            {session.title}
+            {shownTitle}
           </span>
         )}
         <span className="agent-time">{session.lastActivityAgo}</span>
@@ -136,7 +147,7 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, is
 
       <div className="agent-project">
         <span className="agent-project-icon">▶</span>
-        {session.project}
+        {shownProject}
         <span className="agent-hash" title={session.id}>
           {session.id.startsWith('pending-') ? 'pending' : session.id.slice(0, 8)}
         </span>

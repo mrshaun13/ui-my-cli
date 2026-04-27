@@ -11,14 +11,16 @@
  *    across title, project, prompt history, and user-role message content
  */
 
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import AgentCard from './AgentCard.jsx'
-import { STATUS_ICON, STATUS_LABEL } from './AgentCard.jsx'
+import { STATUS_ICON, STATUS_LABEL, HEADLESS_ICON } from './AgentCard.jsx'
 import { useRepoFilter } from '../hooks/useRepoFilter.js'
+import { isHeadless, displayTitle } from '../lib/headless.js'
 
 const STORAGE_COLD             = 'devin-dash:cold-days'
 const STORAGE_SEARCH_ARCHIVED  = 'devin-dash:search-archived'
+const STORAGE_SHOW_HEADLESS    = 'devin-dash:show-headless'
 const DEFAULT_COLD             = 3
 
 function loadColdDays() {
@@ -39,6 +41,19 @@ function loadSearchArchived() {
 
 function saveSearchArchived(v) {
   try { localStorage.setItem(STORAGE_SEARCH_ARCHIVED, String(v)) } catch { /* ignore */ }
+}
+
+// Headless section visibility — default true (user wants to see them by default).
+function loadShowHeadless() {
+  try {
+    const raw = localStorage.getItem(STORAGE_SHOW_HEADLESS)
+    if (raw === null) return true
+    return raw === 'true'
+  } catch { return true }
+}
+
+function saveShowHeadless(v) {
+  try { localStorage.setItem(STORAGE_SHOW_HEADLESS, String(v)) } catch { /* ignore */ }
 }
 
 // ── New Session FAB — floating button at bottom-right of sidebar ─────────────
@@ -213,7 +228,7 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
   const {
     repoFilter, allRepos, addedRepos,
     sortedHiddenRepos, activeRepos, repoSessionCounts,
-    addRepo, removeRepo, toggleRepo,
+    addRepo, removeRepo, toggleRepo, addAllRepos, clearAllRepos,
   } = useRepoFilter(sessions)
 
   const [addOpen, setAddOpen]           = useState(false)
@@ -221,9 +236,18 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
   const [coldDays, setColdDays]         = useState(loadColdDays)
   const [editingCold, setEditingCold]   = useState(false)
   const [coldInput, setColdInput]       = useState(String(coldDays))
+  const [showHeadless, setShowHeadless] = useState(loadShowHeadless)
   const addRef      = useRef(null)
   const addDropRef  = useRef(null)
   const coldRef     = useRef(null)
+
+  const toggleShowHeadless = useCallback(() => {
+    setShowHeadless(prev => {
+      const next = !prev
+      saveShowHeadless(next)
+      return next
+    })
+  }, [])
 
   // ── Search state ────────────────────────────────────────────────────────────
   const [searchQuery,    setSearchQuery]    = useState('')
@@ -353,13 +377,19 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
   const nowSec = Math.floor(Date.now() / 60000) * 60
   const coldSec = coldDays * 86400
 
+  // Headless sessions are independent of the repo filter — compute them
+  // unconditionally so the headless toggle/section appear on the very first
+  // WS push, before the repo-filter auto-init fires.
+  const headless = useMemo(() => sessions.filter(isHeadless), [sessions])
+
   // Filter by active repos + question toggle.
   // Pending sessions (synthetic cards for not-yet-in-DB sessions) always pass
   // through — the user just created them, so hiding behind a filter is confusing.
   const filtered = useMemo(() => {
     if (!repoFilter) return []
     const isPending = s => s.id.startsWith('pending-')
-    let list = sessions.filter(s => isPending(s) || activeRepos.has(s.project))
+    const interactive = sessions.filter(s => !isHeadless(s))
+    let list = interactive.filter(s => isPending(s) || activeRepos.has(s.project))
     if (filterNeedsYou) list = list.filter(s => isPending(s) || s.status === 'question')
     return list
   }, [sessions, repoFilter, activeRepos, filterNeedsYou])
@@ -383,6 +413,13 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
     return { hot, cold }
   }, [filtered, coldSec, nowSec])
 
+  // Headless sessions always sort by recency (no question/active priority — they
+  // don't follow that lifecycle).
+  const sortedHeadless = useMemo(
+    () => [...headless].sort((a, b) => b.lastActivityAt - a.lastActivityAt),
+    [headless]
+  )
+
   const needsYouCount = sessions.filter(s => s.status === 'question').length
 
   // Whether the archived option row should be visible
@@ -393,10 +430,12 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
 
   const showTooltip = useCallback((session, e) => {
     const rect = e.currentTarget.getBoundingClientRect()
+    const headless = isHeadless(session)
     setTooltip({
-      title: session.title,
+      title: headless ? displayTitle(session) : session.title,
       project: session.project,
       status: session.status,
+      headless,
       time: session.lastActivityAgo,
       top: rect.top,
       left: rect.right + 8,
@@ -407,8 +446,8 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
 
   // ── Collapsed sidebar render ───────────────────────────────────────────────
   if (collapsed) {
-    // Use filtered list (respects repo filter), combine hot + cold
-    const allFiltered = [...hot, ...cold]
+    // Use filtered list (respects repo filter), combine hot + cold + headless (if shown)
+    const allFiltered = [...hot, ...cold, ...(showHeadless ? sortedHeadless : [])]
     return (
       <aside className="sidebar sidebar-collapsed">
         <div className="sidebar-collapsed-list">
@@ -451,8 +490,10 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
           <div className="sidebar-flyout" style={{ top: tooltip.top, left: tooltip.left }}>
             <div className="sidebar-flyout-title">{tooltip.title}</div>
             <div className="sidebar-flyout-meta">{tooltip.project} · {tooltip.time}</div>
-            <span className={`status-badge ${tooltip.status}`}>
-              {STATUS_ICON[tooltip.status] ?? '·'} {STATUS_LABEL[tooltip.status] ?? tooltip.status}
+            <span className={`status-badge ${tooltip.headless ? 'headless' : tooltip.status}`}>
+              {tooltip.headless
+                ? `${HEADLESS_ICON} headless`
+                : `${STATUS_ICON[tooltip.status] ?? '·'} ${STATUS_LABEL[tooltip.status] ?? tooltip.status}`}
             </span>
           </div>,
           document.body
@@ -498,6 +539,21 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
             }
           </span>
         </span>
+
+        {/* Headless show/hide toggle — only meaningful when at least one
+            headless session exists. Dimmed while search is active. */}
+        {sortedHeadless.length > 0 && (
+          <button
+            className={`headless-toggle-btn ${showHeadless ? 'active' : ''}`}
+            onClick={toggleShowHeadless}
+            title={showHeadless
+              ? `Hide ${sortedHeadless.length} headless session${sortedHeadless.length === 1 ? '' : 's'}`
+              : `Show ${sortedHeadless.length} headless session${sortedHeadless.length === 1 ? '' : 's'}`}
+            style={displayResults ? { opacity: 0.4, pointerEvents: 'none' } : undefined}
+          >
+            {HEADLESS_ICON} {sortedHeadless.length}
+          </button>
+        )}
 
         {/* ⚡ filter — dimmed while search is active */}
         {needsYouCount > 0 && (
@@ -648,6 +704,24 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
                   </span>
                 )
               })}
+              {/* "All" toggle — single button. When some repos are hidden,
+                  click bulk-adds them; when every repo is already a chip,
+                  click clears them all.  Saves the user from clicking "+"
+                  repeatedly when they have many repos. */}
+              {allRepos.length > 1 && (() => {
+                const hasHidden = sortedHiddenRepos.length > 0
+                return (
+                  <button
+                    className={`repo-chip repo-chip-all${hasHidden ? '' : ' repo-chip-all-clear'}`}
+                    onClick={hasHidden ? addAllRepos : clearAllRepos}
+                    title={hasHidden
+                      ? `Add all ${sortedHiddenRepos.length} remaining repo${sortedHiddenRepos.length === 1 ? '' : 's'}`
+                      : 'Clear all repo filters'}
+                  >
+                    {hasHidden ? `All +${sortedHiddenRepos.length}` : 'Clear'}
+                  </button>
+                )
+              })()}
               {sortedHiddenRepos.length > 0 && (
                 <div className="repo-add-wrap" ref={addRef}>
                   <button className="repo-chip repo-chip-add" onClick={() => setAddOpen(v => !v)} title="Add a project">+</button>
@@ -682,48 +756,56 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
             </div>
           )}
 
-          {/* ── Active / recent sessions ─────────────────────────────── */}
-          {hot.map(session => (
-            <AgentCard
-              key={session.id}
-              session={session}
-              isActive={session.id === selectedId}
-              isPreview={session.id === previewId}
-              isOld={false}
-              onClick={() => onSelect(session.id)}
-              onPreview={onPreview}
-              onRename={onRename}
-              onArchive={onRemove}
-            />
-          ))}
-
-          {/* ── Older divider + cold sessions ───────────────────────── */}
-          {cold.length > 0 && (
-            <>
-              <div className="sidebar-older-divider">
-                <span>older</span>
-              </div>
-              {cold.map(session => (
-                <AgentCard
-                  key={session.id}
-                  session={session}
-                  isActive={session.id === selectedId}
-                  isPreview={session.id === previewId}
-                  isOld={true}
-                  onClick={() => onSelect(session.id)}
-                  onPreview={onPreview}
-                  onRename={onRename}
-                  onArchive={onRemove}
-                />
-              ))}
-            </>
-          )}
-
-          {hot.length === 0 && cold.length === 0 && (
-            <div className="sidebar-empty" style={{ padding: '16px' }}>
-              <div className="sidebar-empty-text">No sessions match the current filter.</div>
-            </div>
-          )}
+          {/* ── Sections: hot → headless (optional) → older (optional) ──
+              Driven from a single data structure so the AgentCard map
+              isn't duplicated three times. */}
+          {(() => {
+            const sections = [
+              { key: 'hot', items: hot, isOld: false, divider: null },
+              ...(showHeadless && sortedHeadless.length > 0 ? [{
+                key: 'headless',
+                items: sortedHeadless,
+                isOld: false,
+                divider: (
+                  <div className="sidebar-headless-divider">
+                    <span>{HEADLESS_ICON} headless · {sortedHeadless.length}</span>
+                  </div>
+                ),
+              }] : []),
+              ...(cold.length > 0 ? [{
+                key: 'cold',
+                items: cold,
+                isOld: true,
+                divider: <div className="sidebar-older-divider"><span>older</span></div>,
+              }] : []),
+            ]
+            const hasAnyVisible = sections.some(s => s.items.length > 0)
+            if (!hasAnyVisible) {
+              return (
+                <div className="sidebar-empty" style={{ padding: '16px' }}>
+                  <div className="sidebar-empty-text">No sessions match the current filter.</div>
+                </div>
+              )
+            }
+            return sections.map(section => (
+              <Fragment key={section.key}>
+                {section.divider}
+                {section.items.map(s => (
+                  <AgentCard
+                    key={s.id}
+                    session={s}
+                    isActive={s.id === selectedId}
+                    isPreview={s.id === previewId}
+                    isOld={section.isOld}
+                    onClick={() => onSelect(s.id)}
+                    onPreview={onPreview}
+                    onRename={onRename}
+                    onArchive={onRemove}
+                  />
+                ))}
+              </Fragment>
+            ))
+          })()}
         </>
       )}
 

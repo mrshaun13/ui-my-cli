@@ -10,6 +10,7 @@
  * Backward-compatible with legacy string[] format (auto-migrates).
  */
 import { useState, useMemo, useEffect, useCallback } from 'react'
+import { isHeadless } from '../lib/headless.js'
 
 const STORAGE_KEY = 'devin-dash:visible-repos'
 
@@ -33,22 +34,30 @@ function saveRepoFilter(map) {
 export function useRepoFilter(sessions) {
   const [repoFilter, setRepoFilter] = useState(loadRepoFilter)
 
-  // All unique project names from current sessions
-  const allRepos = useMemo(
-    () => [...new Set(sessions.map(s => s.project).filter(Boolean))].sort(),
+  // Headless sessions are intentionally excluded from the repo-pill universe:
+  // there can be a lot of them (one per scheduled run) and the user never
+  // needs to filter by their repo individually — they get their own section.
+  const interactiveSessions = useMemo(
+    () => sessions.filter(s => !isHeadless(s)),
     [sessions]
+  )
+
+  // All unique project names from interactive (non-headless) sessions
+  const allRepos = useMemo(
+    () => [...new Set(interactiveSessions.map(s => s.project).filter(Boolean))].sort(),
+    [interactiveSessions]
   )
 
   // Per-repo aggregates: session count + most recent activity (single pass)
   const { repoSessionCounts, repoLastActivity } = useMemo(() => {
     const counts = {}, lastActivity = {}
-    for (const s of sessions) {
+    for (const s of interactiveSessions) {
       counts[s.project] = (counts[s.project] || 0) + 1
       if (!lastActivity[s.project] || s.lastActivityAt > lastActivity[s.project])
         lastActivity[s.project] = s.lastActivityAt
     }
     return { repoSessionCounts: counts, repoLastActivity: lastActivity }
-  }, [sessions])
+  }, [interactiveSessions])
 
   // Repos shown as pills (in the Map AND still exist in sessions)
   const addedRepos = useMemo(
@@ -71,16 +80,19 @@ export function useRepoFilter(sessions) {
     [repoFilter]
   )
 
-  // Auto-initialize on first session load
+  // Auto-initialize on first session load.  Seed from the most-recent
+  // *interactive* session — never a headless one, because headless projects
+  // don't render as chips and the user would have no way to deactivate the
+  // resulting zombie filter.
   useEffect(() => {
-    if (repoFilter !== null || sessions.length === 0) return
-    const mostRecent = sessions[0]?.project
+    if (repoFilter !== null || interactiveSessions.length === 0) return
+    const mostRecent = interactiveSessions[0]?.project
     if (mostRecent) {
       const initial = new Map([[mostRecent, 'active']])
       setRepoFilter(initial)
       saveRepoFilter(initial)
     }
-  }, [sessions, repoFilter])
+  }, [interactiveSessions, repoFilter])
 
   const addRepo = useCallback((repo) => {
     setRepoFilter(prev => {
@@ -109,6 +121,26 @@ export function useRepoFilter(sessions) {
     })
   }, [])
 
+  // Bulk add every repo as active. Used by the "All" button so the user
+  // doesn't have to add repos one-at-a-time through the "+" dropdown.
+  const addAllRepos = useCallback(() => {
+    setRepoFilter(prev => {
+      const next = new Map(prev ?? [])
+      for (const r of allRepos) next.set(r, 'active')
+      saveRepoFilter(next)
+      return next
+    })
+  }, [allRepos])
+
+  // Clear every pill — counterpart to addAllRepos for the toggle.
+  const clearAllRepos = useCallback(() => {
+    setRepoFilter(() => {
+      const next = new Map()
+      saveRepoFilter(next)
+      return next
+    })
+  }, [])
+
   return {
     repoFilter,
     allRepos,
@@ -119,5 +151,7 @@ export function useRepoFilter(sessions) {
     addRepo,
     removeRepo,
     toggleRepo,
+    addAllRepos,
+    clearAllRepos,
   }
 }
