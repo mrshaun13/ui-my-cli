@@ -448,50 +448,68 @@ const TOOL_TIP =
   '"exec" runs shell commands, "read" reads files, "edit" rewrites file content, ' +
   '"grep" searches code, "mcp_call_tool" calls external MCP integrations, etc.'
 
-function ToolBarChart({ tools }) {
-  const [hover, setHover] = useState(null)
-  if (!tools.length) return <div className="splash-empty-note">No tool data yet.</div>
+/**
+ * Tool calls chart — TWO independently-ranked columns side by side.
+ *
+ * `tools` shape (from /api/stats):
+ *   { interactive: [{ name, calls }, …], headless: [{ name, calls }, …] }
+ *
+ * Each column has its own ordering and its own scale (so the headless
+ * column doesn't get crushed by the interactive column's much larger
+ * absolute counts).  When no headless data exists, the headless column
+ * is hidden and the interactive column gets the full panel width.
+ *
+ * Same vertical whitespace and row height as before — just split
+ * horizontally inside the existing panel.
+ */
 
-  const maxCalls = tools[0].calls
+const COLUMN_LABEL = {
+  interactive: 'interactive',
+  headless:    'headless',
+}
+
+function ToolColumn({ tools, label, accent, hover, setHover, columnKey }) {
   const BAR_H = 12
   const GAP = 5
   const LABEL_W = 100
   const COUNT_W = 44
   const BAR_AREA = 80
   const ROW_H = BAR_H + GAP
-  const totalH = tools.length * ROW_H - GAP
+  const totalH = Math.max(1, tools.length) * ROW_H - GAP
+  const W = LABEL_W + COUNT_W + BAR_AREA
 
-  // Whether ANY headless calls exist — controls whether we show the
-  // headless legend + tooltip subline.  If everything is interactive
-  // (no headless agents have run yet) we don't add chart noise.
-  const anyHeadless = tools.some(t => (t.headlessCalls || 0) > 0)
+  if (!tools.length) {
+    return (
+      <div style={{ flex: 1 }}>
+        <div className="tool-column-header" style={{ color: accent }}>
+          {label}
+        </div>
+        <div className="splash-empty-note" style={{ textAlign: 'center', padding: '12px 0' }}>
+          no calls yet
+        </div>
+      </div>
+    )
+  }
+
+  const maxCalls = tools[0].calls   // local max — independent scale per column
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div className="tool-column-header" style={{ color: accent }}>
+        {label}
+      </div>
       <svg
-        viewBox={`0 0 ${LABEL_W + COUNT_W + BAR_AREA} ${totalH}`}
+        viewBox={`0 0 ${W} ${totalH}`}
         style={{ width: '100%', height: `${totalH + 2}px`, display: 'block', overflow: 'visible' }}
       >
         {tools.map((t, i) => {
           const y = i * ROW_H
-          // Stacked split: interactive segment first, headless segment butted up
-          // on its right.  Both scale to the same maxCalls denominator so widths
-          // are directly comparable across tools.  `interactiveCalls` and
-          // `headlessCalls` may be missing on legacy server payloads — fall back
-          // to treating everything as interactive.
-          const ic = t.interactiveCalls ?? t.calls
-          const hc = t.headlessCalls ?? 0
-          const interactW = Math.round((ic / maxCalls) * BAR_AREA)
-          const headlessW = Math.round((hc / maxCalls) * BAR_AREA)
-          // Guarantee at least 2px of visible bar for any non-zero count so
-          // tools dominated by a single cohort still render legibly.
-          const interactDrawW = ic > 0 ? Math.max(2, interactW) : 0
-          const headlessDrawW = hc > 0 ? Math.max(2, headlessW) : 0
+          const barW = Math.max(2, Math.round((t.calls / maxCalls) * BAR_AREA))
           const color = TOOL_COLORS[t.name] || 'var(--border-bright)'
-          const isHov = hover === i
+          const isHov = hover && hover.col === columnKey && hover.idx === i
           return (
             <g key={t.name}
-              onMouseEnter={() => setHover(i)}
+              onMouseEnter={() => setHover({ col: columnKey, idx: i })}
               onMouseLeave={() => setHover(null)}
               style={{ cursor: 'default' }}>
               <text x={LABEL_W - 4} y={y + BAR_H * 0.78} textAnchor="end"
@@ -507,33 +525,61 @@ function ToolBarChart({ tools }) {
               {/* Track */}
               <rect x={LABEL_W + COUNT_W} y={y + 2} width={BAR_AREA} height={BAR_H - 4}
                 rx={2} fill="var(--bg-elevated)" />
-              {/* Interactive segment (left) */}
-              {interactDrawW > 0 && (
-                <rect x={LABEL_W + COUNT_W} y={y + 2} width={interactDrawW} height={BAR_H - 4}
-                  rx={2} fill={color} opacity={isHov ? 1 : 0.7} />
-              )}
-              {/* Headless segment (right of interactive) */}
-              {headlessDrawW > 0 && (
-                <rect x={LABEL_W + COUNT_W + interactDrawW} y={y + 2}
-                  width={headlessDrawW} height={BAR_H - 4}
-                  rx={2} fill="var(--purple)" opacity={isHov ? 1 : 0.75}>
-                  <title>{`${ic.toLocaleString()} interactive · ${hc.toLocaleString()} headless`}</title>
-                </rect>
-              )}
+              {/* Bar — interactive uses the per-tool color, headless uses --purple
+                  uniformly so the cohort is unmistakable at a glance. */}
+              <rect x={LABEL_W + COUNT_W} y={y + 2} width={barW} height={BAR_H - 4}
+                rx={2}
+                fill={columnKey === 'headless' ? 'var(--purple)' : color}
+                opacity={isHov ? 1 : 0.75} />
             </g>
           )
         })}
       </svg>
+    </div>
+  )
+}
+
+function ToolBarChart({ tools }) {
+  const [hover, setHover] = useState(null)
+
+  // Server returns { interactive, headless }.  Be defensive about a legacy
+  // array payload (older server still running): treat it as the interactive
+  // column with no headless data.
+  const interactive = Array.isArray(tools) ? tools : (tools?.interactive || [])
+  const headless    = Array.isArray(tools) ? []    : (tools?.headless    || [])
+
+  const showHeadless = headless.length > 0
+
+  if (!interactive.length && !headless.length) {
+    return <div className="splash-empty-note">No tool data yet.</div>
+  }
+
+  return (
+    <div>
+      <div className="tool-columns" style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+        <ToolColumn
+          tools={interactive}
+          label={COLUMN_LABEL.interactive}
+          accent="var(--accent-dim)"
+          columnKey="interactive"
+          hover={hover}
+          setHover={setHover}
+        />
+        {showHeadless && (
+          <ToolColumn
+            tools={headless}
+            label={COLUMN_LABEL.headless}
+            accent="var(--purple)"
+            columnKey="headless"
+            hover={hover}
+            setHover={setHover}
+          />
+        )}
+      </div>
       <div className="activity-chart-legend" style={{ marginTop: 4 }}>
         <span className="legend-label" style={{ color: 'var(--text-muted)' }}>
-          cumulative calls · all sessions
+          cumulative calls · all sessions{showHeadless ? ' · each column ranked independently' : ''}
         </span>
-        {anyHeadless && (
-          <span style={{ marginLeft: 10, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <span className="legend-dot" style={{ background: 'var(--purple)' }} />
-            <span className="legend-label" style={{ color: 'var(--text-muted)' }}>headless</span>
-          </span>
-        )}
       </div>
     </div>
   )

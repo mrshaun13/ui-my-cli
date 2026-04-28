@@ -81,18 +81,32 @@ function formatDuration(sec) {
 }
 
 /**
- * Headless-session detection — must stay in lockstep with the regex in
- * client/src/lib/headless.js (`/^headless-\d{8}-(.+)$/`).  Both files share
- * the rule: a session is "headless" when either its title OR its working-dir
- * basename starts with `headless-MMDDYYYY-`.  Centralising server-side here
- * lets projectBreakdown, topTools, and any future stats consumer agree on
- * one classification without dragging the whole client lib server-side.
+ * Headless-session detection — must stay in lockstep with the regexes in
+ * client/src/lib/headless.js.  Both files share the rule: a session is
+ * "headless" (auto-generated batch run, not a human-launched interactive
+ * session) when EITHER its title OR its working-dir basename matches:
+ *
+ *   • `^headless-\d{8}-` — explicit headless-MMDDYYYY- prefix
+ *   • `-\d{10,}$`        — trailing timestamp ID (Date.now() style),
+ *                          which all auto-launchers stamp on the dir name
+ *                          (`tp-triage-…-1777246127507`,
+ *                           `2026-04-25-ai-guild-meeting-1777109430757`,
+ *                           etc.)
+ *
+ * Real interactive repos (`speakeasy`, `ui-my-cli`, `breadcrumbs`, …)
+ * never have a trailing timestamp suffix, so this is a reliable signal
+ * without false-positives.
  */
-const HEADLESS_RE = /^headless-\d{8}-/;
+const HEADLESS_PREFIX_RE = /^headless-\d{8}-/;
+const TRAILING_ID_RE     = /-\d{10,}$/;
 function _isHeadlessSession(session) {
   if (!session) return false;
+  const title   = session.title || '';
   const project = session.working_directory ? path.basename(session.working_directory) : '';
-  return HEADLESS_RE.test(session.title || '') || HEADLESS_RE.test(project);
+  return HEADLESS_PREFIX_RE.test(title)   ||
+         HEADLESS_PREFIX_RE.test(project) ||
+         TRAILING_ID_RE.test(title)       ||
+         TRAILING_ID_RE.test(project);
 }
 
 /** Per-project session + message node counts + total duration + per-session detail */
@@ -165,44 +179,46 @@ function projectBreakdown(db, sessions) {
 }
 
 /**
- * Top tools used across all sessions, partitioned into interactive vs headless.
- * The split lets the dashboard's tool chart show both populations without
- * mixing them — useful since headless agents drive a very different tool
- * distribution (heavy on exec/read, light on ask_user_question).
+ * Top tools used across all sessions, returned as TWO independently-ranked
+ * lists so the dashboard can show interactive and headless cohorts in
+ * parallel columns rather than mashed together.
  *
- * Sampling: rather than the previous unordered `LIMIT 8000` (which picked
- * up rows in physical order, skewing toward whichever cohort had written
- * more recently to disk), we order by rowid DESC so the sample is the
- * most-recent 8000 tool-call-bearing nodes — a more honest snapshot.
+ * Returns `{ interactive: [...], headless: [...] }` where each list is
+ * an array of `{ name, calls }` sorted descending by calls and capped
+ * at 12 entries.  An interactive-only world (no headless agents yet)
+ * returns `headless: []` and the chart hides that column.
+ *
+ * Sampling: rather than the previous unordered `LIMIT 8000` (which
+ * picked up rows in physical order, skewing toward whichever cohort
+ * had written more recently to disk), we order by rowid DESC so the
+ * sample is the most-recent 8000 tool-call-bearing nodes — a more
+ * honest snapshot.
  */
 function topTools(db, sessions) {
   const headlessIds = new Set(sessions.filter(_isHeadlessSession).map(s => s.id));
   const rows = db.prepare(
     "SELECT session_id, chat_message FROM message_nodes WHERE chat_message LIKE '%\"name\":%' ORDER BY rowid DESC LIMIT 8000"
   ).all();
-  const counts = {};
+  const interactiveCounts = {};
+  const headlessCounts    = {};
   for (const r of rows) {
     let m;
     try { m = JSON.parse(r.chat_message); } catch { continue; }
     if (!Array.isArray(m.tool_calls)) continue;
-    const isHeadless = headlessIds.has(r.session_id);
+    const bucket = headlessIds.has(r.session_id) ? headlessCounts : interactiveCounts;
     for (const tc of m.tool_calls) {
       const name = tc?.name || tc?.function?.name;
-      if (!name) continue;
-      if (!counts[name]) counts[name] = { interactiveCalls: 0, headlessCalls: 0 };
-      if (isHeadless) counts[name].headlessCalls++;
-      else            counts[name].interactiveCalls++;
+      if (name) bucket[name] = (bucket[name] || 0) + 1;
     }
   }
-  return Object.entries(counts)
-    .map(([name, c]) => ({
-      name,
-      calls: c.interactiveCalls + c.headlessCalls,
-      interactiveCalls: c.interactiveCalls,
-      headlessCalls: c.headlessCalls,
-    }))
+  const rank = (counts) => Object.entries(counts)
+    .map(([name, calls]) => ({ name, calls }))
     .sort((a, b) => b.calls - a.calls)
     .slice(0, 12);
+  return {
+    interactive: rank(interactiveCounts),
+    headless:    rank(headlessCounts),
+  };
 }
 
 /** Message node activity by hour-of-day, split into 3 time buckets */

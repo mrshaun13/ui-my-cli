@@ -1597,6 +1597,20 @@ html, body, #root {
   margin-top: 2px;
 }
 
+/* Tool-calls panel column headers — small uppercase label above each
+   ranked column ("interactive" / "headless").  Same letter-spacing as
+   the chart-section labels for visual consistency. */
+.tool-column-header {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--border);
+}
+
 .combo-popover-sessions {
   display: flex;
   flex-direction: column;
