@@ -164,6 +164,7 @@ function collect() {
   ];
 
   const clientKeyFiles = [
+    'client/src/App.jsx',
     'client/src/components/Sidebar.jsx',
     'client/src/hooks/useStatusFeed.js',
   ];

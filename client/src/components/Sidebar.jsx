@@ -18,22 +18,8 @@ import { STATUS_ICON, STATUS_LABEL, HEADLESS_ICON } from './AgentCard.jsx'
 import { useRepoFilter } from '../hooks/useRepoFilter.js'
 import { isHeadless, displayTitle } from '../lib/headless.js'
 
-const STORAGE_COLD             = 'devin-dash:cold-days'
 const STORAGE_SEARCH_ARCHIVED  = 'devin-dash:search-archived'
 const STORAGE_SHOW_HEADLESS    = 'devin-dash:show-headless'
-const DEFAULT_COLD             = 3
-
-function loadColdDays() {
-  try {
-    const v = parseInt(localStorage.getItem(STORAGE_COLD), 10)
-    if (!isNaN(v) && v > 0) return v
-  } catch { /* ignore */ }
-  return DEFAULT_COLD
-}
-
-function saveColdDays(n) {
-  try { localStorage.setItem(STORAGE_COLD, String(n)) } catch { /* ignore */ }
-}
 
 function loadSearchArchived() {
   try { return localStorage.getItem(STORAGE_SEARCH_ARCHIVED) === 'true' } catch { return false }
@@ -224,7 +210,7 @@ function ArchiveDrawer({ onRestore }) {
 
 // ── Main Sidebar ─────────────────────────────────────────────────────────────
 
-export default function Sidebar({ sessions, selectedId, previewId, collapsed, onToggleCollapse, onSelect, onPreview, onRename, onRemove, onRestore, filterNeedsYou, onToggleFilter, onCreateSession }) {
+export default function Sidebar({ sessions, selectedId, previewId, collapsed, onToggleCollapse, onSelect, onPreview, onRename, onRemove, onRestore, filterNeedsYou, onToggleFilter, onCreateSession, coldDays, onSetColdDays }) {
   const {
     repoFilter, allRepos, addedRepos,
     sortedHiddenRepos, activeRepos, repoSessionCounts,
@@ -233,7 +219,6 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
 
   const [addOpen, setAddOpen]           = useState(false)
   const [dropdownSearch, setDropdownSearch] = useState('')
-  const [coldDays, setColdDays]         = useState(loadColdDays)
   const [editingCold, setEditingCold]   = useState(false)
   const [coldInput, setColdInput]       = useState(String(coldDays))
   const [showHeadless, setShowHeadless] = useState(loadShowHeadless)
@@ -320,10 +305,10 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
 
   const commitCold = useCallback(() => {
     const n = parseInt(coldInput, 10)
-    if (!isNaN(n) && n > 0) { setColdDays(n); saveColdDays(n) }
+    if (!isNaN(n) && n > 0) onSetColdDays(n)
     else setColdInput(String(coldDays))
     setEditingCold(false)
-  }, [coldInput, coldDays])
+  }, [coldInput, coldDays, onSetColdDays])
 
   // Close cold-days editor on outside click
   useEffect(() => {
@@ -612,13 +597,13 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
               onChange={e => setColdInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') commitCold(); if (e.key === 'Escape') { setEditingCold(false); setColdInput(String(coldDays)) } }}
               autoFocus
-              title="Sessions idle longer than this many days are grouped as 'older'"
+              title={`Sessions idle longer than this many days are grouped under 'older'. Inactive tabs older than this also auto-close to keep the tab strip tidy.`}
             />
           ) : (
             <button
               className="cold-days-btn"
               onClick={() => { setColdInput(String(coldDays)); setEditingCold(true) }}
-              title={`Sessions idle > ${coldDays}d are grouped as older — click to change`}
+              title={`Sessions idle > ${coldDays}d are grouped under 'older'. Inactive tabs older than ${coldDays}d auto-close (active tab is always kept). Click to change.`}
             >
               ⏱ {coldDays}d
             </button>

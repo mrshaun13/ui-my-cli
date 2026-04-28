@@ -461,6 +461,11 @@ function ToolBarChart({ tools }) {
   const ROW_H = BAR_H + GAP
   const totalH = tools.length * ROW_H - GAP
 
+  // Whether ANY headless calls exist — controls whether we show the
+  // headless legend + tooltip subline.  If everything is interactive
+  // (no headless agents have run yet) we don't add chart noise.
+  const anyHeadless = tools.some(t => (t.headlessCalls || 0) > 0)
+
   return (
     <div style={{ position: 'relative' }}>
       <svg
@@ -469,7 +474,19 @@ function ToolBarChart({ tools }) {
       >
         {tools.map((t, i) => {
           const y = i * ROW_H
-          const barW = Math.max(2, Math.round((t.calls / maxCalls) * BAR_AREA))
+          // Stacked split: interactive segment first, headless segment butted up
+          // on its right.  Both scale to the same maxCalls denominator so widths
+          // are directly comparable across tools.  `interactiveCalls` and
+          // `headlessCalls` may be missing on legacy server payloads — fall back
+          // to treating everything as interactive.
+          const ic = t.interactiveCalls ?? t.calls
+          const hc = t.headlessCalls ?? 0
+          const interactW = Math.round((ic / maxCalls) * BAR_AREA)
+          const headlessW = Math.round((hc / maxCalls) * BAR_AREA)
+          // Guarantee at least 2px of visible bar for any non-zero count so
+          // tools dominated by a single cohort still render legibly.
+          const interactDrawW = ic > 0 ? Math.max(2, interactW) : 0
+          const headlessDrawW = hc > 0 ? Math.max(2, headlessW) : 0
           const color = TOOL_COLORS[t.name] || 'var(--border-bright)'
           const isHov = hover === i
           return (
@@ -487,10 +504,22 @@ function ToolBarChart({ tools }) {
                 fontSize="8.5" fontFamily="var(--font-mono)">
                 {t.calls.toLocaleString()}
               </text>
+              {/* Track */}
               <rect x={LABEL_W + COUNT_W} y={y + 2} width={BAR_AREA} height={BAR_H - 4}
                 rx={2} fill="var(--bg-elevated)" />
-              <rect x={LABEL_W + COUNT_W} y={y + 2} width={barW} height={BAR_H - 4}
-                rx={2} fill={color} opacity={isHov ? 1 : 0.7} />
+              {/* Interactive segment (left) */}
+              {interactDrawW > 0 && (
+                <rect x={LABEL_W + COUNT_W} y={y + 2} width={interactDrawW} height={BAR_H - 4}
+                  rx={2} fill={color} opacity={isHov ? 1 : 0.7} />
+              )}
+              {/* Headless segment (right of interactive) */}
+              {headlessDrawW > 0 && (
+                <rect x={LABEL_W + COUNT_W + interactDrawW} y={y + 2}
+                  width={headlessDrawW} height={BAR_H - 4}
+                  rx={2} fill="var(--purple)" opacity={isHov ? 1 : 0.75}>
+                  <title>{`${ic.toLocaleString()} interactive · ${hc.toLocaleString()} headless`}</title>
+                </rect>
+              )}
             </g>
           )
         })}
@@ -499,6 +528,12 @@ function ToolBarChart({ tools }) {
         <span className="legend-label" style={{ color: 'var(--text-muted)' }}>
           cumulative calls · all sessions
         </span>
+        {anyHeadless && (
+          <span style={{ marginLeft: 10, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span className="legend-dot" style={{ background: 'var(--purple)' }} />
+            <span className="legend-label" style={{ color: 'var(--text-muted)' }}>headless</span>
+          </span>
+        )}
       </div>
     </div>
   )
@@ -635,9 +670,13 @@ function ProjectComboChart({ projects }) {
               {showMsg && <rect x={msgX} y={baseY - Math.max(1, msgH)} width={barW} height={Math.max(1, msgH)}
                 rx={2} fill="var(--purple)" opacity={isHov ? 1 : 0.7} />}
 
-              {/* Project label */}
+              {/* Project label — purple-tinted for the synthetic headless
+                  aggregate so it's visually distinct from real repos. */}
               <text x={cx} y={COMBO_H - 6} textAnchor="middle"
-                fill={isHov ? 'var(--text-primary)' : 'var(--text-muted)'}
+                fill={p.headless
+                  ? (isHov ? 'var(--purple)' : 'var(--purple)')
+                  : (isHov ? 'var(--text-primary)' : 'var(--text-muted)')}
+                fontWeight={p.headless ? 600 : 400}
                 fontSize="9" fontFamily="var(--font-mono)">
                 {p.name.length > 14 ? p.name.slice(0, 13) + '…' : p.name}
               </text>
@@ -666,11 +705,20 @@ function ProjectComboChart({ projects }) {
         return createPortal(
           <div className="combo-popover combo-popover-portal" style={{ left: hover.px, top: hover.py }}>
             <div className="combo-popover-header">
-              <span className="combo-popover-name">{p.name}</span>
+              <span className="combo-popover-name" style={p.headless ? { color: 'var(--purple)' } : undefined}>
+                {p.name}
+              </span>
               <span className="combo-popover-summary">
                 {fmtDurationShort(p.durationSec)} · {p.messages.toLocaleString()} turns · {p.sessions} sess
               </span>
             </div>
+            {/* Headless-specific subline: "N runs across M sandbox repos" so it's clear
+                this is an aggregate, not a single project. */}
+            {p.headless && p.underlyingProjectCount > 0 && (
+              <div className="combo-popover-headless-note">
+                aggregated from {p.underlyingProjectCount} sandbox dir{p.underlyingProjectCount === 1 ? '' : 's'}
+              </div>
+            )}
             {shown.length > 0 && (
               <div className="combo-popover-sessions">
                 {shown.map(s => (

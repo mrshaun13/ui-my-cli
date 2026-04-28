@@ -1586,6 +1586,17 @@ html, body, #root {
   color: var(--text-secondary);
 }
 
+/* Headless-aggregate clarification line — only shown for the synthetic
+   "⧉ headless" project so the user knows this is a roll-up of N sandbox
+   dirs, not a single repo. */
+.combo-popover-headless-note {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  color: var(--purple);
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
 .combo-popover-sessions {
   display: flex;
   flex-direction: column;

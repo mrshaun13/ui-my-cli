@@ -51,6 +51,23 @@ function saveSidebarWidth(w) {
   try { localStorage.setItem(STORAGE_SIDEBAR_W, String(w)) } catch {}
 }
 
+// ── Cold-days threshold (persisted to localStorage) ──────────────────────────
+// Lifted here from Sidebar so it can drive BOTH (a) the sidebar's hot/older
+// divider and (b) the tab auto-close effect.  Single source of truth keeps
+// the two views consistent without dispatching custom events between them.
+const STORAGE_COLD = 'devin-dash:cold-days'
+const COLD_DEFAULT = 3
+function loadColdDays() {
+  try {
+    const v = parseInt(localStorage.getItem(STORAGE_COLD), 10)
+    if (!isNaN(v) && v > 0) return v
+  } catch { /* ignore */ }
+  return COLD_DEFAULT
+}
+function saveColdDays(n) {
+  try { localStorage.setItem(STORAGE_COLD, String(n)) } catch {}
+}
+
 // ── Tab persistence (localStorage) ───────────────────────────────────────────
 const STORAGE_TABS = 'devin-dash:open-tabs'
 function loadStoredTabs() {
@@ -241,7 +258,13 @@ export default function App() {
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
+  const [coldDays, setColdDaysState] = useState(loadColdDays)
   const env = useEnv()
+
+  const setColdDays = useCallback((n) => {
+    setColdDaysState(n)
+    saveColdDays(n)
+  }, [])
 
   // ── Tab state (replaces selectedId / previewId) ────────────────────────────
   const [tabState, dispatch] = useReducer(tabReducer, { tabs: [], activeTabId: null })
@@ -306,10 +329,20 @@ export default function App() {
     tabsRestoredRef.current = true
     const stored = loadStoredTabs()
     if (!stored || stored.tabs.length === 0) return
-    const sessionIds = new Set(sessions.map(s => s.id))
-    // Keep only tabs whose sessions still exist
+    const sessionsById = new Map(sessions.map(s => [s.id, s]))
+    // Drop persisted tabs whose underlying session is older than the cold-days
+    // threshold — restoring them would just trigger the auto-close effect on
+    // the next tick, causing a brief flicker.  The previously-active tab is
+    // exempt: if you closed the browser staring at it, you almost certainly
+    // want it back when you reopen.
+    const cutoff = Math.floor(Date.now() / 1000) - coldDays * 86400
     const validTabs = stored.tabs
-      .filter(t => sessionIds.has(t.id))
+      .filter(t => {
+        const s = sessionsById.get(t.id)
+        if (!s) return false
+        if (t.id === stored.activeTabId) return true
+        return (s.lastActivityAt || 0) >= cutoff
+      })
       .map(t => ({
         id: t.id,
         mode: t.mode || 'terminal',
@@ -320,7 +353,7 @@ export default function App() {
       ? stored.activeTabId
       : validTabs[0].id
     dispatch({ type: 'restore', tabs: validTabs, activeTabId: activeId })
-  }, [sessions])
+  }, [sessions, coldDays])
 
   // Mark restored immediately if there will never be sessions
   // (tabsRestoredRef prevents the persist effect from running until we've restored)
@@ -342,6 +375,28 @@ export default function App() {
       }
     }
   }, [sessions, tabs])
+
+  // ── Auto-close stale tabs ──────────────────────────────────────────────────
+  // Tab strip can grow forever if the user never manually closes anything.
+  // Once a tab's underlying session has been idle longer than the cold-days
+  // threshold, close it — UNLESS it's the active tab (don't yank focus from
+  // the user) or a pending one (just created, not yet in the DB feed).
+  // Re-runs on every sessions tick so tabs that go stale during a long
+  // browser session get cleaned up incrementally.
+  useEffect(() => {
+    if (sessions.length === 0 || tabs.length === 0) return
+    const cutoff = Math.floor(Date.now() / 1000) - coldDays * 86400
+    const sessionsById = new Map(sessions.map(s => [s.id, s]))
+    for (const tab of tabs) {
+      if (tab.id === activeTabId) continue
+      if (tab.id.startsWith('pending-')) continue
+      const s = sessionsById.get(tab.id)
+      if (!s) continue   // handled by the disappearance effect above
+      if ((s.lastActivityAt || 0) < cutoff) {
+        dispatch({ type: 'close', id: tab.id })
+      }
+    }
+  }, [sessions, tabs, activeTabId, coldDays])
 
   // When the server re-keys a pending session to its real ID, update the tab
   // and clean up the pendingMeta entry (the real session is now in the DB feed).
@@ -551,6 +606,8 @@ export default function App() {
         onCreateSession={handleCreateSession}
         filterNeedsYou={filterNeedsYou}
         onToggleFilter={() => setFilterNeedsYou(v => !v)}
+        coldDays={coldDays}
+        onSetColdDays={setColdDays}
       />
 
       {/* Drag handle — rendered as a sibling of the sidebar so it lives

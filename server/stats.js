@@ -80,58 +80,129 @@ function formatDuration(sec) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+/**
+ * Headless-session detection — must stay in lockstep with the regex in
+ * client/src/lib/headless.js (`/^headless-\d{8}-(.+)$/`).  Both files share
+ * the rule: a session is "headless" when either its title OR its working-dir
+ * basename starts with `headless-MMDDYYYY-`.  Centralising server-side here
+ * lets projectBreakdown, topTools, and any future stats consumer agree on
+ * one classification without dragging the whole client lib server-side.
+ */
+const HEADLESS_RE = /^headless-\d{8}-/;
+function _isHeadlessSession(session) {
+  if (!session) return false;
+  const project = session.working_directory ? path.basename(session.working_directory) : '';
+  return HEADLESS_RE.test(session.title || '') || HEADLESS_RE.test(project);
+}
+
 /** Per-project session + message node counts + total duration + per-session detail */
 function projectBreakdown(db, sessions) {
   const msgBySession = {};
   const rows = db.prepare('SELECT session_id, COUNT(*) as c FROM message_nodes GROUP BY session_id').all();
   for (const r of rows) msgBySession[r.session_id] = r.c;
 
+  // Bucket every session by its real project name, but track which sessions
+  // are headless so we can collapse them into a single virtual project below.
   const byProject = {};
+  // The virtual "headless" project bucket — accumulates across every
+  // headless run regardless of which sandbox dir it lived in.  Using a flag
+  // (not a magic name string) so the chart can theme it without parsing.
+  const headlessBucket = { sessions: 0, messages: 0, durationSec: 0, sessions_detail: [], underlyingProjects: new Set() };
+
   for (const s of sessions) {
     const proj = s.working_directory ? path.basename(s.working_directory) : 'unknown';
-    if (!byProject[proj]) byProject[proj] = { sessions: 0, messages: 0, durationSec: 0, sessions_detail: [] };
-    byProject[proj].sessions++;
-    const msgs = msgBySession[s.id] || 0;
-    byProject[proj].messages += msgs;
     const durSec = Math.max(0, (s.last_activity_at || 0) - (s.created_at || 0));
-    byProject[proj].durationSec += durSec;
-    byProject[proj].sessions_detail.push({
+    const msgs = msgBySession[s.id] || 0;
+    const detail = {
       id: s.id,
       title: s.title || s.id.slice(0, 8),
       durationSec: durSec,
       durationStr: formatDuration(durSec),
       messages: msgs,
-    });
+    };
+
+    if (_isHeadlessSession(s)) {
+      headlessBucket.sessions++;
+      headlessBucket.messages += msgs;
+      headlessBucket.durationSec += durSec;
+      headlessBucket.sessions_detail.push(detail);
+      headlessBucket.underlyingProjects.add(proj);
+      continue;
+    }
+
+    if (!byProject[proj]) byProject[proj] = { sessions: 0, messages: 0, durationSec: 0, sessions_detail: [] };
+    byProject[proj].sessions++;
+    byProject[proj].messages += msgs;
+    byProject[proj].durationSec += durSec;
+    byProject[proj].sessions_detail.push(detail);
   }
-  return Object.entries(byProject)
+
+  const result = Object.entries(byProject)
     .map(([name, d]) => ({
       name, sessions: d.sessions, messages: d.messages,
       durationSec: d.durationSec, durationStr: formatDuration(d.durationSec),
       sessions_detail: d.sessions_detail.sort((a, b) => b.durationSec - a.durationSec),
-    }))
-    .sort((a, b) => b.messages - a.messages);
+    }));
+
+  // Append the synthetic headless project (if any) and re-sort the whole
+  // list together so it lands wherever its scale puts it.  The detail rows
+  // are re-sorted post-merge so the popover shows the longest-running
+  // headless runs first regardless of which sandbox dir they came from.
+  if (headlessBucket.sessions > 0) {
+    result.push({
+      name: '⧉ headless',
+      headless: true,
+      underlyingProjectCount: headlessBucket.underlyingProjects.size,
+      sessions: headlessBucket.sessions,
+      messages: headlessBucket.messages,
+      durationSec: headlessBucket.durationSec,
+      durationStr: formatDuration(headlessBucket.durationSec),
+      sessions_detail: headlessBucket.sessions_detail.sort((a, b) => b.durationSec - a.durationSec),
+    });
+  }
+
+  return result.sort((a, b) => b.messages - a.messages);
 }
 
-/** Top tools used across all sessions (sampled for performance) */
-function topTools(db) {
+/**
+ * Top tools used across all sessions, partitioned into interactive vs headless.
+ * The split lets the dashboard's tool chart show both populations without
+ * mixing them — useful since headless agents drive a very different tool
+ * distribution (heavy on exec/read, light on ask_user_question).
+ *
+ * Sampling: rather than the previous unordered `LIMIT 8000` (which picked
+ * up rows in physical order, skewing toward whichever cohort had written
+ * more recently to disk), we order by rowid DESC so the sample is the
+ * most-recent 8000 tool-call-bearing nodes — a more honest snapshot.
+ */
+function topTools(db, sessions) {
+  const headlessIds = new Set(sessions.filter(_isHeadlessSession).map(s => s.id));
   const rows = db.prepare(
-    "SELECT chat_message FROM message_nodes WHERE chat_message LIKE '%\"name\":%' LIMIT 8000"
+    "SELECT session_id, chat_message FROM message_nodes WHERE chat_message LIKE '%\"name\":%' ORDER BY rowid DESC LIMIT 8000"
   ).all();
   const counts = {};
   for (const r of rows) {
-    try {
-      const m = JSON.parse(r.chat_message);
-      if (!Array.isArray(m.tool_calls)) continue;
-      for (const tc of m.tool_calls) {
-        const name = tc?.name || tc?.function?.name;
-        if (name) counts[name] = (counts[name] || 0) + 1;
-      }
-    } catch { /* skip */ }
+    let m;
+    try { m = JSON.parse(r.chat_message); } catch { continue; }
+    if (!Array.isArray(m.tool_calls)) continue;
+    const isHeadless = headlessIds.has(r.session_id);
+    for (const tc of m.tool_calls) {
+      const name = tc?.name || tc?.function?.name;
+      if (!name) continue;
+      if (!counts[name]) counts[name] = { interactiveCalls: 0, headlessCalls: 0 };
+      if (isHeadless) counts[name].headlessCalls++;
+      else            counts[name].interactiveCalls++;
+    }
   }
   return Object.entries(counts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 12)
-    .map(([name, calls]) => ({ name, calls }));
+    .map(([name, c]) => ({
+      name,
+      calls: c.interactiveCalls + c.headlessCalls,
+      interactiveCalls: c.interactiveCalls,
+      headlessCalls: c.headlessCalls,
+    }))
+    .sort((a, b) => b.calls - a.calls)
+    .slice(0, 12);
 }
 
 /** Message node activity by hour-of-day, split into 3 time buckets */
@@ -418,7 +489,7 @@ function getStats() {
     activity:    sessionActivityBuckets(sessions),
     sessionsByDay: sessionsByDay(sessions),
     projects:    projectBreakdown(db, sessions),
-    tools:       topTools(db),
+    tools:       topTools(db, sessions),
     activityByHour: activityByHour(db),
     tokensByHour,
     tokenHeatmap,

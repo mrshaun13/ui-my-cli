@@ -84,6 +84,9 @@ browser reloads. They are never sent to the server.
 
 | Key | File |
 | --- | --- |
-| `devin-dash:cold-days` | `Sidebar.jsx` |
+| `devin-dash:sidebar-collapsed` | `App.jsx` |
+| `devin-dash:sidebar-width` | `App.jsx` |
+| `devin-dash:cold-days` | `App.jsx` |
+| `devin-dash:open-tabs` | `App.jsx` |
 | `devin-dash:search-archived` | `Sidebar.jsx` |
 | `devin-dash:show-headless` | `Sidebar.jsx` |
