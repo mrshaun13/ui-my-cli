@@ -61,7 +61,34 @@ module.exports = {
     'Anyone who can reach the port can view all sessions, spawn terminals, ' +
     'and modify session titles.\n\n' +
     'If you need remote access, use SSH port-forwarding instead of exposing the port:\n\n' +
-    '```bash\nssh -L 7575:localhost:7575 your-remote-host\n```',
+    '```bash\nssh -L 7575:localhost:7575 your-remote-host\n```\n\n' +
+    '### Deployment model & dev-server posture\n\n' +
+    '- **Production** runs `npm start` → Express (`server/index.js`) serving the ' +
+    'pre-built static assets from `client/dist/`. Vite is `devDependencies` only ' +
+    'and is **never** running in production.\n' +
+    '- **Development** uses `cd client && npm run dev` to run the Vite dev server. ' +
+    '`client/vite.config.js` explicitly pins `server.host = "127.0.0.1"` so the ' +
+    'dev server is only reachable from the loopback interface. **Do not run ' +
+    '`npm run dev -- --host` or remove that pin** — Vite has had multiple ' +
+    'CVE-class issues (arbitrary file read via WebSocket `fetchModule`, ' +
+    '`.map` path traversal) that are only exploitable when the dev server is ' +
+    'reachable over the network.\n\n' +
+    '### Dependency pinning policy\n\n' +
+    'When a dependency has an active advisory against it, we **exact-pin** ' +
+    '(no `^` / `~`) the patched version so a transitive install can\'t silently ' +
+    'regress us onto a vulnerable copy. Other deps stay on their floated ' +
+    'ranges to keep up with non-security patches automatically. Currently ' +
+    'pinned for this reason:\n\n' +
+    '- `vite` pinned to `6.4.2` in `client/package.json` (fixes the WebSocket ' +
+    '`fetchModule` and `.map` traversal advisories in earlier 6.x).\n' +
+    '- `postcss` pinned to `8.5.12` via `client/package.json#overrides` ' +
+    '(fixes the `</style>` XSS advisory). The `overrides` block is scoped to ' +
+    'the `client/` install root — `client/` runs its own `npm install` (its ' +
+    'own lockfile) per the root `postinstall` script, which is what makes the ' +
+    'override take effect there.\n\n' +
+    'Run `npm audit` from both the repo root and `client/` after any dependency ' +
+    'change to confirm zero advisories. When a future advisory clears, you can ' +
+    'unpin to rejoin the floated range.',
 
   architecture_overview:
     'The server is a single Node.js process (Express + ws) that reads the Devin CLI\'s ' +
