@@ -47,14 +47,27 @@ function moduleOneliner(src) {
   return doc.split('\n')[0].trim();
 }
 
-/** Extracts all app.METHOD('/path', ...) route definitions from Express server source. */
+/** Extracts app.METHOD('/path', ...) and app.METHOD(['/path', ...], ...) route definitions. */
 function extractRoutes(src) {
   const result = [];
+  const seen = new Set();
+  const add = (method, routePath) => {
+    if (routePath === '*') return;
+    const key = `${method.toUpperCase()} ${routePath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push({ method: method.toUpperCase(), path: routePath });
+  };
   const re = /app\.(get|post|delete|put|patch)\(\s*['"]([^'"]+)['"]/g;
   let m;
   while ((m = re.exec(src)) !== null) {
-    if (m[2] === '*') continue; // skip catch-all
-    result.push({ method: m[1].toUpperCase(), path: m[2] });
+    add(m[1], m[2]);
+  }
+  const arrayRe = /app\.(get|post|delete|put|patch)\(\s*\[([^\]]+)\]/g;
+  while ((m = arrayRe.exec(src)) !== null) {
+    const method = m[1];
+    const paths = m[2].match(/['"]([^'"]+)['"]/g) || [];
+    for (const raw of paths) add(method, raw.slice(1, -1));
   }
   return result;
 }
@@ -120,13 +133,13 @@ function parseStatusTable(jsdoc) {
 }
 
 /**
- * Extracts all 'codex-dash:key-name' localStorage key strings from a set of sources.
+ * Extracts static dashboard localStorage key strings from a set of sources.
  * For each, also captures the const variable name if the string is assigned to one.
  */
 function extractLocalStorageKeys(sources) {
   const keys = [];
   const seen = new Set();
-  const re   = /'(codex-dash:[\w-]+)'/g;
+  const re   = /'((?:codex|agent)-dash:[\w-]+)'/g;
   for (const { name, src } of sources) {
     let m;
     while ((m = re.exec(src)) !== null) {
@@ -154,6 +167,10 @@ function collect() {
   const codexPathSrc = read('server/codex-paths.js');
   const codexStoreSrc = read('server/codex-store.js');
   const dashboardStoreSrc = read('server/dashboard-store.js');
+  const providerIndexSrc = read('server/providers/index.js');
+  const providerCodexSrc = read('server/providers/codex/index.js');
+  const providerDevinSrc = read('server/providers/devin/index.js');
+  const providerDevinPathsSrc = read('server/providers/devin/paths.js');
 
   const pkg       = JSON.parse(read('package.json'));
   const clientPkg = JSON.parse(read('client/package.json'));
@@ -167,6 +184,10 @@ function collect() {
     { name: 'server/codex-paths.js', src: codexPathSrc },
     { name: 'server/codex-store.js', src: codexStoreSrc },
     { name: 'server/dashboard-store.js', src: dashboardStoreSrc },
+    { name: 'server/providers/index.js', src: providerIndexSrc },
+    { name: 'server/providers/codex/index.js', src: providerCodexSrc },
+    { name: 'server/providers/devin/index.js', src: providerDevinSrc },
+    { name: 'server/providers/devin/paths.js', src: providerDevinPathsSrc },
   ];
 
   const clientKeyFiles = [
@@ -238,11 +259,10 @@ function buildReadme(d) {
   const prereqList  = prose.prerequisites.map(p => p.startsWith('  ') ? p : `- ${p}`).join('\n');
 
   const dbPathTable = mdTable(
-    ['Platform', 'Default path'],
+    ['Provider', 'Default local state'],
     [
-      ['Linux / WSL2', '`~/.codex/state_*.sqlite` + `~/.codex/sessions/**/*.jsonl`'],
-      ['macOS',        '`~/.codex/state_*.sqlite` + `~/.codex/sessions/**/*.jsonl`'],
-      ['Windows / WSL', '`~/.codex/state_*.sqlite` inside the active WSL/Linux home'],
+      ['Codex', '`~/.codex/state_*.sqlite` + `~/.codex/sessions/**/*.jsonl`'],
+      ['Devin', '`$XDG_DATA_HOME/devin/cli/sessions.db` or `~/.local/share/devin/cli/sessions.db`'],
     ]
   );
 
@@ -331,13 +351,13 @@ Default is \`7575\`. Override with the \`PORT\` environment variable:
 PORT=8080 npm start
 \`\`\`
 
-### Codex State Path
+### Provider State Paths
 
-The dashboard reads local Codex state. Platform defaults:
+The dashboard reads local provider state. Defaults:
 
 ${dbPathTable}
 
-Override with \`CODEX_HOME\` or \`CODEX_STATE_DB_PATH\`:
+Override Codex with \`CODEX_HOME\` or \`CODEX_STATE_DB_PATH\`:
 
 \`\`\`bash
 CODEX_HOME=/custom/codex-home npm start
@@ -346,6 +366,7 @@ CODEX_STATE_DB_PATH=/custom/path/state_5.sqlite npm start
 
 Session title renames are dashboard-local. Codex-owned state is read-only
 except archive/restore operations performed through the Codex CLI.
+Override Devin with \`DEVIN_DB_PATH\` or \`DEVIN_DASHBOARD_DB_PATH\`.
 
 ### All Environment Variables
 
@@ -363,19 +384,19 @@ ${clientSection}
 
 ### WebSocket Protocol
 
-**\`/ws/terminal/:sessionId\`** — PTY bridge
+**\`/ws/:providerId/terminal/:sessionId\`** — PTY bridge
 
 - Client → Server: \`{ type: "input", data }\` | \`{ type: "resize", cols, rows }\`
 - Server → Client: \`{ type: "output", data }\` | \`{ type: "exit", exitCode }\`
 
-**\`/ws/status\`** — live session status feed (server-push only)
+**\`/ws/:providerId/status\`** — live session status feed (server-push only)
 
 - Server → Client: \`{ type: "sessions", data: Session[] }\` every 3 seconds
 - Server → Client: \`{ type: "latest-prompt", data }\` on DB write events
 
 ### Status Detection
 
-Derived from Codex thread metadata and rollout JSONL activity:
+Derived by the selected provider adapter from local session state:
 
 ${statusTable}
 
@@ -429,10 +450,12 @@ ${routeTable}
 
 ## WebSocket Endpoints
 
-### \`/ws/terminal/:sessionId\`
+### \`/ws/:providerId/terminal/:sessionId\`
 
 PTY bridge — bidirectional terminal I/O. Connect with a session ID to attach
-to (or spawn) that session's terminal process.
+to (or spawn) that provider session's terminal process.
+
+Compatibility alias: \`/ws/terminal/:sessionId\` uses the default provider.
 
 **Optional query parameters:** \`?cols=80&rows=24\`
 
@@ -459,10 +482,12 @@ ${mdTable(
 New connections receive a replay of the last 256 KB of PTY output immediately
 on connect, so switching back to a session shows its terminal history.
 
-### \`/ws/status\`
+### \`/ws/:providerId/status\`
 
 Live session status feed. The server pushes updates automatically — no client
 requests needed after the initial connection.
+
+Compatibility alias: \`/ws/status\` uses the default provider.
 
 **Server → Client:**
 
@@ -552,12 +577,14 @@ ${clientDepTable}
 
 ## Status State Machine
 
-The status adapter in \`server/codex-store.js\` reads Codex thread metadata
-and recent rollout JSONL messages and returns one of four status values:
+Each provider adapter returns one of four status values. Codex derives status
+from local thread metadata and rollout JSONL; Devin derives status from recent
+message_nodes in Devin \`sessions.db\`.
 
 ${statusTable}
 
-The full logic lives in \`server/codex-store.js\`.
+The Codex logic lives in \`server/codex-store.js\`; the Devin logic lives in
+\`server/providers/devin/store.js\`.
 
 ## Storage Model
 
@@ -567,21 +594,22 @@ The full logic lives in \`server/codex-store.js\`.
 | Message history and tool events | Codex rollout JSONL under \`~/.codex/sessions/\` | Read-only |
 | Archive state | Codex CLI \`archive\` / \`unarchive\` commands | Codex-owned |
 | Dashboard title overrides | \`~/.codex/ui-my-cli-dashboard.db\` | Read-write (dashboard only) |
+| Devin session metadata/history | Devin \`sessions.db\` | Read-only except title rename |
+| Devin archive state | Devin dashboard metadata DB next to \`sessions.db\` | Read-write (dashboard only) |
 | User preferences (repo filters, cold-days threshold) | Browser \`localStorage\` | Client-side only; never sent to server |
 
 ## WebSocket Architecture
 
 The server maintains two WebSocket namespaces:
 
-1. **PTY bridge** (\`/ws/terminal/:id\`) — One \`node-pty\` process per session ID.
+1. **PTY bridge** (\`/ws/:providerId/terminal/:id\`) — One \`node-pty\` process per provider/session ID.
    Multiple browser tabs can attach to the same PTY simultaneously and share
    the same terminal stream. A rolling 256 KB scrollback buffer replays
    terminal history to new connections.
 
-2. **Status feed** (\`/ws/status\`) — Server-push only. Sends the full session
-   list every 3 seconds. Also watches the Codex state DB, WAL/SHM files, and
-   sessions directory (debounced 120 ms) to deliver updates without waiting for
-   the next poll interval.
+2. **Status feed** (\`/ws/:providerId/status\`) — Server-push only. Sends the full session
+   list every 3 seconds. Each provider watches its own local state files
+   (debounced 120 ms) to deliver updates without waiting for the next poll interval.
 `;
 }
 
@@ -632,7 +660,9 @@ ${scriptList}
 
 | File | Why |
 |------|-----|
+| \`server/providers/index.js\` | Provider registry, default provider, provider metadata |
 | \`server/codex-store.js\` | Core Codex session data model, status detection, archive logic |
+| \`server/providers/devin/store.js\` | Legacy Devin session data model, status detection, archive logic |
 | \`server/index.js\` | All REST endpoints, WebSocket protocol, broadcast logic |
 | \`client/src/hooks/useStatusFeed.js\` | How the client receives live session updates |
 | \`client/src/components/Terminal.jsx\` | xterm.js + PTY WebSocket bridge |
@@ -641,28 +671,29 @@ ${scriptList}
 
 ## Status Values (Canonical)
 
-These are the only valid status strings in the system, returned by the Codex
-status adapter in \`server/codex-store.js\`. Use them consistently across all
-client components.
+These are the only valid status strings in the system, returned by provider
+status adapters. Use them consistently across all client components.
 
 | Value | Meaning |
 |-------|---------|
 | \`active\` | Tool calls in flight, or activity within the last 60 seconds |
-| \`question\` | Codex's last message ends with \`?\` — waiting for your reply |
-| \`finished\` | Codex stopped without a question — task done or paused |
+| \`question\` | Agent's last message ends with \`?\` — waiting for your reply |
+| \`finished\` | Agent stopped without a question — task done or paused |
 | \`idle\` | No activity for more than 10 minutes |
 
 The value \`archived\` is used at the API layer to mean "hidden from the active
-list". Codex owns archive state through \`codex archive\` and \`codex unarchive\`.
+list". Archive behavior is provider-owned: Codex uses \`codex archive\` /
+\`codex unarchive\`; Devin uses dashboard-local archive metadata.
 
 ## Session Object Shape
 
 \`\`\`js
-// Returned by listSessions() and getSession() via server/sessions.js
+// Returned by provider listSessions() and getSession()
 {
-  id:               string,  // Codex session UUID
-  title:            string,  // User-defined or truncated UUID
-  workingDir:       string,  // Repo path where codex was run
+  id:               string,  // Provider session ID
+  provider:         string,  // codex | devin
+  title:            string,  // User-defined or provider-derived title
+  workingDir:       string,  // Repo path where the provider was run
   project:          string,  // path.basename(workingDir)
   model:            string,  // LLM model name
   status:           string,  // active | question | finished | idle
@@ -701,10 +732,11 @@ ${checklistItems}
 `;
 })()}## Adding a New REST Endpoint
 
-1. Add \`app.METHOD('/api/path', handler)\` in \`server/index.js\`
-2. If it mutates session data, call \`broadcastSessions()\` to push an update
-3. Add the description to \`scripts/doc-prose.js\` under \`routeDescriptions\`
-4. Run \`npm run docs\` — the API reference auto-updates
+1. Add \`app.METHOD('/api/:providerId/path', handler)\` in \`server/index.js\`
+2. Resolve provider behavior through \`server/providers/index.js\`
+3. If it mutates session data, call \`broadcastSessions(provider.id)\` to push an update
+4. Add the description to \`scripts/doc-prose.js\` under \`routeDescriptions\`
+5. Run \`npm run docs\` — the API reference auto-updates
 
 ## Adding a New WebSocket Message Type
 

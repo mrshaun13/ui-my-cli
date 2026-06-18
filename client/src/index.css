@@ -164,6 +164,55 @@ html, body, #root {
   background: var(--border);
 }
 
+.provider-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+}
+
+.provider-switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.provider-switch-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.provider-switch-btn.active {
+  color: var(--text-primary);
+  border-color: var(--border-bright);
+  background: var(--bg-active);
+}
+
+.provider-switch-btn.unavailable {
+  opacity: 0.55;
+}
+
+.provider-switch-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  box-shadow: 0 0 8px currentColor;
+}
+
 .topbar-meta {
   font-size: 11px;
   color: var(--text-muted);
@@ -1396,6 +1445,28 @@ html, body, #root {
   text-overflow: ellipsis;
 }
 
+.model-usage-model {
+  color: inherit;
+}
+
+.model-usage-name-reasoning {
+  color: #ff8a4c;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.model-usage-reasoning {
+  border: 1px solid color-mix(in srgb, #ff8a4c 45%, transparent);
+  border-radius: 999px;
+  color: #ff8a4c;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .model-usage-out {
   font-size: 11px;
   font-family: var(--font-mono);
@@ -1429,6 +1500,8 @@ html, body, #root {
 .model-bar-input  { background: var(--blue); opacity: 0.7; }
 .model-bar-cwrite { background: var(--yellow); opacity: 0.6; }
 .model-bar-cread  { background: var(--purple); opacity: 0.5; }
+.model-bar-reasoning { background: #ff8a4c; opacity: 0.75; }
+.model-bar-unknown { background: var(--text-muted); opacity: 0.45; }
 
 .model-usage-detail {
   display: flex;
@@ -2612,6 +2685,13 @@ html, body, #root {
   font-size: 10px;
   color: var(--text-muted);
   font-style: italic;
+}
+
+.preview-model-reasoning {
+  color: #ff8a4c;
+  font-family: var(--font-mono);
+  font-style: normal;
+  text-transform: uppercase;
 }
 
 .preview-model-switches {

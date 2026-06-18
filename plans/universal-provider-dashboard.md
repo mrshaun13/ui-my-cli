@@ -1,6 +1,6 @@
 # Universal Provider Dashboard Plan
 
-Status: planned
+Status: implemented
 Created: 2026-06-17
 
 ## Goal
@@ -543,3 +543,167 @@ split the app into provider modules before either implementation drifts further.
 Do not run two app copies unless the provider-switch refactor proves too costly.
 The long-term cost of two ports, two PM2 apps, duplicated UI fixes, and separate
 docs is higher than a clean provider boundary now.
+
+## Implementation Status - 2026-06-18
+
+Status: implemented.
+
+Checkpoint:
+
+- Created branch `universal-provider-dashboard`.
+- Committed the previous Codex-only retrofit as
+  `8b4626d checkpoint: codex dashboard retrofit`.
+- Left unrelated untracked `misc/` untouched.
+
+Implemented architecture:
+
+- Added provider registry in `server/providers/index.js`.
+- Added Codex provider wrapper in `server/providers/codex/index.js`.
+- Recovered the old Devin implementation into provider-local modules under
+  `server/providers/devin/`.
+- Converted REST routes to provider-prefixed routes:
+  `/api/:providerId/...`.
+- Kept compatibility aliases such as `/api/sessions` and `/api/stats` pointed
+  at the default provider.
+- Converted WebSockets to provider-prefixed routes:
+  `/ws/:providerId/status` and `/ws/:providerId/terminal/:sessionId`.
+- Kept compatibility aliases `/ws/status` and `/ws/terminal/:sessionId`.
+- Converted PTY keys to provider-scoped keys so Codex and Devin sessions cannot
+  collide.
+- Added top-level client provider switch.
+- Scoped tabs, repo filters, archive/search preferences, cold-days threshold,
+  pending sessions, analytics, previews, context chart, and terminal sockets to
+  the active provider.
+- Gated expensive provider stats fetches until after the first provider session
+  feed arrives. This prevents Devin analytics from blocking the initial Devin
+  session WebSocket paint.
+- Added provider switch smoke coverage.
+- Updated generated docs and this plan artifact.
+
+Telemetry correction added after implementation review:
+
+- Parsed Codex rollout `event_msg` records with `payload.type === "token_count"`.
+- Replaced the incorrect Codex analytics mapping that treated
+  `threads.tokens_used` as output tokens.
+- Added Codex token fields to preview/stats payloads:
+  `totalInputTokens`, `inputTokens` as fresh input, `cachedInputTokens`,
+  `cacheReadTokens`, `outputTokens`, `visibleOutputTokens`,
+  `reasoningOutputTokens`, `unclassifiedTokens`, `totalTokens`,
+  `peakContextTokens`, `modelContextWindow`, and `tokenTelemetrySource`.
+- Grouped Codex model analytics by `model + reasoning_effort`, so
+  `gpt-5.5/high`, `gpt-5.5/xhigh`, `gpt-5.5/medium`, and `gpt-5.5/low` are not
+  collapsed into one misleading row.
+- Updated token time-series aggregation to use per-call
+  `last_token_usage` events instead of putting a full session total into the
+  thread's last-updated hour.
+- Updated dashboard and preview labels to distinguish visible output,
+  reasoning output, fresh input, cached input, cache write, and unclassified
+  fallback tokens without estimating pricing.
+- Made the Codex model usage row identity explicit as
+  `model / reasoning: <level>` so repeated model names cannot be mistaken for
+  duplicate rows.
+- Added regression coverage that enforces one row per `model + reasoningEffort`
+  and validates the non-overlapping token arithmetic:
+  `fresh input + cached input = total input`,
+  `visible output + reasoning output = output`, and
+  `total input + output = total`.
+
+Validation evidence:
+
+```text
+npm run build
+# passed
+
+npm run docs:check
+# passed
+
+PORT=7585 npm run test:smoke
+# 10 passed
+
+PORT=7585 npm test
+# 20 passed
+
+npm audit --omit=dev
+# found 0 vulnerabilities
+```
+
+Direct backend provider validation:
+
+```text
+/api/status -> providers ["codex:true", "devin:true"]
+/api/codex/sessions -> 20 sessions, firstProvider "codex"
+/api/devin/sessions -> 123 sessions, firstProvider "devin"
+/api/codex/stats -> 200
+/api/devin/stats -> 200
+/api/sessions -> compatibility alias, 20 Codex sessions
+```
+
+Browser validation:
+
+```text
+Codex -> Devin toggle:
+  logo "Devin Dashboard"
+  sidebar "SESSIONS (123)"
+  cards 53
+
+Devin -> Codex toggle:
+  logo "Codex Dashboard"
+  sidebar "SESSIONS (20)"
+  cards 3
+
+page errors: []
+```
+
+Codex telemetry validation:
+
+```text
+http://127.0.0.1:7575/api/codex/stats
+# model rows split by reasoning effort:
+# gpt-5.5/high, gpt-5.5/xhigh, gpt-5.5/medium, gpt-5.5/low
+# rows include totalTokens, inputTokens, cachedInputTokens, outputTokens,
+# reasoningOutputTokens, and calls
+
+http://127.0.0.1:7575/api/codex/sessions/:id/preview
+# tokenTelemetrySource "codex.token_count"
+# includes reasoningEffort, cachedInputTokens, cacheReadTokens,
+# visibleOutputTokens, reasoningOutputTokens, peakContextTokens,
+# modelContextWindow
+
+Live browser DOM check:
+# model usage table rendered rows like:
+# gpt-5.5 / REASONING: MEDIUM
+# gpt-5.5 / REASONING: X-HIGH
+# gpt-5.5 / REASONING: HIGH
+# gpt-5.5 / REASONING: LOW
+# each row contained exactly one visible reasoning label
+# page errors: []
+```
+
+Live service validation:
+
+```text
+npm run pm2:restart
+# rebuilt client and restarted PM2 app codex-dashboard on port 7575
+
+http://127.0.0.1:7575/api/status
+# 200, providers ["codex:true", "devin:true"]
+
+http://127.0.0.1:3740/api/inventory
+# codex-dashboard online, kind "pm2", url "http://localhost:7575", risk "low"
+
+pm2 save
+# saved current process list
+
+npm run test:smoke
+# 12 passed
+
+npm test
+# 22 passed
+```
+
+Known follow-up:
+
+- PM2 still uses the historical app name `codex-dashboard` so the existing
+  local orchestrator discovery keeps working. A later rename to
+  `agent-dashboard` is cosmetic and should be coordinated with PM2/orchestrator
+  expectations.

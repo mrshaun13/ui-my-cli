@@ -2,7 +2,7 @@
 
 ## Project Summary
 
-A browser-based dashboard for managing multiple Codex CLI agent sessions. Replaces tab-hunting with a click-driven UI: real embedded terminals, live status badges, analytics, and one-click agent switching.
+A browser-based dashboard for managing multiple local headless-agent sessions across Codex and Devin. Replaces tab-hunting with a click-driven UI: real embedded terminals, live status badges, analytics, and a hard provider switch that keeps each agent dashboard isolated.
 
 **Stack:** Node.js >=18.0.0 · Express · WebSocket (`ws`) ·
 `better-sqlite3` · `node-pty` · React 19 · Vite · xterm.js
@@ -34,7 +34,9 @@ A browser-based dashboard for managing multiple Codex CLI agent sessions. Replac
 
 | File | Why |
 |------|-----|
+| `server/providers/index.js` | Provider registry, default provider, provider metadata |
 | `server/codex-store.js` | Core Codex session data model, status detection, archive logic |
+| `server/providers/devin/store.js` | Legacy Devin session data model, status detection, archive logic |
 | `server/index.js` | All REST endpoints, WebSocket protocol, broadcast logic |
 | `client/src/hooks/useStatusFeed.js` | How the client receives live session updates |
 | `client/src/components/Terminal.jsx` | xterm.js + PTY WebSocket bridge |
@@ -43,28 +45,29 @@ A browser-based dashboard for managing multiple Codex CLI agent sessions. Replac
 
 ## Status Values (Canonical)
 
-These are the only valid status strings in the system, returned by the Codex
-status adapter in `server/codex-store.js`. Use them consistently across all
-client components.
+These are the only valid status strings in the system, returned by provider
+status adapters. Use them consistently across all client components.
 
 | Value | Meaning |
 |-------|---------|
 | `active` | Tool calls in flight, or activity within the last 60 seconds |
-| `question` | Codex's last message ends with `?` — waiting for your reply |
-| `finished` | Codex stopped without a question — task done or paused |
+| `question` | Agent's last message ends with `?` — waiting for your reply |
+| `finished` | Agent stopped without a question — task done or paused |
 | `idle` | No activity for more than 10 minutes |
 
 The value `archived` is used at the API layer to mean "hidden from the active
-list". Codex owns archive state through `codex archive` and `codex unarchive`.
+list". Archive behavior is provider-owned: Codex uses `codex archive` /
+`codex unarchive`; Devin uses dashboard-local archive metadata.
 
 ## Session Object Shape
 
 ```js
-// Returned by listSessions() and getSession() via server/sessions.js
+// Returned by provider listSessions() and getSession()
 {
-  id:               string,  // Codex session UUID
-  title:            string,  // User-defined or truncated UUID
-  workingDir:       string,  // Repo path where codex was run
+  id:               string,  // Provider session ID
+  provider:         string,  // codex | devin
+  title:            string,  // User-defined or provider-derived title
+  workingDir:       string,  // Repo path where the provider was run
   project:          string,  // path.basename(workingDir)
   model:            string,  // LLM model name
   status:           string,  // active | question | finished | idle
@@ -82,7 +85,9 @@ list". Codex owns archive state through `codex archive` and `codex unarchive`.
 - Session status values are lowercase strings: `active`, `question`, `finished`, `idle`. The value `archived` is used by the API but not stored in the database.
 - All server modules use CommonJS (`require` / `module.exports`).
 - The client uses ES modules with React 19 + Vite.
-- Codex archive state is changed through `codex archive` / `codex unarchive`. Dashboard-only title overrides are stored in `~/.codex/ui-my-cli-dashboard.db`.
+- Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).
+- Codex archive state is changed through `codex archive` / `codex unarchive`. Dashboard-only Codex title overrides are stored in `~/.codex/ui-my-cli-dashboard.db`.
+- Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.
 - Production: `npm start` — must run `npm run build` first.
 - Development: `node --watch server/index.js` + `cd client && npm run dev`.
 - **PM2 caveat** — PM2 keeps the old process in memory until explicitly restarted. After any server-side code change, always run `npm run pm2:restart` (which rebuilds the client and restarts the process). A bare `npm run build` is **not enough** — the running Node process still executes the old code.
@@ -115,10 +120,11 @@ Before writing code, run through these questions:
 
 ## Adding a New REST Endpoint
 
-1. Add `app.METHOD('/api/path', handler)` in `server/index.js`
-2. If it mutates session data, call `broadcastSessions()` to push an update
-3. Add the description to `scripts/doc-prose.js` under `routeDescriptions`
-4. Run `npm run docs` — the API reference auto-updates
+1. Add `app.METHOD('/api/:providerId/path', handler)` in `server/index.js`
+2. Resolve provider behavior through `server/providers/index.js`
+3. If it mutates session data, call `broadcastSessions(provider.id)` to push an update
+4. Add the description to `scripts/doc-prose.js` under `routeDescriptions`
+5. Run `npm run docs` — the API reference auto-updates
 
 ## Adding a New WebSocket Message Type
 
@@ -148,7 +154,7 @@ E2E tests use **Playwright** (Chromium only) and run against the **live PM2-mana
 ### Prerequisites
 
 - Dashboard running via PM2: `npm run pm2:start` (or confirm with `pm2 list`)
-- At least one Codex CLI session must exist (run `codex` once) — tests interact with session cards
+- At least one Codex CLI session must exist (run `codex` once) — default-provider tests interact with session cards
 - Playwright browsers installed: `npx playwright install chromium` (one-time setup)
 
 ### Commands
@@ -164,7 +170,7 @@ E2E tests use **Playwright** (Chromium only) and run against the **live PM2-mana
 ### Gotchas & Pitfalls
 
 - **Server must be running first.** Tests do NOT start the server — they hit `localhost:7575` served by PM2. If the server is down, tests fail with a clear message: "Dashboard not reachable... Start it first: npm run pm2:start".
-- **Session cards arrive via WebSocket**, not in the initial HTML. The sidebar renders "No sessions found" until the `/ws/status` WebSocket delivers the first `sessions` message (up to 3 seconds). Use `waitForSessions(page)` from `tests/helpers.js` instead of a bare `page.goto("/")` when you need session cards.
+- **Session cards arrive via WebSocket**, not in the initial HTML. The sidebar renders "No sessions found" until the provider-scoped `/ws/:providerId/status` WebSocket delivers the first `sessions` message (up to 3 seconds). Use `waitForSessions(page)` from `tests/helpers.js` instead of a bare `page.goto("/")` when you need session cards.
 - **After server code changes**, run `npm run pm2:restart` (not just `npm run build`). PM2 keeps the old process in memory.
 - **Port override:** Set `PORT=XXXX` before running tests if the server is on a non-default port. The Playwright config and helpers both read `process.env.PORT`.
 - **Chromium only.** Firefox and WebKit are not installed. The Playwright config has a single `chromium` project. Run `npx playwright install` to add other browsers.

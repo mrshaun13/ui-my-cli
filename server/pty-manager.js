@@ -1,13 +1,13 @@
 /**
  * PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients.
  *
- * One PTY per session ID. Multiple WS clients can attach to the same PTY
+ * One PTY per provider/session ID. Multiple WS clients can attach to the same PTY
  * (e.g. two browser tabs), all sharing the same terminal stream.
  *
- * The PTY runs: codex resume <session-id>
+ * The PTY runs the selected provider's resume command.
  *
  * On WSL: we need to ensure the shell environment is properly inherited
- * so the codex binary is on PATH.
+ * so the selected CLI binary is on PATH.
  *
  * Output buffering:
  *   Each PTY keeps a rolling byte buffer (SCROLLBACK_BYTES) of recent output.
@@ -19,6 +19,7 @@
 const os = require('os');
 const fs = require('fs');
 const pty = require('node-pty');
+const { DEFAULT_PROVIDER_ID, getProvider } = require('./providers');
 
 // ~256 KB of scrollback replay per session — enough for a full screen + history
 const SCROLLBACK_BYTES = 256 * 1024;
@@ -78,7 +79,7 @@ const TERMINAL_QUERY_RE = new RegExp(
   'g'
 );
 
-// Map of sessionId -> { pty, clients: Set<WebSocket>, scrollback: Buffer[] }
+// Map of `${providerId}:${sessionId}` -> { pty, clients, scrollback, providerId, sessionId }
 const ptys = new Map();
 
 // ── Shell resolution ────────────────────────────────────────────────────────
@@ -108,20 +109,8 @@ function getShell() {
   return '/bin/sh';
 }
 
-/**
- * Validates that a session ID looks like a UUID (hex + hyphens only).
- * Prevents shell injection when the ID is interpolated into a command string.
- */
-const SESSION_ID_RE = /^[a-f0-9-]+$/i;
-
-/**
- * Returns the Codex argv for resuming or launching a session.
- */
-function getCodexArgs(sessionId) {
-  if (sessionId && !SESSION_ID_RE.test(sessionId)) {
-    throw new Error(`Invalid session ID: ${sessionId}`);
-  }
-  return sessionId ? ['resume', sessionId] : [];
+function ptyKey(providerId, sessionId) {
+  return `${providerId || DEFAULT_PROVIDER_ID}:${sessionId}`;
 }
 
 // ── Scrollback buffer ────────────────────────────────────────────────────────
@@ -171,7 +160,7 @@ function sendPtyError(ws, message) {
  * Wires up PTY output → WebSocket broadcast + scrollback accumulation,
  * and PTY exit → client notification + map cleanup.
  */
-function wirePtyEvents(entry, sessionId) {
+function wirePtyEvents(entry) {
   entry.pty.onData(data => {
     appendScrollback(entry, data);
     const dead = [];
@@ -205,7 +194,7 @@ function wirePtyEvents(entry, sessionId) {
  * On failure, logs a detailed diagnostic and (if a ws client is provided)
  * sends a user-friendly error to the terminal instead of crashing the server.
  */
-function doSpawn(command, args, cwd, cols, rows, ws) {
+function doSpawn(providerId, command, args, cwd, cols, rows, ws) {
   try {
     const p = pty.spawn(command, args, {
       name: 'xterm-256color',
@@ -218,6 +207,7 @@ function doSpawn(command, args, cwd, cols, rows, ws) {
         COLORTERM: 'truecolor',
         // Let child Codex sessions know they were launched from this dashboard.
         UI_MY_CLI_DASHBOARD: '1',
+        UI_MY_CLI_PROVIDER: providerId,
         // Strip Homebrew's npm_config_prefix so NVM loads cleanly in the PTY.
         // On macOS, Homebrew sets this to /opt/homebrew which makes NVM refuse
         // to start. Empty string effectively unsets it; harmless on Linux/WSL.
@@ -259,11 +249,12 @@ function doSpawn(command, args, cwd, cols, rows, ws) {
  * workingDir: the Codex thread cwd — used as PTY cwd for resume/new sessions.
  * ws: initial WebSocket client to attach.
  */
-function spawnPty(sessionId, workingDir, ws, cols = 80, rows = 24) {
-  if (ptys.has(sessionId)) {
+function spawnPty(providerId, sessionId, workingDir, ws, cols = 80, rows = 24) {
+  const key = ptyKey(providerId, sessionId);
+  if (ptys.has(key)) {
     // Attach new client to existing PTY — replay scrollback so the terminal
     // isn't blank after a session switch.
-    const entry = ptys.get(sessionId);
+    const entry = ptys.get(key);
     replayScrollback(entry, ws);
     entry.clients.add(ws);
     // Resize the PTY to the new client's dimensions. This is critical for
@@ -274,20 +265,23 @@ function spawnPty(sessionId, workingDir, ws, cols = 80, rows = 24) {
     return entry.pty;
   }
 
-  const command = 'codex';
-  const args = getCodexArgs(sessionId);
+  const provider = getProvider(providerId);
+  const shell = getShell();
+  const { command, args } = provider.buildCommand(sessionId, { shell, platform: process.platform });
 
   // Use the session's working directory so Codex resumes with the same root.
   // Fall back to home if the directory no longer exists (deleted repo, etc.).
   const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
 
-  const entry = doSpawn(command, args, cwd, cols, rows, ws);
+  const entry = doSpawn(provider.id, command, args, cwd, cols, rows, ws);
   if (!entry) return null;
 
+  entry.providerId = provider.id;
+  entry.sessionId = sessionId;
   entry.clients.add(ws);
-  ptys.set(sessionId, entry);
+  ptys.set(key, entry);
   // Wire events immediately after map insertion so no PTY output is lost
-  wirePtyEvents(entry, sessionId);
+  wirePtyEvents(entry);
 
   return entry.pty;
 }
@@ -299,8 +293,8 @@ function spawnPty(sessionId, workingDir, ws, cols = 80, rows = 24) {
  * If spawning fails (e.g. node-pty native module mismatch), the server stays
  * alive and the client receives an error message in the terminal pane.
  */
-function attachClient(sessionId, workingDir, ws, cols, rows) {
-  const p = spawnPty(sessionId, workingDir, ws, cols, rows);
+function attachClient(providerId, sessionId, workingDir, ws, cols, rows) {
+  const p = spawnPty(providerId || DEFAULT_PROVIDER_ID, sessionId, workingDir, ws, cols, rows);
   if (!p) return; // spawn failed — error already sent to ws
 
   ws.on('message', raw => {
@@ -345,8 +339,13 @@ function attachClient(sessionId, workingDir, ws, cols, rows) {
 /**
  * Kills the PTY for a given session and notifies all clients.
  */
-function killPty(sessionId) {
-  const entry = ptys.get(sessionId);
+function killPty(providerId, sessionId) {
+  if (sessionId === undefined) {
+    sessionId = providerId;
+    providerId = DEFAULT_PROVIDER_ID;
+  }
+  const key = ptyKey(providerId, sessionId);
+  const entry = ptys.get(key);
   if (!entry) return false;
 
   try {
@@ -354,22 +353,28 @@ function killPty(sessionId) {
   } catch {
     // Already dead
   }
-  ptys.delete(sessionId);
+  ptys.delete(key);
   return true;
 }
 
 /**
  * Returns whether a PTY is currently running for a session.
  */
-function isPtyActive(sessionId) {
-  return ptys.has(sessionId);
+function isPtyActive(providerId, sessionId) {
+  if (sessionId === undefined) {
+    sessionId = providerId;
+    providerId = DEFAULT_PROVIDER_ID;
+  }
+  return ptys.has(ptyKey(providerId, sessionId));
 }
 
 /**
  * Returns active PTY session IDs.
  */
-function activePtySessions() {
-  return [...ptys.keys()];
+function activePtySessions(providerId = null) {
+  return [...ptys.entries()]
+    .filter(([, entry]) => !providerId || entry.providerId === providerId)
+    .map(([key, entry]) => ({ key, providerId: entry.providerId, sessionId: entry.sessionId }));
 }
 
 /**
@@ -380,16 +385,24 @@ function activePtySessions() {
  * No WebSocket client is attached initially — the client will connect via the
  * standard /ws/terminal/:sessionId path once the real ID is known.
  */
-function spawnNewSession(tempKey, workingDir, cols = 80, rows = 24) {
-  const command = 'codex';
-  const args = getCodexArgs(null);
+function spawnNewSession(providerId, tempKey, workingDir, cols = 80, rows = 24) {
+  if (workingDir === undefined) {
+    workingDir = tempKey;
+    tempKey = providerId;
+    providerId = DEFAULT_PROVIDER_ID;
+  }
+  const provider = getProvider(providerId);
+  const shell = getShell();
+  const { command, args } = provider.buildCommand(null, { shell, platform: process.platform });
   const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
 
-  const entry = doSpawn(command, args, cwd, cols, rows, null);
+  const entry = doSpawn(provider.id, command, args, cwd, cols, rows, null);
   if (!entry) return null;
 
-  ptys.set(tempKey, entry);
-  wirePtyEvents(entry, tempKey);
+  entry.providerId = provider.id;
+  entry.sessionId = tempKey;
+  ptys.set(ptyKey(provider.id, tempKey), entry);
+  wirePtyEvents(entry);
 
   return entry;
 }
@@ -399,11 +412,19 @@ function spawnNewSession(tempKey, workingDir, cols = 80, rows = 24) {
  * This lets attachClient(realSessionId, ...) find the already-running PTY
  * instead of spawning a duplicate.
  */
-function rekeyPty(oldKey, newKey) {
-  const entry = ptys.get(oldKey);
+function rekeyPty(providerId, oldKey, newKey) {
+  if (newKey === undefined) {
+    newKey = oldKey;
+    oldKey = providerId;
+    providerId = DEFAULT_PROVIDER_ID;
+  }
+  const oldPtyKey = ptyKey(providerId, oldKey);
+  const newPtyKey = ptyKey(providerId, newKey);
+  const entry = ptys.get(oldPtyKey);
   if (!entry) return false;
-  ptys.delete(oldKey);
-  ptys.set(newKey, entry);
+  ptys.delete(oldPtyKey);
+  entry.sessionId = newKey;
+  ptys.set(newPtyKey, entry);
   return true;
 }
 

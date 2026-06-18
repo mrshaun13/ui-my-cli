@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import SubagentTimeline from './SubagentTimeline'
+import { providerApiPath } from '../lib/providers.js'
 
 const STATUS_LABEL = {
   question: 'Needs your input',
@@ -57,6 +58,11 @@ function friendlyModel(raw) {
     .replace(/-(\d)/g, ' $1')         // "sonnet 4 6" spacing
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function friendlyReasoningEffort(effort) {
+  if (!effort || effort === 'unknown') return null
+  return String(effort).replace(/^xhigh$/i, 'x-high')
 }
 
 // Model family → color
@@ -171,8 +177,9 @@ function ToolMiniBar({ tools }) {
 }
 
 // ── Model usage section ───────────────────────────────────────────────────────
-function ModelSection({ startingModel, currentModel, modelSwitches }) {
+function ModelSection({ startingModel, currentModel, modelSwitches, reasoningEffort }) {
   const modelChanged = startingModel !== currentModel
+  const reasoning = friendlyReasoningEffort(reasoningEffort)
 
   // Build a deduplicated list of all models touched in this session
   // Order: startingModel first, then any switch targets, deduped
@@ -201,6 +208,11 @@ function ModelSection({ startingModel, currentModel, modelSwitches }) {
         </span>
         {modelChanged && (
           <span className="preview-model-note">current</span>
+        )}
+        {reasoning && (
+          <span className="preview-model-note preview-model-reasoning">
+            reasoning {reasoning}
+          </span>
         )}
       </div>
 
@@ -319,7 +331,7 @@ function CopyButton({ text }) {
   )
 }
 
-function ChatBubble({ turn, index, total }) {
+function ChatBubble({ turn, index, total, providerLabel }) {
   // Per-bubble expansion state — split from a single boolean so each side
   // can be opened independently.  Both flags are one-way at the bubble level
   // (the per-bubble click only ever sets to true) so a user mid-selection
@@ -394,7 +406,7 @@ function ChatBubble({ turn, index, total }) {
         >
           <CopyButton text={turn.assistantText} />
           <span className="preview-bubble-label">
-            codex
+            {providerLabel}
             {assistTimestamp && <span className="preview-bubble-time">{assistTimestamp.time}</span>}
           </span>
           <p className="preview-bubble-text">{assistDisplay}</p>
@@ -403,7 +415,7 @@ function ChatBubble({ turn, index, total }) {
         <div className="preview-bubble preview-bubble-assistant preview-bubble-dim">
           {/* No copy button here — there is no real text to copy, just the
               "(tool calls only)" placeholder. */}
-          <span className="preview-bubble-label">codex</span>
+          <span className="preview-bubble-label">{providerLabel}</span>
           <p className="preview-bubble-text" style={{ fontStyle: 'italic', opacity: 0.4 }}>
             (tool calls only — no text response)
           </p>
@@ -424,7 +436,7 @@ function ChatBubble({ turn, index, total }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function SessionPreview({ sessionId, onResume, onArchive, onRestore, onRename }) {
+export default function SessionPreview({ providerId, providerLabel = 'Agent', sessionId, onResume, onArchive, onRestore, onRename }) {
   const [data, setData]       = useState(null)
   const [error, setError]     = useState(null)
   const [renaming, setRenaming] = useState(false)
@@ -461,17 +473,17 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
     fetchingRef.current = false
     setSubagents(null)
     setSessionConfig(null)
-    fetch(`/api/sessions/${sessionId}/preview`)
+    fetch(providerApiPath(providerId, `sessions/${sessionId}/preview`))
       .then(r => { if (!r.ok) throw new Error('Session not found'); return r.json() })
       .then(d => { setData(d); setNameValue(d.title) })
       .catch(e => setError(e.message))
-  }, [sessionId])
+  }, [providerId, sessionId])
 
   // Auto-load the initial conversation batch when preview data arrives
   useEffect(() => {
     if (!data || !sessionId || convoTurns.length > 0) return
     fetchingRef.current = false
-    fetch(`/api/sessions/${sessionId}/conversation?offset=0&limit=${INITIAL_BATCH}`)
+    fetch(`${providerApiPath(providerId, `sessions/${sessionId}/conversation`)}?offset=0&limit=${INITIAL_BATCH}`)
       .then(r => { if (!r.ok) throw new Error('Failed to load conversation'); return r.json() })
       .then(result => {
         setConvoTurns(result.turns)
@@ -483,29 +495,29 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
         })
       })
       .catch(e => setConvoError(e.message))
-  }, [data, sessionId])
+  }, [data, providerId, sessionId])
 
   // Lazy-fetch subagent timeline when preview reports subagentCount > 0
   useEffect(() => {
     if (!data || !sessionId || !data.subagentCount) return
     let cancelled = false
-    fetch(`/api/sessions/${sessionId}/subagents`)
+    fetch(providerApiPath(providerId, `sessions/${sessionId}/subagents`))
       .then(r => { if (!r.ok) throw new Error('subagent fetch failed'); return r.json() })
       .then(d => { if (!cancelled) setSubagents(Array.isArray(d) ? d : []) })
       .catch(() => { if (!cancelled) setSubagents([]) })  // silently degrade on error
     return () => { cancelled = true }
-  }, [data, sessionId])
+  }, [data, providerId, sessionId])
 
   // Lazy-fetch session config when preview data arrives
   useEffect(() => {
     if (!data || !sessionId) return
     let cancelled = false
-    fetch(`/api/sessions/${sessionId}/config`)
+    fetch(providerApiPath(providerId, `sessions/${sessionId}/config`))
       .then(r => { if (!r.ok) throw new Error('config fetch failed'); return r.json() })
       .then(d => { if (!cancelled) setSessionConfig(d) })
       .catch(() => { if (!cancelled) setSessionConfig(null) })
     return () => { cancelled = true }
-  }, [data, sessionId])
+  }, [data, providerId, sessionId])
 
   // Auto-select text when input appears
   useEffect(() => {
@@ -545,8 +557,8 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
 
     const offset = convoTurnsLenRef.current
     const url = loadAll
-      ? `/api/sessions/${sessionId}/conversation?offset=0&limit=0`
-      : `/api/sessions/${sessionId}/conversation?offset=${offset}&limit=${limit}`
+      ? `${providerApiPath(providerId, `sessions/${sessionId}/conversation`)}?offset=0&limit=0`
+      : `${providerApiPath(providerId, `sessions/${sessionId}/conversation`)}?offset=${offset}&limit=${limit}`
 
     fetch(url)
       .then(r => { if (!r.ok) throw new Error('Failed to load conversation'); return r.json() })
@@ -577,7 +589,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
       })
       .catch(e => setConvoError(e.message))
       .finally(() => { fetchingRef.current = false; setConvoLoading(false) })
-  }, [sessionId])
+  }, [providerId, sessionId])
 
   const loadMore    = useCallback(() => fetchConversation(nextBatch), [fetchConversation, nextBatch])
   const loadAll     = useCallback(() => fetchConversation(0, true), [fetchConversation])
@@ -640,6 +652,11 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
             >
               {friendlyModel(data.currentModel)}
             </span>
+            {friendlyReasoningEffort(data.reasoningEffort) && (
+              <span className="preview-badge preview-badge-dim">
+                reasoning {friendlyReasoningEffort(data.reasoningEffort)}
+              </span>
+            )}
             {data.startingModel !== data.currentModel && (
               <span className="preview-badge preview-badge-dim" title={`Started on: ${friendlyModel(data.startingModel)}`}>
                 ⇄ switched
@@ -671,18 +688,18 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
         <StatPill
           label="user msgs"
           value={data.userMsgCount}
-          tip="Number of messages you sent to Codex in this session."
+          tip={`Number of messages you sent to ${providerLabel} in this session.`}
         />
         <StatPill
           label="tool calls"
           value={data.toolCallCount.toLocaleString()}
-          tip="Total number of tool invocations Codex made — exec, read, edit, grep, web fetch, etc. Higher counts mean more autonomous work."
+          tip={`Total number of tool invocations ${providerLabel} made — exec, read, edit, grep, web fetch, etc. Higher counts mean more autonomous work.`}
         />
         <StatPill
           label="compactions"
           value={data.compactionCount}
           highlight={data.compactionCount > 5 ? 'var(--yellow)' : undefined}
-          tip="Context compactions happen when the conversation history gets too long. Codex summarizes earlier turns to free up context window space. Frequent compactions may indicate a very long or complex session."
+          tip={`Context compactions happen when the conversation history gets too long. ${providerLabel} summarizes earlier turns to free up context window space. Frequent compactions may indicate a very long or complex session.`}
         />
         <StatPill
           label="peak ctx"
@@ -690,6 +707,13 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
           highlight={data.peakContextTokens > 100000 ? 'var(--yellow)' : undefined}
           tip="The highest token count recorded in the context window during this session. Yellow = exceeded 100k tokens. Context limits vary by model — approaching the limit triggers compaction."
         />
+        {data.modelContextWindow > 0 && (
+          <StatPill
+            label="ctx window"
+            value={formatTokens(data.modelContextWindow)}
+            tip="Context window reported by local provider telemetry for this session."
+          />
+        )}
         <StatPill
           label="nodes"
           value={data.totalNodes.toLocaleString()}
@@ -697,31 +721,46 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
         />
         {data.outputTokens > 0 && (
           <StatPill
-            label="output tok"
+            label="output"
             value={formatTokens(data.outputTokens)}
             highlight={data.outputTokens > 500000 ? 'var(--accent)' : undefined}
-            tip="Total tokens generated by the LLM in this session. Higher output = more work done by the model."
+            tip="Total output tokens reported by the provider. For Codex this includes reasoning output when present."
+          />
+        )}
+        {data.reasoningOutputTokens > 0 && (
+          <StatPill
+            label="reasoning"
+            value={formatTokens(data.reasoningOutputTokens)}
+            highlight="var(--yellow)"
+            tip="Reasoning output tokens reported by Codex token telemetry. This is a subset of total output, not an additional total."
           />
         )}
         {data.inputTokens > 0 && (
           <StatPill
-            label="input tok"
+            label="fresh input"
             value={formatTokens(data.inputTokens)}
-            tip="Total fresh input tokens sent to the LLM across all API calls in this session. These are non-cached context tokens."
+            tip="Input tokens not served from cache. For Codex this is computed as input_tokens minus cached_input_tokens."
           />
         )}
         {data.cacheReadTokens > 0 && (
           <StatPill
-            label="cache read"
+            label="cached input"
             value={formatTokens(data.cacheReadTokens)}
-            tip="Tokens served from prompt cache hits. Cache reads are ~10× cheaper than fresh input tokens."
+            tip="Cached input tokens reported by local provider telemetry."
           />
         )}
         {data.cacheWriteTokens > 0 && (
           <StatPill
             label="cache write"
             value={formatTokens(data.cacheWriteTokens)}
-            tip="Tokens written to the prompt cache. Cache creation costs ~1.25× the input token rate but pays for itself on subsequent cache hits."
+            tip="Tokens written to the prompt cache when the provider reports this separately."
+          />
+        )}
+        {data.unclassifiedTokens > 0 && (
+          <StatPill
+            label="unclassified"
+            value={formatTokens(data.unclassifiedTokens)}
+            tip="Fallback token count from the provider thread table when detailed token telemetry is unavailable."
           />
         )}
         {data.subagentCount > 0 && (
@@ -729,7 +768,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
             label="subagents"
             value={data.subagentCount}
             highlight="var(--purple)"
-            tip="Number of subagents spawned by Codex during this session. Subagents handle delegated tasks (code exploration, parallel work) in their own context."
+            tip={`Number of subagents spawned by ${providerLabel} during this session. Subagents handle delegated tasks (code exploration, parallel work) in their own context.`}
           />
         )}
       </div>
@@ -789,6 +828,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
                 turn={turn}
                 index={i}
                 total={convoTurns.length}
+                providerLabel={providerLabel}
               />
             ))
           )}
@@ -798,7 +838,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
         <div className="preview-tools-col">
           <div className="preview-section-label" style={{ marginTop: 14 }}>
             Tool breakdown
-            <InfoBubble tip="How often Codex used each tool in this session. Tools let Codex interact with your system — run commands, read/edit files, search code, browse the web, and more." />
+            <InfoBubble tip={`How often ${providerLabel} used each tool in this session. Tools let ${providerLabel} interact with your system — run commands, read/edit files, search code, browse the web, and more.`} />
           </div>
           <ToolMiniBar tools={data.topTools} />
 
@@ -806,13 +846,14 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
             startingModel={data.startingModel}
             currentModel={data.currentModel}
             modelSwitches={data.modelSwitches}
+            reasoningEffort={data.reasoningEffort}
           />
 
           {subagents?.length > 0 && (
             <>
               <div className="preview-section-label" style={{ marginTop: 14 }}>
                 Subagents
-                <InfoBubble tip="Background and foreground subagents spawned by Codex during this session. Each subagent runs in its own context with a specific profile (explore = read-only, general = full access)." />
+                <InfoBubble tip={`Background and foreground subagents spawned by ${providerLabel} during this session. Each subagent runs in its own context with a specific profile (explore = read-only, general = full access).`} />
               </div>
               <SubagentTimeline subagents={subagents} />
             </>
@@ -869,7 +910,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
             <div className="preview-info-row">
               <span className="preview-info-key">
                 permission
-                <InfoBubble tip="Permission mode controls how freely Codex can act without asking you first. 'cautious' asks before most actions; 'normal' asks for risky operations; 'yolo' runs autonomously." />
+                <InfoBubble tip={`Permission mode controls how freely ${providerLabel} can act without asking you first. 'cautious' asks before most actions; 'normal' asks for risky operations; 'yolo' runs autonomously.`} />
               </span>
               <span className="preview-info-val">{data.permissionMode}</span>
             </div>

@@ -11,12 +11,11 @@
  */
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import { isHeadless } from '../lib/headless.js'
+import { providerStorageKey } from '../lib/providers.js'
 
-const STORAGE_KEY = 'codex-dash:visible-repos'
-
-function loadRepoFilter() {
+function loadRepoFilter(providerId) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(providerStorageKey(providerId, 'visible-repos'))
     if (!raw) return null
     const parsed = JSON.parse(raw)
     // Legacy migration: string[] → all entries become 'active'
@@ -27,12 +26,16 @@ function loadRepoFilter() {
   return null
 }
 
-function saveRepoFilter(map) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(map))) } catch { /* ignore */ }
+function saveRepoFilter(providerId, map) {
+  try { localStorage.setItem(providerStorageKey(providerId, 'visible-repos'), JSON.stringify(Object.fromEntries(map))) } catch { /* ignore */ }
 }
 
-export function useRepoFilter(sessions) {
-  const [repoFilter, setRepoFilter] = useState(loadRepoFilter)
+export function useRepoFilter(sessions, providerId) {
+  const [repoFilter, setRepoFilter] = useState(() => loadRepoFilter(providerId))
+
+  useEffect(() => {
+    setRepoFilter(loadRepoFilter(providerId))
+  }, [providerId])
 
   // Headless sessions are intentionally excluded from the repo-pill universe:
   // there can be a lot of them (one per scheduled run) and the user never
@@ -90,36 +93,36 @@ export function useRepoFilter(sessions) {
     if (mostRecent) {
       const initial = new Map([[mostRecent, 'active']])
       setRepoFilter(initial)
-      saveRepoFilter(initial)
+      saveRepoFilter(providerId, initial)
     }
-  }, [interactiveSessions, repoFilter])
+  }, [interactiveSessions, repoFilter, providerId])
 
   const addRepo = useCallback((repo) => {
     setRepoFilter(prev => {
       const next = new Map(prev ?? [])
       next.set(repo, 'active')
-      saveRepoFilter(next)
+      saveRepoFilter(providerId, next)
       return next
     })
-  }, [])
+  }, [providerId])
 
   const removeRepo = useCallback((repo) => {
     setRepoFilter(prev => {
       const next = new Map(prev ?? [])
       next.delete(repo)
-      saveRepoFilter(next)
+      saveRepoFilter(providerId, next)
       return next
     })
-  }, [])
+  }, [providerId])
 
   const toggleRepo = useCallback((repo) => {
     setRepoFilter(prev => {
       const next = new Map(prev ?? [])
       next.set(repo, next.get(repo) === 'active' ? 'disabled' : 'active')
-      saveRepoFilter(next)
+      saveRepoFilter(providerId, next)
       return next
     })
-  }, [])
+  }, [providerId])
 
   // Bulk add every repo as active. Used by the "All" button so the user
   // doesn't have to add repos one-at-a-time through the "+" dropdown.
@@ -127,19 +130,19 @@ export function useRepoFilter(sessions) {
     setRepoFilter(prev => {
       const next = new Map(prev ?? [])
       for (const r of allRepos) next.set(r, 'active')
-      saveRepoFilter(next)
+      saveRepoFilter(providerId, next)
       return next
     })
-  }, [allRepos])
+  }, [allRepos, providerId])
 
   // Clear every pill — counterpart to addAllRepos for the toggle.
   const clearAllRepos = useCallback(() => {
     setRepoFilter(() => {
       const next = new Map()
-      saveRepoFilter(next)
+      saveRepoFilter(providerId, next)
       return next
     })
-  }, [])
+  }, [providerId])
 
   return {
     repoFilter,

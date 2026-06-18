@@ -1,5 +1,5 @@
 /**
- * AgentCard — one row in the sidebar representing a Codex session.
+ * AgentCard — one row in the sidebar representing a provider session.
  *
  * Click targets:
  *   Status icon (left square)  → onPreview(id)  — opens read-only preview, no PTY
@@ -183,4 +183,3 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, is
     </div>
   )
 })
-

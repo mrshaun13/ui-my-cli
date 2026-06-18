@@ -1,5 +1,5 @@
 /**
- * Session facade for the dashboard.
+ * Codex compatibility session facade for legacy imports.
  *
  * The app is now Codex-only. This module keeps the existing server imports
  * stable while delegating all session behavior to the Codex adapter.

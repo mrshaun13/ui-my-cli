@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Codex Dashboard User Guide</title>
+  <title>Agent Dashboard User Guide</title>
   <style>
     body {
       margin: 0;
@@ -41,18 +41,20 @@
 </head>
 <body>
   <main>
-    <h1>Codex Dashboard</h1>
+    <h1>Agent Dashboard</h1>
     <p class="lead">
-      A local browser dashboard for managing Codex CLI and VS Code extension
-      sessions with embedded terminals, live status, search, archive/restore,
-      previews, and local analytics.
+      A local browser dashboard for managing Codex and Devin sessions with a
+      hard provider switch, embedded terminals, live status, search,
+      archive/restore, previews, and provider-scoped analytics.
     </p>
 
     <h2>Prerequisites</h2>
     <ul>
       <li>Node.js 18 or newer.</li>
-      <li>Codex CLI installed and run at least once.</li>
+      <li>Codex CLI installed and run at least once for the Codex dashboard.</li>
+      <li>Devin CLI installed and run at least once for the Devin dashboard.</li>
       <li>Local Codex state under <code>~/.codex</code>, including <code>state_*.sqlite</code> and rollout JSONL files.</li>
+      <li>Local Devin state under <code>~/.local/share/devin/cli/sessions.db</code> or <code>$XDG_DATA_HOME/devin/cli/sessions.db</code>.</li>
       <li>For tests: Playwright Chromium installed with <code>npx playwright install chromium</code>.</li>
     </ul>
 
@@ -74,18 +76,21 @@ npm run pm2:stop</code></pre>
 
     <h2>What It Reads</h2>
     <ul>
-      <li>Thread metadata from <code>~/.codex/state_*.sqlite</code>.</li>
-      <li>Conversation and tool history from <code>~/.codex/sessions/**/*.jsonl</code>.</li>
-      <li>CLI and VS Code extension sessions from the same local Codex thread store.</li>
-      <li>Dashboard-local title overrides from <code>~/.codex/ui-my-cli-dashboard.db</code>.</li>
+      <li>Codex thread metadata from <code>~/.codex/state_*.sqlite</code>.</li>
+      <li>Codex conversation and tool history from <code>~/.codex/sessions/**/*.jsonl</code>.</li>
+      <li>Codex CLI and VS Code extension sessions from the same local Codex thread store.</li>
+      <li>Devin session metadata and message history from Devin <code>sessions.db</code>.</li>
+      <li>Provider-scoped dashboard metadata for title overrides and archive state.</li>
     </ul>
 
     <h2>What It Changes</h2>
     <ul>
-      <li>New sessions launch local <code>codex</code> in the selected working directory.</li>
-      <li>Existing sessions resume with <code>codex resume &lt;session-id&gt;</code>.</li>
-      <li>Archive and restore call <code>codex archive</code> and <code>codex unarchive</code>.</li>
-      <li>Session renames are dashboard-local and do not write into Codex internal SQLite tables.</li>
+      <li>New sessions launch the selected local provider CLI in the selected working directory.</li>
+      <li>Existing Codex sessions resume with <code>codex resume &lt;session-id&gt;</code>.</li>
+      <li>Existing Devin sessions resume with <code>devin --resume &lt;session-id&gt; --respect-workspace-trust false</code>.</li>
+      <li>Codex archive and restore call <code>codex archive</code> and <code>codex unarchive</code>.</li>
+      <li>Devin archive and restore use dashboard-local archive metadata.</li>
+      <li>Codex session renames are dashboard-local; Devin renames update Devin's session title field.</li>
     </ul>
 
     <h2>Configuration</h2>
@@ -94,6 +99,9 @@ npm run pm2:stop</code></pre>
       <li><code>CODEX_HOME</code>: Codex home directory, default <code>~/.codex</code>.</li>
       <li><code>CODEX_STATE_DB_PATH</code>: explicit Codex state SQLite path.</li>
       <li><code>UI_MY_CLI_DB_PATH</code>: explicit dashboard metadata SQLite path.</li>
+      <li><code>DEVIN_DB_PATH</code>: explicit Devin <code>sessions.db</code> path.</li>
+      <li><code>DEVIN_DASHBOARD_DB_PATH</code>: explicit Devin dashboard metadata SQLite path.</li>
+      <li><code>UI_MY_CLI_DEFAULT_PROVIDER</code>: default provider for compatibility routes, default <code>codex</code>.</li>
     </ul>
 
     <h2>Testing</h2>

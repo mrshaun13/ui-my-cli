@@ -161,6 +161,7 @@ function readRollout(thread) {
     turns: [],
     tools: [],
     errors: [],
+    tokenEvents: [],
     metadata: {},
     totalEvents: 0,
   };
@@ -197,6 +198,15 @@ function readRollout(thread) {
         result.tools.push({ name: 'tool_output', createdAt, arguments: null });
       }
     } else if (event.type === 'event_msg') {
+      if (event.payload?.type === 'token_count') {
+        result.tokenEvents.push({
+          createdAt,
+          total: event.payload.info?.total_token_usage || null,
+          last: event.payload.info?.last_token_usage || null,
+          modelContextWindow: Number(event.payload.info?.model_context_window || 0),
+          rateLimits: event.payload.rate_limits || null,
+        });
+      }
       msg = eventMessage(event.payload || {});
       if (event.payload?.type && /error|failed|approval/i.test(event.payload.type)) {
         result.errors.push({ type: event.payload.type, createdAt, message: event.payload.message || '' });
@@ -306,14 +316,78 @@ function tokenFromThread(thread) {
   return Number(thread.tokens_used || 0);
 }
 
+function numberField(object, field) {
+  return Number(object?.[field] || 0);
+}
+
+function normalizeTokenUsage(raw = {}) {
+  const totalInputTokens = numberField(raw, 'input_tokens');
+  const cachedInputTokens = numberField(raw, 'cached_input_tokens');
+  const outputTokens = numberField(raw, 'output_tokens');
+  const reasoningOutputTokens = numberField(raw, 'reasoning_output_tokens');
+  const inputTokens = Math.max(0, totalInputTokens - cachedInputTokens);
+  const visibleOutputTokens = Math.max(0, outputTokens - reasoningOutputTokens);
+  const reportedTotal = numberField(raw, 'total_tokens');
+  const totalTokens = reportedTotal || totalInputTokens + outputTokens;
+
+  return {
+    inputTokens,
+    totalInputTokens,
+    cachedInputTokens,
+    cacheReadTokens: cachedInputTokens,
+    cacheWriteTokens: 0,
+    outputTokens,
+    visibleOutputTokens,
+    reasoningOutputTokens,
+    unclassifiedTokens: 0,
+    totalTokens,
+  };
+}
+
+function emptyTokenUsage(unclassifiedTokens = 0) {
+  return {
+    inputTokens: 0,
+    totalInputTokens: 0,
+    cachedInputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+    visibleOutputTokens: 0,
+    reasoningOutputTokens: 0,
+    unclassifiedTokens,
+    totalTokens: unclassifiedTokens,
+  };
+}
+
+function tokenTelemetry(rollout, thread) {
+  const events = rollout?.tokenEvents || [];
+  const latest = [...events].reverse().find(event => event.total);
+  const fallbackTokens = tokenFromThread(thread);
+  const usage = latest?.total ? normalizeTokenUsage(latest.total) : emptyTokenUsage(fallbackTokens);
+  const peakContextTokens = events.reduce((max, event) => {
+    const lastTotal = numberField(event.last, 'total_tokens');
+    return Math.max(max, lastTotal);
+  }, 0);
+  const modelContextWindow = events.reduce((max, event) => Math.max(max, event.modelContextWindow || 0), 0);
+  const latestRateLimits = [...events].reverse().find(event => event.rateLimits)?.rateLimits || null;
+
+  return {
+    ...usage,
+    calls: events.length,
+    peakContextTokens: peakContextTokens || usage.totalTokens || fallbackTokens,
+    modelContextWindow: modelContextWindow || DEFAULT_CONTEXT,
+    rateLimits: latestRateLimits,
+    tokenTelemetrySource: latest ? 'codex.token_count' : (fallbackTokens ? 'threads.tokens_used' : 'none'),
+  };
+}
+
 function getSessionPreview(id) {
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) return null;
   const rollout = readRollout(thread);
   const session = normalizeThread(thread, dashboardStore.titleOverrides(), rollout);
   const durationSec = Math.max(0, (thread.updated_at || 0) - (thread.created_at || 0));
-  const inputTokens = 0;
-  const outputTokens = tokenFromThread(thread);
+  const tokens = tokenTelemetry(rollout, thread);
 
   return {
     ...session,
@@ -331,14 +405,11 @@ function getSessionPreview(id) {
     assistantMsgCount: rollout.messages.filter(m => m.role === 'assistant').length,
     toolCallCount: rollout.tools.length,
     compactionCount: rollout.events.filter(e => JSON.stringify(e).includes('compact')).length,
-    peakContextTokens: tokenFromThread(thread),
+    peakContextTokens: tokens.peakContextTokens,
+    modelContextWindow: tokens.modelContextWindow,
     topTools: topTools(rollout),
     subagentCount: 0,
-    inputTokens,
-    outputTokens,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    totalTokens: inputTokens + outputTokens,
+    ...tokens,
     chatThread: rollout.turns.slice(-5),
     rolloutPath: rollout.path,
     sandboxPolicy: thread.sandbox_policy,
@@ -393,7 +464,9 @@ function getSessionContextBreakdown(id) {
   }
 
   const totalChars = Object.values(charCounts).reduce((a, b) => a + b, 0);
-  const totalUsed = Math.min(DEFAULT_CONTEXT, Math.max(tokenFromThread(thread), Math.ceil(totalChars / 4)));
+  const tokens = tokenTelemetry(rollout, thread);
+  const maxContext = tokens.modelContextWindow || DEFAULT_CONTEXT;
+  const totalUsed = Math.min(maxContext, Math.max(tokens.peakContextTokens, Math.ceil(totalChars / 4)));
   const categories = {};
   for (const [key, chars] of Object.entries(charCounts)) {
     categories[key] = totalChars > 0 ? Math.round((chars / totalChars) * totalUsed) : 0;
@@ -402,8 +475,8 @@ function getSessionContextBreakdown(id) {
   return {
     categories,
     totalUsed,
-    maxContext: DEFAULT_CONTEXT,
-    freeTokens: Math.max(0, DEFAULT_CONTEXT - totalUsed),
+    maxContext,
+    freeTokens: Math.max(0, maxContext - totalUsed),
     compactionCount: rollout.events.filter(e => JSON.stringify(e).includes('compact')).length,
     model: thread.model || 'codex',
   };
@@ -560,22 +633,44 @@ function stats() {
     const rollout = getRollout(thread);
     for (const tool of rollout.tools) toolInteractive[tool.name] = (toolInteractive[tool.name] || 0) + 1;
     const model = thread.model || 'codex';
-    const tokens = tokenFromThread(thread);
-    const modelEntry = modelMap[model] ||= {
+    const reasoningEffort = thread.reasoning_effort || rollout.metadata.reasoning_effort || 'unknown';
+    const modelKey = `${model}::${reasoningEffort}`;
+    const tokens = tokenTelemetry(rollout, thread);
+    const modelEntry = modelMap[modelKey] ||= {
+      key: modelKey,
       model,
+      reasoningEffort,
       calls: 0,
       inputTokens: 0,
+      totalInputTokens: 0,
+      cachedInputTokens: 0,
       outputTokens: 0,
+      visibleOutputTokens: 0,
+      reasoningOutputTokens: 0,
       cacheWriteTokens: 0,
       cacheReadTokens: 0,
+      unclassifiedTokens: 0,
       totalTokens: 0,
       sessions: 0,
     };
-    modelEntry.outputTokens += tokens;
-    modelEntry.totalTokens += tokens;
+    modelEntry.inputTokens += tokens.inputTokens;
+    modelEntry.totalInputTokens += tokens.totalInputTokens;
+    modelEntry.cachedInputTokens += tokens.cachedInputTokens;
+    modelEntry.outputTokens += tokens.outputTokens;
+    modelEntry.visibleOutputTokens += tokens.visibleOutputTokens;
+    modelEntry.reasoningOutputTokens += tokens.reasoningOutputTokens;
+    modelEntry.cacheReadTokens += tokens.cacheReadTokens;
+    modelEntry.cacheWriteTokens += tokens.cacheWriteTokens;
+    modelEntry.unclassifiedTokens += tokens.unclassifiedTokens;
+    modelEntry.totalTokens += tokens.totalTokens;
     modelEntry.sessions++;
-    modelEntry.calls++;
-    addTokenActivity(tokensByHour, tokenHeatmap, thread.updated_at || thread.created_at || 0, tokens);
+    modelEntry.calls += tokens.calls || 1;
+    for (const event of rollout.tokenEvents || []) {
+      if (event.last) addTokenActivity(tokensByHour, tokenHeatmap, event.createdAt, normalizeTokenUsage(event.last));
+    }
+    if (!rollout.tokenEvents?.length && tokens.totalTokens) {
+      addTokenActivity(tokensByHour, tokenHeatmap, thread.updated_at || thread.created_at || 0, tokens);
+    }
     if (thread.first_user_message) {
       recentPrompts.push({
         sessionId: thread.id,
@@ -594,17 +689,16 @@ function stats() {
 
   const sessionMap = Object.fromEntries(threads.map(thread => {
     const rollout = getRollout(thread);
+    const tokens = tokenTelemetry(rollout, thread);
     return [thread.id, {
       id: thread.id,
       title: dashboardStore.getTitle(thread.id) || thread.title || thread.id.slice(0, 8),
       project: projectName(thread.cwd),
+      model: thread.model || 'codex',
+      reasoningEffort: thread.reasoning_effort || rollout.metadata.reasoning_effort || null,
       durationSec: Math.max(0, (thread.updated_at || 0) - (thread.created_at || 0)),
       userMsgCount: rollout.messages.filter(m => m.role === 'user').length,
-      totalTokens: tokenFromThread(thread),
-      outputTokens: tokenFromThread(thread),
-      inputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
+      ...tokens,
     }];
   }));
 
@@ -658,8 +752,12 @@ function emptyTokenHeatmap() {
   );
 }
 
-function addTokenActivity(tokensByHour, heatmap, epochSec, tokens) {
-  if (!epochSec || !tokens) return;
+function addTokenActivity(tokensByHour, heatmap, epochSec, usage) {
+  if (!epochSec || !usage) return;
+  const inputTokens = typeof usage === 'number' ? 0 : (usage.inputTokens || 0) + (usage.cacheReadTokens || 0);
+  const outputTokens = typeof usage === 'number' ? usage : usage.outputTokens || usage.totalTokens || 0;
+  const totalTokens = typeof usage === 'number' ? usage : usage.totalTokens || inputTokens + outputTokens;
+  if (!inputTokens && !outputTokens && !totalTokens) return;
   const now = Math.floor(Date.now() / 1000);
   const age = now - epochSec;
   const date = new Date(epochSec * 1000);
@@ -674,12 +772,14 @@ function addTokenActivity(tokensByHour, heatmap, epochSec, tokens) {
   ];
   for (const [key, seconds] of windows) {
     if (age <= seconds) {
-      tokensByHour[key].output[hour] += tokens;
+      tokensByHour[key].input[hour] += inputTokens;
+      tokensByHour[key].output[hour] += outputTokens;
       heatmap[day][hour].windows[key === '2d' ? '1d' : key] =
-        (heatmap[day][hour].windows[key === '2d' ? '1d' : key] || 0) + tokens;
+        (heatmap[day][hour].windows[key === '2d' ? '1d' : key] || 0) + totalTokens;
     }
   }
-  tokensByHour.all.output[hour] += tokens;
+  tokensByHour.all.input[hour] += inputTokens;
+  tokensByHour.all.output[hour] += outputTokens;
 }
 
 function sourceBreakdown(threads) {

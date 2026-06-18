@@ -10,6 +10,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { providerApiPath } from '../lib/providers.js'
 
 const CATEGORIES = [
   { key: 'systemPrompt',       label: 'System prompt', color: 'var(--yellow)' },
@@ -44,7 +45,7 @@ function arcPath(cx, cy, r, startAngle, endAngle) {
   ].join(' ')
 }
 
-export default function ContextPieChart({ sessionId, tooltipPosition }) {
+export default function ContextPieChart({ providerId, sessionId, tooltipPosition }) {
   const [data, setData] = useState(null)
   const [hover, setHover] = useState(null)
   const wrapRef = useRef(null)
@@ -56,7 +57,7 @@ export default function ContextPieChart({ sessionId, tooltipPosition }) {
     let cancelled = false
 
     const fetchContext = () => {
-      fetch(`/api/sessions/${sessionId}/context`)
+      fetch(providerApiPath(providerId, `sessions/${sessionId}/context`))
         .then(r => { if (!r.ok) throw new Error('context fetch failed'); return r.json() })
         .then(d => { if (!cancelled) setData(d) })
         .catch(() => { if (!cancelled) setData(null) })
@@ -66,7 +67,7 @@ export default function ContextPieChart({ sessionId, tooltipPosition }) {
     const interval = setInterval(fetchContext, 15_000) // refresh every 15s
 
     return () => { cancelled = true; clearInterval(interval) }
-  }, [sessionId])
+  }, [providerId, sessionId])
 
   if (!data) return null
 

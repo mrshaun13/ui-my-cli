@@ -1,5 +1,5 @@
 /**
- * Stats facade for local Codex sessions.
+ * Codex compatibility stats facade for legacy imports.
  */
 
 const codex = require('./codex-store');

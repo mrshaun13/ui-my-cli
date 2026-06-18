@@ -1,15 +1,16 @@
-# Codex Dashboard
+# Agent Dashboard
 
-A browser-based dashboard for managing multiple Codex CLI agent sessions. Replaces tab-hunting with a click-driven UI: real embedded terminals, live status badges, analytics, and one-click agent switching.
+A browser-based dashboard for managing multiple local headless-agent sessions across Codex and Devin. Replaces tab-hunting with a click-driven UI: real embedded terminals, live status badges, analytics, and a hard provider switch that keeps each agent dashboard isolated.
 
 ## Features
 
 - **Live status badges** — ⚡ Question / ⚙ Running / ✓ Finished / · Idle, updated every 3 seconds
-- **Real terminals** — xterm.js + node-pty: identical to running `codex resume` in your shell
+- **Provider switch** — top-level Codex / Devin toggle; sessions, repo filters, tabs, stats, archives, and terminals are scoped to the selected provider
+- **Real terminals** — xterm.js + node-pty: identical to running the selected provider CLI in your shell (`codex resume <id>` or `devin --resume <id>`)
 - **Click to switch** — click any agent in the sidebar to attach its live terminal; switching is instant with scrollback preserved
-- **New session** — floating "+" button in the sidebar lets you start a new Codex session in any previously-used repo; the terminal opens automatically
+- **New session** — floating "+" button in the sidebar lets you start a new Codex or Devin session in any previously-used repo; the terminal opens automatically
 - **Session preview** — click the status badge to open a read-only view of any session's chat history without spawning a PTY
-- **Inline rename** — double-click any session title to rename it (stored in the dashboard metadata database; Codex internals stay read-only)
+- **Inline rename** — double-click any session title to rename it (stored in provider-appropriate local metadata; owned CLI state stays read-only except approved archive/restore paths)
 - **Needs-your-input filter** — one click to show only agents waiting for a reply
 - **Repo filter pills** — filter sessions by project; selection persists across reloads
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
@@ -17,14 +18,15 @@ A browser-based dashboard for managing multiple Codex CLI agent sessions. Replac
 - **Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), token usage, tool call breakdown, model distribution, shown when no session is selected
 - **Context window pie chart** — per-session donut chart showing context window composition (system prompt, user messages, assistant messages, tool calls, tool results, free capacity)
 - **Environment banner** — global config overview on the dashboard home page showing active model, MCP servers, skills, and plugins with color-coded chips
-- **Session config** — per-session Codex metadata: source, model, reasoning effort, sandbox policy, approval mode, skills, plugins, and MCP servers where available
+- **Session config** — per-session provider metadata: source, model, reasoning effort, sandbox policy, approval mode, skills, plugins, and MCP servers where available
 
 ## Quick Start
 
 ### Prerequisites
 
 - **Node.js 18+** — `node --version` to check
-- **Codex CLI installed and run at least once** — creates the sessions database
+- **Codex CLI installed and run at least once** — creates the Codex state database
+- **Devin CLI installed and run at least once** — optional, required only for the Devin dashboard/provider
 - **Native build tools** for node-pty compilation:
   - **Ubuntu / Debian / WSL2**: `sudo apt install build-essential python3`
   - **macOS**: `xcode-select --install`
@@ -74,17 +76,16 @@ Default is `7575`. Override with the `PORT` environment variable:
 PORT=8080 npm start
 ```
 
-### Codex State Path
+### Provider State Paths
 
-The dashboard reads local Codex state. Platform defaults:
+The dashboard reads local provider state. Defaults:
 
-| Platform | Default path |
+| Provider | Default local state |
 | --- | --- |
-| Linux / WSL2 | `~/.codex/state_*.sqlite` + `~/.codex/sessions/**/*.jsonl` |
-| macOS | `~/.codex/state_*.sqlite` + `~/.codex/sessions/**/*.jsonl` |
-| Windows / WSL | `~/.codex/state_*.sqlite` inside the active WSL/Linux home |
+| Codex | `~/.codex/state_*.sqlite` + `~/.codex/sessions/**/*.jsonl` |
+| Devin | `$XDG_DATA_HOME/devin/cli/sessions.db` or `~/.local/share/devin/cli/sessions.db` |
 
-Override with `CODEX_HOME` or `CODEX_STATE_DB_PATH`:
+Override Codex with `CODEX_HOME` or `CODEX_STATE_DB_PATH`:
 
 ```bash
 CODEX_HOME=/custom/codex-home npm start
@@ -93,6 +94,7 @@ CODEX_STATE_DB_PATH=/custom/path/state_5.sqlite npm start
 
 Session title renames are dashboard-local. Codex-owned state is read-only
 except archive/restore operations performed through the Codex CLI.
+Override Devin with `DEVIN_DB_PATH` or `DEVIN_DASHBOARD_DB_PATH`.
 
 ### All Environment Variables
 
@@ -104,46 +106,55 @@ except archive/restore operations performed through the Codex CLI.
 | `CODEX_HOME` | `—` | Override the Codex home directory (default: `~/.codex`) |
 | `CODEX_STATE_DB_PATH` | `—` | Override the auto-detected Codex state SQLite database path |
 | `UI_MY_CLI_DB_PATH` | `—` | Override the dashboard metadata database path |
+| `UI_MY_CLI_DEFAULT_PROVIDER` | `codex` | Override the compatibility/default provider for legacy `/api/...` and `/ws/...` aliases (default: `codex`) |
+| `DEVIN_DB_PATH` | `—` | Override the auto-detected Devin `sessions.db` path |
+| `DEVIN_DASHBOARD_DB_PATH` | `—` | Override the Devin dashboard metadata database path |
+| `XDG_DATA_HOME` | `—` | Override the XDG data directory (default: `~/.local/share`); affects DB path on all platforms |
+| `APPDATA` | `—` | Windows `%APPDATA%` directory — used to find the database path on Windows |
 
 ## Architecture
 
 ```
 server/
-  server/index.js              Codex Dashboard — Express server with WebSocket support.
-  server/sessions.js           Session facade for the dashboard.
-  server/stats.js              Stats facade for local Codex sessions.
+  server/index.js              Agent Dashboard — Express server with WebSocket support.
+  server/sessions.js           Codex compatibility session facade for legacy imports.
+  server/stats.js              Codex compatibility stats facade for legacy imports.
   server/pty-manager.js        PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients.
   server/db-path.js            Compatibility exports for legacy db-path imports.
   server/codex-paths.js        Resolves local Codex state paths.
   server/codex-store.js        Codex session adapter.
   server/dashboard-store.js    Dashboard-owned metadata for local Codex sessions.
+  server/providers/index.js    Provider registry for local headless-agent adapters.
+  server/providers/codex/index.js Codex provider adapter wiring local Codex state into the dashboard contract.
+  server/providers/devin/index.js Devin provider adapter wiring legacy Devin CLI state into the dashboard contract.
+  server/providers/devin/paths.js Resolves Devin-related database paths across platforms.
 
 client/src/
   client/src/App.jsx                               
-  client/src/components/Sidebar.jsx                Sidebar — left panel listing all Codex sessions.
-  client/src/components/AgentCard.jsx              AgentCard — one row in the sidebar representing a Codex session.
+  client/src/components/Sidebar.jsx                Sidebar — left panel listing all sessions for the selected provider.
+  client/src/components/AgentCard.jsx              AgentCard — one row in the sidebar representing a provider session.
   client/src/components/Terminal.jsx               Terminal — xterm.js terminal connected to the server PTY via WebSocket.
   client/src/components/ControlBar.jsx             ControlBar — always-visible context strip at the bottom of the UI.
   client/src/components/DashboardSplash.jsx        DashboardSplash — shown when no session is selected.
   client/src/components/SessionPreview.jsx         SessionPreview — read-only session detail panel.
-  client/src/hooks/useStatusFeed.js                useStatusFeed — subscribes to the server's /ws/status WebSocket
+  client/src/hooks/useStatusFeed.js                useStatusFeed — subscribes to the selected provider's status WebSocket
 ```
 
 ### WebSocket Protocol
 
-**`/ws/terminal/:sessionId`** — PTY bridge
+**`/ws/:providerId/terminal/:sessionId`** — PTY bridge
 
 - Client → Server: `{ type: "input", data }` | `{ type: "resize", cols, rows }`
 - Server → Client: `{ type: "output", data }` | `{ type: "exit", exitCode }`
 
-**`/ws/status`** — live session status feed (server-push only)
+**`/ws/:providerId/status`** — live session status feed (server-push only)
 
 - Server → Client: `{ type: "sessions", data: Session[] }` every 3 seconds
 - Server → Client: `{ type: "latest-prompt", data }` on DB write events
 
 ### Status Detection
 
-Derived from Codex thread metadata and rollout JSONL activity:
+Derived by the selected provider adapter from local session state:
 
 | Status | Meaning |
 | --- | --- |

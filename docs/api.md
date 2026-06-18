@@ -7,31 +7,51 @@ with an appropriate HTTP status code.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/api/status` | Server health check — returns `ok`, active PTY count, uptime seconds |
-| `GET` | `/api/stats` | Full dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins |
-| `GET` | `/api/latest-prompt` | Most recent user prompt from Codex local thread state |
-| `GET` | `/api/sessions` | List all active (non-archived) sessions with derived status |
-| `GET` | `/api/sessions/archived` | List archived (hidden) sessions |
-| `GET` | `/api/sessions/search` | Full-text session search — query param `q` (required), `archived=1` to include archived sessions. Searches title, working directory, prompt history, and user-role message content. Returns same shape as the sessions list. |
-| `GET` | `/api/repos` | List all unique repos (working directories) from past sessions |
-| `POST` | `/api/sessions/create` | Start a new Codex session in the given working directory (body: `{ workingDir: string }`); returns `{ sessionId }` |
+| `GET` | `/api/status` | Server health check — returns `ok`, default provider, provider availability, active PTY count, uptime seconds |
+| `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
+| `GET` | `/api/:providerId/stats` | Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins |
+| `GET` | `/api/stats` | Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default |
+| `GET` | `/api/:providerId/latest-prompt` | Most recent user prompt from the selected provider local state |
+| `GET` | `/api/latest-prompt` | Compatibility alias for the default provider latest prompt |
+| `GET` | `/api/:providerId/sessions` | List all active (non-archived) sessions for one provider with derived status |
+| `GET` | `/api/sessions` | Compatibility alias for the default provider session list |
+| `GET` | `/api/:providerId/sessions/archived` | List archived (hidden) sessions for one provider |
+| `GET` | `/api/sessions/archived` | Compatibility alias for default provider archived sessions |
+| `GET` | `/api/:providerId/sessions/search` | Provider-scoped full-text session search — query param `q` (required), `archived=1` to include archived sessions. |
+| `GET` | `/api/sessions/search` | Compatibility alias for default provider search |
+| `GET` | `/api/:providerId/repos` | List all unique repos (working directories) from one provider's past sessions |
+| `GET` | `/api/repos` | Compatibility alias for default provider repos |
+| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string }`); returns `{ tempKey }` |
+| `POST` | `/api/sessions/create` | Compatibility alias for default provider session creation |
+| `GET` | `/api/:providerId/sessions/:id/preview` | Provider-scoped rich read-only session detail — chat history, stats, top tools |
 | `GET` | `/api/sessions/:id/preview` | Rich read-only session detail — chat history, stats, top tools |
+| `GET` | `/api/:providerId/sessions/:id/conversation` | Provider-scoped paginated user↔assistant conversation turns for a session. |
 | `GET` | `/api/sessions/:id/conversation` | Paginated user↔assistant conversation turns for a session. Query params: `offset` (number of turns to skip from end, default 0), `limit` (max turns to return, 0 = all, default 50). Returns `{ turns, totalTurns, hasMore }`. |
-| `GET` | `/api/sessions/:id/subagents` | Reserved for linked Codex subagent/review thread data. Returns an array; v1 returns `[]`. |
-| `GET` | `/api/sessions/:id/context` | Estimated context breakdown for a Codex session based on rollout JSONL message and tool content. Returns `{ categories, totalUsed, maxContext, freeTokens, compactionCount, model }`. |
-| `GET` | `/api/sessions/:id/config` | Per-session Codex configuration metadata. Returns `{ rules, activeSkills, permissions, model, permissionMode }`. |
+| `GET` | `/api/:providerId/sessions/:id/subagents` | Provider-scoped subagent timeline. Devin reads legacy run_subagent lifecycle data; Codex currently returns `[]`. |
+| `GET` | `/api/sessions/:id/subagents` | Compatibility alias for default provider subagents. |
+| `GET` | `/api/:providerId/sessions/:id/context` | Estimated context breakdown for one provider session. Returns `{ categories, totalUsed, maxContext, freeTokens, compactionCount, model }`. |
+| `GET` | `/api/sessions/:id/context` | Compatibility alias for default provider context. |
+| `GET` | `/api/:providerId/sessions/:id/config` | Per-session provider configuration metadata. Returns `{ rules, activeSkills, permissions, model, permissionMode }` where available. |
+| `GET` | `/api/sessions/:id/config` | Compatibility alias for default provider config. |
+| `GET` | `/api/:providerId/sessions/:id` | Single provider session with `ptyActive` flag |
 | `GET` | `/api/sessions/:id` | Single session with `ptyActive` flag |
+| `POST` | `/api/:providerId/sessions/:id/rename` | Update a provider session title (body: `{ title: string }`) |
 | `POST` | `/api/sessions/:id/rename` | Update session title (body: `{ title: string }`) |
+| `POST` | `/api/:providerId/sessions/:id/kill-pty` | Kill the active provider-scoped PTY for a session without archiving it |
 | `POST` | `/api/sessions/:id/kill-pty` | Kill the active PTY for a session without archiving it |
+| `DELETE` | `/api/:providerId/sessions/:id` | Archive a provider session — kills PTY, hides from active list (reversible) |
 | `DELETE` | `/api/sessions/:id` | Archive a session — kills PTY, hides from active list (reversible) |
+| `POST` | `/api/:providerId/sessions/:id/restore` | Restore an archived provider session to the active list |
 | `POST` | `/api/sessions/:id/restore` | Restore an archived session to the active list |
 
 ## WebSocket Endpoints
 
-### `/ws/terminal/:sessionId`
+### `/ws/:providerId/terminal/:sessionId`
 
 PTY bridge — bidirectional terminal I/O. Connect with a session ID to attach
-to (or spawn) that session's terminal process.
+to (or spawn) that provider session's terminal process.
+
+Compatibility alias: `/ws/terminal/:sessionId` uses the default provider.
 
 **Optional query parameters:** `?cols=80&rows=24`
 
@@ -52,10 +72,12 @@ to (or spawn) that session's terminal process.
 New connections receive a replay of the last 256 KB of PTY output immediately
 on connect, so switching back to a session shows its terminal history.
 
-### `/ws/status`
+### `/ws/:providerId/status`
 
 Live session status feed. The server pushes updates automatically — no client
 requests needed after the initial connection.
+
+Compatibility alias: `/ws/status` uses the default provider.
 
 **Server → Client:**
 
@@ -74,6 +96,11 @@ requests needed after the initial connection.
 | `CODEX_HOME` | `—` | Override the Codex home directory (default: `~/.codex`) |
 | `CODEX_STATE_DB_PATH` | `—` | Override the auto-detected Codex state SQLite database path |
 | `UI_MY_CLI_DB_PATH` | `—` | Override the dashboard metadata database path |
+| `UI_MY_CLI_DEFAULT_PROVIDER` | `codex` | Override the compatibility/default provider for legacy `/api/...` and `/ws/...` aliases (default: `codex`) |
+| `DEVIN_DB_PATH` | `—` | Override the auto-detected Devin `sessions.db` path |
+| `DEVIN_DASHBOARD_DB_PATH` | `—` | Override the Devin dashboard metadata database path |
+| `XDG_DATA_HOME` | `—` | Override the XDG data directory (default: `~/.local/share`); affects DB path on all platforms |
+| `APPDATA` | `—` | Windows `%APPDATA%` directory — used to find the database path on Windows |
 
 ## Client localStorage Keys
 
@@ -84,7 +111,4 @@ browser reloads. They are never sent to the server.
 | --- | --- |
 | `codex-dash:sidebar-collapsed` | `App.jsx` |
 | `codex-dash:sidebar-width` | `App.jsx` |
-| `codex-dash:cold-days` | `App.jsx` |
-| `codex-dash:open-tabs` | `App.jsx` |
-| `codex-dash:search-archived` | `Sidebar.jsx` |
-| `codex-dash:show-headless` | `Sidebar.jsx` |
+| `agent-dash:selected-provider` | `App.jsx` |

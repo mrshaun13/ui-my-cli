@@ -8,6 +8,7 @@ import DashboardSplash from './components/DashboardSplash.jsx'
 import SessionPreview from './components/SessionPreview.jsx'
 import HeadlessPlaceholder from './components/HeadlessPlaceholder.jsx'
 import { isHeadless } from './lib/headless.js'
+import { DEFAULT_PROVIDER_ID, providerApiPath, providerStorageKey } from './lib/providers.js'
 // ContextPieChart is rendered inside ControlBar (not imported here)
 
 /**
@@ -55,34 +56,46 @@ function saveSidebarWidth(w) {
 // Lifted here from Sidebar so it can drive BOTH (a) the sidebar's hot/older
 // divider and (b) the tab auto-close effect.  Single source of truth keeps
 // the two views consistent without dispatching custom events between them.
-const STORAGE_COLD = 'codex-dash:cold-days'
 const COLD_DEFAULT = 3
-function loadColdDays() {
+function loadColdDays(providerId) {
   try {
-    const v = parseInt(localStorage.getItem(STORAGE_COLD), 10)
+    const v = parseInt(localStorage.getItem(providerStorageKey(providerId, 'cold-days')), 10)
     if (!isNaN(v) && v > 0) return v
   } catch { /* ignore */ }
   return COLD_DEFAULT
 }
-function saveColdDays(n) {
-  try { localStorage.setItem(STORAGE_COLD, String(n)) } catch {}
+function saveColdDays(providerId, n) {
+  try { localStorage.setItem(providerStorageKey(providerId, 'cold-days'), String(n)) } catch {}
 }
 
 // ── Tab persistence (localStorage) ───────────────────────────────────────────
-const STORAGE_TABS = 'codex-dash:open-tabs'
-function loadStoredTabs() {
+function loadStoredTabs(providerId) {
   try {
-    const raw = localStorage.getItem(STORAGE_TABS)
+    const raw = localStorage.getItem(providerStorageKey(providerId, 'open-tabs'))
     if (!raw) return null
     const parsed = JSON.parse(raw)
     if (Array.isArray(parsed?.tabs)) return parsed
   } catch { /* ignore */ }
   return null
 }
-function saveStoredTabs(tabs, activeTabId) {
+function saveStoredTabs(providerId, tabs, activeTabId) {
   try {
-    localStorage.setItem(STORAGE_TABS, JSON.stringify({ tabs, activeTabId }))
+    localStorage.setItem(providerStorageKey(providerId, 'open-tabs'), JSON.stringify({ tabs, activeTabId }))
   } catch { /* ignore */ }
+}
+
+const STORAGE_PROVIDER = 'agent-dash:selected-provider'
+const FALLBACK_PROVIDERS = [
+  { id: 'codex', label: 'Codex', command: 'codex', dashboardTitle: 'Codex Dashboard', available: true },
+  { id: 'devin', label: 'Devin', command: 'devin', dashboardTitle: 'Devin Dashboard', available: true },
+]
+
+function loadSelectedProvider() {
+  try { return localStorage.getItem(STORAGE_PROVIDER) || DEFAULT_PROVIDER_ID } catch { return DEFAULT_PROVIDER_ID }
+}
+
+function saveSelectedProvider(providerId) {
+  try { localStorage.setItem(STORAGE_PROVIDER, providerId) } catch {}
 }
 
 // ── Tab state reducer ────────────────────────────────────────────────────────
@@ -161,22 +174,63 @@ function tabReducer(state, action) {
       // Restore from localStorage on initial load
       return { tabs: action.tabs, activeTabId: action.activeTabId }
     }
+    case 'reset': {
+      return { tabs: [], activeTabId: null }
+    }
     default:
       return state
   }
 }
 
+function useProviders() {
+  const [providers, setProviders] = useState(FALLBACK_PROVIDERS)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/providers')
+      .then(r => r.json())
+      .then(d => { if (!cancelled && Array.isArray(d) && d.length > 0) setProviders(d) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  return providers
+}
+
 // Fetch just the env config fields (MCP servers, skills, plugins) for the topbar.
-// Runs once on mount — these are global config, not session-specific.
-function useEnv() {
+// Provider-scoped because Codex and Devin read different local config roots.
+function useEnv(providerId, enabled) {
   const [env, setEnv] = useState(null)
   useEffect(() => {
-    fetch('/api/stats')
+    setEnv(null)
+    if (!enabled) return
+    fetch(providerApiPath(providerId, 'stats'))
       .then(r => r.json())
       .then(d => setEnv({ mcpServers: d.mcpServers || [], skills: d.skills || [], plugins: d.plugins || [] }))
       .catch(() => {})
-  }, [])
+  }, [providerId, enabled])
   return env
+}
+
+function ProviderSwitch({ providers, selectedProviderId, onSelect }) {
+  return (
+    <div className="provider-switch" role="tablist" aria-label="Agent provider">
+      {providers.map(provider => (
+        <button
+          key={provider.id}
+          type="button"
+          role="tab"
+          aria-selected={provider.id === selectedProviderId}
+          className={`provider-switch-btn${provider.id === selectedProviderId ? ' active' : ''}${provider.available === false ? ' unavailable' : ''}`}
+          onClick={() => onSelect(provider.id)}
+          title={provider.available === false ? (provider.error || `${provider.label} is unavailable`) : `${provider.label} dashboard`}
+        >
+          <span className="provider-switch-dot" style={{ background: provider.accent || 'var(--accent)' }} />
+          {provider.label}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 function EnvChips({ mcpServers, skills, plugins }) {
@@ -254,17 +308,29 @@ function PromptStrip({ prompt }) {
 }
 
 export default function App() {
-  const { sessions, connected, error, latestPrompt, rekeyMap, expiredPending } = useStatusFeed()
+  const providers = useProviders()
+  const [selectedProviderId, setSelectedProviderIdState] = useState(loadSelectedProvider)
+  const selectedProvider = providers.find(p => p.id === selectedProviderId) || providers[0] || FALLBACK_PROVIDERS[0]
+  const providerId = selectedProvider?.id || DEFAULT_PROVIDER_ID
+  const providerLabel = selectedProvider?.label || providerId
+  const providerCommand = selectedProvider?.command || providerId
+  const { sessions, connected, error, latestPrompt, rekeyMap, expiredPending } = useStatusFeed(providerId)
+  const providerSessionsReady = sessions.length > 0 && sessions.every(s => !s.provider || s.provider === providerId)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
-  const [coldDays, setColdDaysState] = useState(loadColdDays)
-  const env = useEnv()
+  const [coldDays, setColdDaysState] = useState(() => loadColdDays(providerId))
+  const env = useEnv(providerId, providerSessionsReady)
+
+  const setSelectedProviderId = useCallback((nextProviderId) => {
+    setSelectedProviderIdState(nextProviderId)
+    saveSelectedProvider(nextProviderId)
+  }, [])
 
   const setColdDays = useCallback((n) => {
     setColdDaysState(n)
-    saveColdDays(n)
-  }, [])
+    saveColdDays(providerId, n)
+  }, [providerId])
 
   // ── Tab state (replaces selectedId / previewId) ────────────────────────────
   const [tabState, dispatch] = useReducer(tabReducer, { tabs: [], activeTabId: null })
@@ -276,6 +342,14 @@ export default function App() {
   // Track metadata for pending sessions not yet in the DB.
   // Keys are temp keys (e.g. "pending-123-abc"), values are { workingDir, project, createdAt }.
   const [pendingMeta, setPendingMeta] = useState({})
+
+  useEffect(() => {
+    setColdDaysState(loadColdDays(providerId))
+    setFilterNeedsYou(false)
+    setPendingMeta({})
+    tabsRestoredRef.current = false
+    dispatch({ type: 'reset' })
+  }, [providerId])
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => {
@@ -320,14 +394,14 @@ export default function App() {
   useEffect(() => {
     // Don't overwrite stored tabs before we've had a chance to restore them
     if (!tabsRestoredRef.current) return
-    saveStoredTabs(tabs, activeTabId)
-  }, [tabs, activeTabId])
+    saveStoredTabs(providerId, tabs, activeTabId)
+  }, [providerId, tabs, activeTabId])
 
   // ── Restore tabs from localStorage once sessions arrive ────────────────────
   useEffect(() => {
     if (tabsRestoredRef.current || sessions.length === 0) return
     tabsRestoredRef.current = true
-    const stored = loadStoredTabs()
+    const stored = loadStoredTabs(providerId)
     if (!stored || stored.tabs.length === 0) return
     const sessionsById = new Map(sessions.map(s => [s.id, s]))
     // Drop persisted tabs whose underlying session is older than the cold-days
@@ -353,16 +427,16 @@ export default function App() {
       ? stored.activeTabId
       : validTabs[0].id
     dispatch({ type: 'restore', tabs: validTabs, activeTabId: activeId })
-  }, [sessions, coldDays])
+  }, [sessions, coldDays, providerId])
 
   // Mark restored immediately if there will never be sessions
   // (tabsRestoredRef prevents the persist effect from running until we've restored)
   useEffect(() => {
     // If no stored tabs exist, mark as restored immediately so persistence starts
-    if (!tabsRestoredRef.current && !loadStoredTabs()) {
+    if (!tabsRestoredRef.current && !loadStoredTabs(providerId)) {
       tabsRestoredRef.current = true
     }
-  }, [])
+  }, [providerId])
 
   // If a tabbed session disappears from the live list, close its tab.
   // Skip pending sessions (not yet in the DB).
@@ -428,30 +502,30 @@ export default function App() {
   }, [expiredPending])
 
   const handleRename = useCallback(async (id, title) => {
-    await fetch(`/api/sessions/${id}/rename`, {
+    await fetch(providerApiPath(providerId, `sessions/${id}/rename`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
     })
-  }, [])
+  }, [providerId])
 
   const handleRemove = useCallback(async (id) => {
     // Optimistically close the tab
     dispatch({ type: 'close', id })
     try {
-      const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+      const res = await fetch(providerApiPath(providerId, `sessions/${id}`), { method: 'DELETE' })
       if (!res.ok) throw new Error('Archive failed')
     } catch {
       // Session will reappear in next WS push if archive actually failed
     }
-  }, [])
+  }, [providerId])
 
   const handleRestore = useCallback(async (id) => {
-    await fetch(`/api/sessions/${id}/restore`, { method: 'POST' })
-  }, [])
+    await fetch(providerApiPath(providerId, `sessions/${id}/restore`), { method: 'POST' })
+  }, [providerId])
 
   const handleCreateSession = useCallback(async (workingDir) => {
-    const res = await fetch('/api/sessions/create', {
+    const res = await fetch(providerApiPath(providerId, 'sessions/create'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workingDir }),
@@ -469,7 +543,7 @@ export default function App() {
     }))
     // Open the pending session in a new tab
     dispatch({ type: 'open', id: tempKey, mode: 'terminal' })
-  }, [])
+  }, [providerId])
 
   // ── Sidebar callbacks (routed to tab management) ───────────────────────────
 
@@ -574,8 +648,16 @@ export default function App() {
           onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goHome() } }}
           style={{ cursor: 'pointer' }} title="Go to dashboard">
           <div className="topbar-dot" />
-          Codex <span className="accent">Dashboard</span>
+          {providerLabel} <span className="accent">Dashboard</span>
         </div>
+
+        <div className="topbar-divider" />
+
+        <ProviderSwitch
+          providers={providers}
+          selectedProviderId={providerId}
+          onSelect={setSelectedProviderId}
+        />
 
         <div className="topbar-divider" />
 
@@ -593,6 +675,9 @@ export default function App() {
       </header>
 
       <Sidebar
+        providerId={providerId}
+        providerLabel={providerLabel}
+        providerCommand={providerCommand}
         sessions={sidebarSessions}
         selectedId={sidebarSelectedId}
         previewId={sidebarPreviewId}
@@ -655,7 +740,7 @@ export default function App() {
                 {headless ? (
                   <HeadlessPlaceholder session={tabSession} onPreview={handlePreview} />
                 ) : (
-                  <Terminal sessionId={tab.id} active={paneActive} />
+                  <Terminal providerId={providerId} sessionId={tab.id} active={paneActive} />
                 )}
               </div>
             )
@@ -665,6 +750,8 @@ export default function App() {
           {activeTab?.mode === 'preview' && (
             <div className="tab-pane tab-pane-active">
               <SessionPreview
+                providerId={providerId}
+                providerLabel={providerLabel}
                 sessionId={activeTabId}
                 onResume={handleResume}
                 onArchive={handleRemove}
@@ -677,7 +764,7 @@ export default function App() {
           {/* Splash — shown when no tab is active */}
           {mainView === 'splash' && (
             <div className="tab-pane tab-pane-active">
-              <DashboardSplash connected={connected} latestPrompt={latestPrompt} onSelectSession={handlePreview} />
+              <DashboardSplash providerId={providerId} providerLabel={providerLabel} statsEnabled={providerSessionsReady} connected={connected} latestPrompt={latestPrompt} onSelectSession={handlePreview} />
             </div>
           )}
         </div>
@@ -688,6 +775,8 @@ export default function App() {
       </main>
 
       <ControlBar
+        providerId={providerId}
+        providerLabel={providerLabel}
         session={selectedSession}
         sessionId={activeTabId}
         onRename={handleRename}
