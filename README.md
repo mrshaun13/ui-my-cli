@@ -1,15 +1,15 @@
-# Devin Dashboard
+# Codex Dashboard
 
-A browser-based dashboard for managing multiple Devin CLI agent sessions. Replaces tab-hunting with a click-driven UI: real embedded terminals, live status badges, analytics, and one-click agent switching.
+A browser-based dashboard for managing multiple Codex CLI agent sessions. Replaces tab-hunting with a click-driven UI: real embedded terminals, live status badges, analytics, and one-click agent switching.
 
 ## Features
 
 - **Live status badges** — ⚡ Question / ⚙ Running / ✓ Finished / · Idle, updated every 3 seconds
-- **Real terminals** — xterm.js + node-pty: identical to running `devin --resume` in your shell
+- **Real terminals** — xterm.js + node-pty: identical to running `codex resume` in your shell
 - **Click to switch** — click any agent in the sidebar to attach its live terminal; switching is instant with scrollback preserved
-- **New session** — floating "+" button in the sidebar lets you start a new Devin session in any previously-used repo; the terminal opens automatically
+- **New session** — floating "+" button in the sidebar lets you start a new Codex session in any previously-used repo; the terminal opens automatically
 - **Session preview** — click the status badge to open a read-only view of any session's chat history without spawning a PTY
-- **Inline rename** — double-click any session title to rename it (writes back to the Devin CLI sessions database)
+- **Inline rename** — double-click any session title to rename it (stored in the dashboard metadata database; Codex internals stay read-only)
 - **Needs-your-input filter** — one click to show only agents waiting for a reply
 - **Repo filter pills** — filter sessions by project; selection persists across reloads
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
@@ -17,14 +17,14 @@ A browser-based dashboard for managing multiple Devin CLI agent sessions. Replac
 - **Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), token usage, tool call breakdown, model distribution, shown when no session is selected
 - **Context window pie chart** — per-session donut chart showing context window composition (system prompt, user messages, assistant messages, tool calls, tool results, free capacity)
 - **Environment banner** — global config overview on the dashboard home page showing active model, MCP servers, skills, and plugins with color-coded chips
-- **Session config** — per-session configuration details (active rules, invoked skills, permissions) extracted from the session's cogs_json
+- **Session config** — per-session Codex metadata: source, model, reasoning effort, sandbox policy, approval mode, skills, plugins, and MCP servers where available
 
 ## Quick Start
 
 ### Prerequisites
 
 - **Node.js 18+** — `node --version` to check
-- **Devin CLI installed and run at least once** — creates the sessions database
+- **Codex CLI installed and run at least once** — creates the sessions database
 - **Native build tools** for node-pty compilation:
   - **Ubuntu / Debian / WSL2**: `sudo apt install build-essential python3`
   - **macOS**: `xcode-select --install`
@@ -33,8 +33,8 @@ A browser-based dashboard for managing multiple Devin CLI agent sessions. Replac
 ### Install & Run
 
 ```bash
-git clone <repo-url> devin-dashboard
-cd devin-dashboard
+git clone <repo-url> codex-dashboard
+cd codex-dashboard
 npm install        # installs server + client deps; node-pty compiles native bindings
 npm run build      # compile the Vite client bundle
 npm start          # start the dashboard server
@@ -74,24 +74,25 @@ Default is `7575`. Override with the `PORT` environment variable:
 PORT=8080 npm start
 ```
 
-### Database Path
+### Codex State Path
 
-The dashboard reads the Devin CLI SQLite database. Platform defaults:
+The dashboard reads local Codex state. Platform defaults:
 
 | Platform | Default path |
 | --- | --- |
-| Linux / WSL2 | `~/.local/share/devin/cli/sessions.db` |
-| macOS | `~/.local/share/devin/cli/sessions.db` |
-| Windows | `%APPDATA%\devin\cli\sessions.db` |
+| Linux / WSL2 | `~/.codex/state_*.sqlite` + `~/.codex/sessions/**/*.jsonl` |
+| macOS | `~/.codex/state_*.sqlite` + `~/.codex/sessions/**/*.jsonl` |
+| Windows / WSL | `~/.codex/state_*.sqlite` inside the active WSL/Linux home |
 
-Override with `DEVIN_DB_PATH`:
+Override with `CODEX_HOME` or `CODEX_STATE_DB_PATH`:
 
 ```bash
-DEVIN_DB_PATH=/custom/path/sessions.db npm start
+CODEX_HOME=/custom/codex-home npm start
+CODEX_STATE_DB_PATH=/custom/path/state_5.sqlite npm start
 ```
 
-Session title renames are written back to the database, so they appear
-in `devin list` and inside active sessions.
+Session title renames are dashboard-local. Codex-owned state is read-only
+except archive/restore operations performed through the Codex CLI.
 
 ### All Environment Variables
 
@@ -99,27 +100,28 @@ in `devin list` and inside active sessions.
 | --- | --- | --- |
 | `PORT` | `7575` | HTTP server port |
 | `NODE_ENV` | `—` | Set to `production` to enable static file serving from `client/dist/` |
-| `DEVIN_VERSION` | `—` |  |
 | `SHELL` | `—` | Shell binary for the node-pty process (falls back to `/bin/zsh` on macOS, then `/bin/bash`, then `/bin/sh`) |
-| `DEVIN_DB_PATH` | `—` | Override the auto-detected Devin CLI SQLite database path |
-| `DEVIN_DASHBOARD_DB_PATH` | `—` | Override the dashboard.db path (defaults to same dir as sessions.db) |
-| `XDG_DATA_HOME` | `—` | Override the XDG data directory (default: `~/.local/share`); affects DB path on all platforms |
-| `APPDATA` | `—` | Windows `%APPDATA%` directory — used to find the database path on Windows |
+| `CODEX_HOME` | `—` | Override the Codex home directory (default: `~/.codex`) |
+| `CODEX_STATE_DB_PATH` | `—` | Override the auto-detected Codex state SQLite database path |
+| `UI_MY_CLI_DB_PATH` | `—` | Override the dashboard metadata database path |
 
 ## Architecture
 
 ```
 server/
-  server/index.js              Devin Dashboard — Express server with WebSocket support.
-  server/sessions.js           Sessions module — reads (and selectively writes) the Devin CLI SQLite database.
-  server/stats.js              Stats module — computes dashboard analytics from the Devin CLI SQLite DB
+  server/index.js              Codex Dashboard — Express server with WebSocket support.
+  server/sessions.js           Session facade for the dashboard.
+  server/stats.js              Stats facade for local Codex sessions.
   server/pty-manager.js        PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients.
-  server/db-path.js            Resolves Devin-related database paths across platforms.
+  server/db-path.js            Compatibility exports for legacy db-path imports.
+  server/codex-paths.js        Resolves local Codex state paths.
+  server/codex-store.js        Codex session adapter.
+  server/dashboard-store.js    Dashboard-owned metadata for local Codex sessions.
 
 client/src/
   client/src/App.jsx                               
-  client/src/components/Sidebar.jsx                Sidebar — left panel listing all Devin sessions.
-  client/src/components/AgentCard.jsx              AgentCard — one row in the sidebar representing a Devin session.
+  client/src/components/Sidebar.jsx                Sidebar — left panel listing all Codex sessions.
+  client/src/components/AgentCard.jsx              AgentCard — one row in the sidebar representing a Codex session.
   client/src/components/Terminal.jsx               Terminal — xterm.js terminal connected to the server PTY via WebSocket.
   client/src/components/ControlBar.jsx             ControlBar — always-visible context strip at the bottom of the UI.
   client/src/components/DashboardSplash.jsx        DashboardSplash — shown when no session is selected.
@@ -141,14 +143,14 @@ client/src/
 
 ### Status Detection
 
-Derived from the last few `message_nodes` rows in the SQLite database:
+Derived from Codex thread metadata and rollout JSONL activity:
 
 | Status | Meaning |
 | --- | --- |
-| `active` | Devin is currently doing something (tool calls in flight, or a tool result arrived recently meaning next turn is imminent) |
-| `question` | Devin's last message is text with no tool calls AND it ends with a question — Devin is blocked waiting for an answer |
-| `finished` | Devin's last message is text with no tool calls, no question, and nothing has happened for >30s — work is done / paused |
-| `idle` | no activity for >10 minutes, or no messages at all |
+| `active` | Codex activity within the last 60 seconds. |
+| `question` | Latest assistant text ends with `?`, indicating a likely prompt for your input. |
+| `finished` | Recent non-idle session with no detected question. |
+| `idle` | No activity for more than 10 minutes. |
 
 ## Security Model
 

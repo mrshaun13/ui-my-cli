@@ -2,32 +2,35 @@
 
 ## Overview
 
-The server is a single Node.js process (Express + ws) that reads the Devin CLI's SQLite database and spawns node-pty processes bridged to browser-based xterm.js terminals. Session data flows one-way from the CLI database to the dashboard — the only writes back to that database are session title renames.
+The server is a single Node.js process (Express + ws) that reads Codex local state from `~/.codex/state_*.sqlite` and rollout JSONL files under `~/.codex/sessions/`, then spawns node-pty processes bridged to browser-based xterm.js terminals. Codex-owned state is treated as read-only except for archive/restore through the Codex CLI.
 
 ## Data Flow
 
 ```
-Devin CLI  →  sessions.db (SQLite)  →  server polls every 3s  →  WebSocket push  →  React client
-Browser  →  xterm.js keystrokes  →  WebSocket  →  node-pty  →  devin --resume <id>
+Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  server polls every 3s  →  WebSocket push  →  React client
+Browser  →  xterm.js keystrokes  →  WebSocket  →  node-pty  →  codex resume <id>
 ```
 
 ## Server Files
 
 | File | Description |
 | --- | --- |
-| `server/index.js` | Devin Dashboard — Express server with WebSocket support. |
-| `server/sessions.js` | Sessions module — reads (and selectively writes) the Devin CLI SQLite database. |
-| `server/stats.js` | Stats module — computes dashboard analytics from the Devin CLI SQLite DB |
+| `server/index.js` | Codex Dashboard — Express server with WebSocket support. |
+| `server/sessions.js` | Session facade for the dashboard. |
+| `server/stats.js` | Stats facade for local Codex sessions. |
 | `server/pty-manager.js` | PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients. |
-| `server/db-path.js` | Resolves Devin-related database paths across platforms. |
+| `server/db-path.js` | Compatibility exports for legacy db-path imports. |
+| `server/codex-paths.js` | Resolves local Codex state paths. |
+| `server/codex-store.js` | Codex session adapter. |
+| `server/dashboard-store.js` | Dashboard-owned metadata for local Codex sessions. |
 
 ## Client Files
 
 | File | Description |
 | --- | --- |
 | `client/src/App.jsx` |  |
-| `client/src/components/Sidebar.jsx` | Sidebar — left panel listing all Devin sessions. |
-| `client/src/components/AgentCard.jsx` | AgentCard — one row in the sidebar representing a Devin session. |
+| `client/src/components/Sidebar.jsx` | Sidebar — left panel listing all Codex sessions. |
+| `client/src/components/AgentCard.jsx` | AgentCard — one row in the sidebar representing a Codex session. |
 | `client/src/components/Terminal.jsx` | Terminal — xterm.js terminal connected to the server PTY via WebSocket. |
 | `client/src/components/ControlBar.jsx` | ControlBar — always-visible context strip at the bottom of the UI. |
 | `client/src/components/DashboardSplash.jsx` | DashboardSplash — shown when no session is selected. |
@@ -56,25 +59,26 @@ Browser  →  xterm.js keystrokes  →  WebSocket  →  node-pty  →  devin --r
 
 ## Status State Machine
 
-The `deriveStatus()` function in `server/sessions.js` reads the last 5
-`message_nodes` rows for a session and returns one of four status values:
+The status adapter in `server/codex-store.js` reads Codex thread metadata
+and recent rollout JSONL messages and returns one of four status values:
 
 | Status | Condition |
 | --- | --- |
-| `active` | Devin is currently doing something (tool calls in flight, or a tool result arrived recently meaning next turn is imminent) |
-| `question` | Devin's last message is text with no tool calls AND it ends with a question — Devin is blocked waiting for an answer |
-| `finished` | Devin's last message is text with no tool calls, no question, and nothing has happened for >30s — work is done / paused |
-| `idle` | no activity for >10 minutes, or no messages at all |
+| `active` | Codex activity within the last 60 seconds. |
+| `question` | Latest assistant text ends with `?`, indicating a likely prompt for your input. |
+| `finished` | Recent non-idle session with no detected question. |
+| `idle` | No activity for more than 10 minutes. |
 
-The full logic (edge cases, timing thresholds) lives in `server/sessions.js`.
-This table is extracted verbatim from the function's JSDoc block.
+The full logic lives in `server/codex-store.js`.
 
 ## Storage Model
 
 | Data | Location | Access |
 |------|----------|--------|
-| Session records, titles, message history | Devin CLI `sessions.db` (SQLite) | Read-only; title renames write to `sessions.title` |
-| Archived session IDs | `dashboard.db` (SQLite, same directory as sessions.db) | Read-write (dashboard only) |
+| Session metadata | Codex `~/.codex/state_*.sqlite` | Read-only |
+| Message history and tool events | Codex rollout JSONL under `~/.codex/sessions/` | Read-only |
+| Archive state | Codex CLI `archive` / `unarchive` commands | Codex-owned |
+| Dashboard title overrides | `~/.codex/ui-my-cli-dashboard.db` | Read-write (dashboard only) |
 | User preferences (repo filters, cold-days threshold) | Browser `localStorage` | Client-side only; never sent to server |
 
 ## WebSocket Architecture
@@ -87,6 +91,6 @@ The server maintains two WebSocket namespaces:
    terminal history to new connections.
 
 2. **Status feed** (`/ws/status`) — Server-push only. Sends the full session
-   list every 3 seconds. Also watches the SQLite WAL file for write events
-   (debounced 120 ms) to deliver the latest user prompt without waiting for
+   list every 3 seconds. Also watches the Codex state DB, WAL/SHM files, and
+   sessions directory (debounced 120 ms) to deliver updates without waiting for
    the next poll interval.

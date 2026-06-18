@@ -24,7 +24,7 @@ function projectFromDir(dir) {
 }
 
 // ── Sidebar collapsed state (persisted to localStorage) ──────────────────────
-const STORAGE_COLLAPSED = 'devin-dash:sidebar-collapsed'
+const STORAGE_COLLAPSED = 'codex-dash:sidebar-collapsed'
 function loadCollapsed() {
   try { return localStorage.getItem(STORAGE_COLLAPSED) === 'true' } catch { return false }
 }
@@ -36,7 +36,7 @@ function saveCollapsed(v) {
 // Default is 360px — 20% wider than the previous 300px, since the user routinely
 // works with long repo names and many chips.  Clamped to a sane range so a
 // runaway drag can't break the layout.
-const STORAGE_SIDEBAR_W = 'devin-dash:sidebar-width'
+const STORAGE_SIDEBAR_W = 'codex-dash:sidebar-width'
 const SIDEBAR_W_DEFAULT = 360
 const SIDEBAR_W_MIN     = 240
 const SIDEBAR_W_MAX     = 640
@@ -55,7 +55,7 @@ function saveSidebarWidth(w) {
 // Lifted here from Sidebar so it can drive BOTH (a) the sidebar's hot/older
 // divider and (b) the tab auto-close effect.  Single source of truth keeps
 // the two views consistent without dispatching custom events between them.
-const STORAGE_COLD = 'devin-dash:cold-days'
+const STORAGE_COLD = 'codex-dash:cold-days'
 const COLD_DEFAULT = 3
 function loadColdDays() {
   try {
@@ -69,7 +69,7 @@ function saveColdDays(n) {
 }
 
 // ── Tab persistence (localStorage) ───────────────────────────────────────────
-const STORAGE_TABS = 'devin-dash:open-tabs'
+const STORAGE_TABS = 'codex-dash:open-tabs'
 function loadStoredTabs() {
   try {
     const raw = localStorage.getItem(STORAGE_TABS)
@@ -504,7 +504,7 @@ export default function App() {
 
   // ── Synthetic sidebar entries for pending sessions ─────────────────────────
   // Injects a placeholder card so the sidebar shows the new session immediately
-  // (before the Devin CLI writes a DB record).  Three detection methods prevent
+  // (before the Codex CLI writes a DB record).  Three detection methods prevent
   // duplicate cards when the real session arrives before the rekey poll fires.
   const sidebarSessions = useMemo(() => {
     const pendingKeys = Object.keys(pendingMeta)
@@ -574,7 +574,7 @@ export default function App() {
           onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goHome() } }}
           style={{ cursor: 'pointer' }} title="Go to dashboard">
           <div className="topbar-dot" />
-          Devin <span className="accent">Dashboard</span>
+          Codex <span className="accent">Dashboard</span>
         </div>
 
         <div className="topbar-divider" />

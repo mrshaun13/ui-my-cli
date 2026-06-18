@@ -444,7 +444,7 @@ const TOOL_COLORS = {
 }
 
 const TOOL_TIP =
-  'Total number of times Devin called each tool across all sessions ever recorded. ' +
+  'Total number of times Codex called each tool across all sessions ever recorded. ' +
   '"exec" runs shell commands, "read" reads files, "edit" rewrites file content, ' +
   '"grep" searches code, "mcp_call_tool" calls external MCP integrations, etc.'
 
@@ -1156,7 +1156,7 @@ const DURATION_LB_TIP =
   'This measures total elapsed time, not active coding time.'
 
 const MESSAGES_LB_TIP =
-  'Top 10 sessions ranked by the number of messages you sent to Devin. ' +
+  'Top 10 sessions ranked by the number of messages you sent to Codex. ' +
   'More messages usually means a longer, more interactive session.'
 
 const TOKENS_LB_TIP =
@@ -1171,7 +1171,7 @@ const LOADING_MSGS = [
   'Consulting the oracle…',
   'Counting tokens like sheep…',
   'Warming up the flux capacitor…',
-  'Asking Devin how Devin is doing…',
+  'Asking Codex how Codex is doing…',
   'Reticulating splines…',
   'Calibrating the vibes…',
   'Scanning the multiverse…',

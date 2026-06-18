@@ -2,7 +2,7 @@
  * ControlBar — always-visible context strip at the bottom of the UI.
  *
  * Shows:
- *   - Plain-English status explanation ("Devin finished and is waiting for your reply")
+ *   - Plain-English status explanation ("Codex finished and is waiting for your reply")
  *   - Last message snippet — so you immediately know WHAT it needs without scrolling
  *   - Working directory
  *   - Rename button
@@ -14,9 +14,9 @@ import ContextPieChart from './ContextPieChart.jsx'
 import { isHeadless, displayTitle, HEADLESS_ICON } from '../lib/headless.js'
 
 const STATUS_EXPLANATION = {
-  question: 'Devin finished and is waiting for your reply',
-  active:   'Devin is actively working',
-  finished: 'Devin has finished — no reply needed',
+  question: 'Codex finished and is waiting for your reply',
+  active:   'Codex is actively working',
+  finished: 'Codex has finished — no reply needed',
   idle:     'No recent activity',
 }
 

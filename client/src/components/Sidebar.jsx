@@ -1,5 +1,5 @@
 /**
- * Sidebar — left panel listing all Devin sessions.
+ * Sidebar — left panel listing all Codex sessions.
  *
  * Features:
  *  - Repo filter pills (persist to localStorage)
@@ -18,8 +18,8 @@ import { STATUS_ICON, STATUS_LABEL, HEADLESS_ICON } from './AgentCard.jsx'
 import { useRepoFilter } from '../hooks/useRepoFilter.js'
 import { isHeadless, displayTitle } from '../lib/headless.js'
 
-const STORAGE_SEARCH_ARCHIVED  = 'devin-dash:search-archived'
-const STORAGE_SHOW_HEADLESS    = 'devin-dash:show-headless'
+const STORAGE_SEARCH_ARCHIVED  = 'codex-dash:search-archived'
+const STORAGE_SHOW_HEADLESS    = 'codex-dash:show-headless'
 
 function loadSearchArchived() {
   try { return localStorage.getItem(STORAGE_SEARCH_ARCHIVED) === 'true' } catch { return false }
@@ -134,7 +134,7 @@ function NewSessionFAB({ onCreateSession }) {
         className={`new-session-fab${creating ? ' creating' : ''}`}
         onClick={toggle}
         disabled={creating}
-        title="Start a new Devin session"
+        title="Start a new Codex session"
       >
         {creating ? <span className="spinner" /> : '+'}
       </button>
@@ -495,7 +495,7 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
           <div className="sidebar-empty-icon">◎</div>
           <div className="sidebar-empty-text">
             No sessions found.<br />
-            Run <code>devin</code> to start an agent.
+            Run <code>codex</code> to start an agent.
           </div>
         </div>
         <div className="sidebar-archive-row">

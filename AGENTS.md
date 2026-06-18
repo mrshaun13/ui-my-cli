@@ -2,7 +2,7 @@
 
 ## Project Summary
 
-A browser-based dashboard for managing multiple Devin CLI agent sessions. Replaces tab-hunting with a click-driven UI: real embedded terminals, live status badges, analytics, and one-click agent switching.
+A browser-based dashboard for managing multiple Codex CLI agent sessions. Replaces tab-hunting with a click-driven UI: real embedded terminals, live status badges, analytics, and one-click agent switching.
 
 **Stack:** Node.js >=18.0.0 · Express · WebSocket (`ws`) ·
 `better-sqlite3` · `node-pty` · React 19 · Vite · xterm.js
@@ -12,9 +12,9 @@ A browser-based dashboard for managing multiple Devin CLI agent sessions. Replac
 - `npm run build` — `cd client && npm run build`
 - `npm run start` — `NODE_ENV=production node server/index.js`
 - `npm run pm2:start` — `npm run build && pm2 start ecosystem.config.cjs`
-- `npm run pm2:restart` — `npm run build && pm2 restart devin-dashboard`
-- `npm run pm2:stop` — `pm2 stop devin-dashboard`
-- `npm run pm2:logs` — `pm2 logs devin-dashboard`
+- `npm run pm2:restart` — `npm run build && pm2 restart codex-dashboard`
+- `npm run pm2:stop` — `pm2 stop codex-dashboard`
+- `npm run pm2:logs` — `pm2 logs codex-dashboard`
 - `npm run postinstall` — `cd client && npm install`
 - `npm run docs` — `node scripts/generate-docs.js`
 - `npm run docs:check` — `node scripts/generate-docs.js --check`
@@ -34,7 +34,7 @@ A browser-based dashboard for managing multiple Devin CLI agent sessions. Replac
 
 | File | Why |
 |------|-----|
-| `server/sessions.js` | Core session data model, status detection, archive logic |
+| `server/codex-store.js` | Core Codex session data model, status detection, archive logic |
 | `server/index.js` | All REST endpoints, WebSocket protocol, broadcast logic |
 | `client/src/hooks/useStatusFeed.js` | How the client receives live session updates |
 | `client/src/components/Terminal.jsx` | xterm.js + PTY WebSocket bridge |
@@ -43,27 +43,28 @@ A browser-based dashboard for managing multiple Devin CLI agent sessions. Replac
 
 ## Status Values (Canonical)
 
-These are the only valid status strings in the system, returned by `deriveStatus()`
-in `server/sessions.js`. Use them consistently across all client components.
+These are the only valid status strings in the system, returned by the Codex
+status adapter in `server/codex-store.js`. Use them consistently across all
+client components.
 
 | Value | Meaning |
 |-------|---------|
 | `active` | Tool calls in flight, or activity within the last 60 seconds |
-| `question` | Devin's last message ends with `?` — waiting for your reply |
-| `finished` | Devin stopped without a question — task done or paused |
+| `question` | Codex's last message ends with `?` — waiting for your reply |
+| `finished` | Codex stopped without a question — task done or paused |
 | `idle` | No activity for more than 10 minutes |
 
 The value `archived` is used at the API layer to mean "hidden from the active
-list" but is not stored in the database.
+list". Codex owns archive state through `codex archive` and `codex unarchive`.
 
 ## Session Object Shape
 
 ```js
-// Returned by listSessions() and getSession() in server/sessions.js
+// Returned by listSessions() and getSession() via server/sessions.js
 {
-  id:               string,  // Devin session UUID
+  id:               string,  // Codex session UUID
   title:            string,  // User-defined or truncated UUID
-  workingDir:       string,  // Repo path where devin was run
+  workingDir:       string,  // Repo path where codex was run
   project:          string,  // path.basename(workingDir)
   model:            string,  // LLM model name
   status:           string,  // active | question | finished | idle
@@ -81,7 +82,7 @@ list" but is not stored in the database.
 - Session status values are lowercase strings: `active`, `question`, `finished`, `idle`. The value `archived` is used by the API but not stored in the database.
 - All server modules use CommonJS (`require` / `module.exports`).
 - The client uses ES modules with React 19 + Vite.
-- Archive state is stored in `dashboard.db` (a separate SQLite database in the same directory as sessions.db), not in the Devin CLI's SQLite database. If a legacy `hidden-sessions.json` sidecar exists it is migrated automatically on first start.
+- Codex archive state is changed through `codex archive` / `codex unarchive`. Dashboard-only title overrides are stored in `~/.codex/ui-my-cli-dashboard.db`.
 - Production: `npm start` — must run `npm run build` first.
 - Development: `node --watch server/index.js` + `cd client && npm run dev`.
 - **PM2 caveat** — PM2 keeps the old process in memory until explicitly restarted. After any server-side code change, always run `npm run pm2:restart` (which rebuilds the client and restarts the process). A bare `npm run build` is **not enough** — the running Node process still executes the old code.
@@ -147,7 +148,7 @@ E2E tests use **Playwright** (Chromium only) and run against the **live PM2-mana
 ### Prerequisites
 
 - Dashboard running via PM2: `npm run pm2:start` (or confirm with `pm2 list`)
-- At least one Devin CLI session must exist (run `devin` once) — tests interact with session cards
+- At least one Codex CLI session must exist (run `codex` once) — tests interact with session cards
 - Playwright browsers installed: `npx playwright install chromium` (one-time setup)
 
 ### Commands

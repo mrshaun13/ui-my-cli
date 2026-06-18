@@ -9,17 +9,17 @@ with an appropriate HTTP status code.
 | --- | --- | --- |
 | `GET` | `/api/status` | Server health check — returns `ok`, active PTY count, uptime seconds |
 | `GET` | `/api/stats` | Full dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins |
-| `GET` | `/api/latest-prompt` | Most recent user prompt from the `prompt_history` table |
+| `GET` | `/api/latest-prompt` | Most recent user prompt from Codex local thread state |
 | `GET` | `/api/sessions` | List all active (non-archived) sessions with derived status |
 | `GET` | `/api/sessions/archived` | List archived (hidden) sessions |
 | `GET` | `/api/sessions/search` | Full-text session search — query param `q` (required), `archived=1` to include archived sessions. Searches title, working directory, prompt history, and user-role message content. Returns same shape as the sessions list. |
 | `GET` | `/api/repos` | List all unique repos (working directories) from past sessions |
-| `POST` | `/api/sessions/create` | Start a new Devin session in the given working directory (body: `{ workingDir: string }`); returns `{ sessionId }` |
+| `POST` | `/api/sessions/create` | Start a new Codex session in the given working directory (body: `{ workingDir: string }`); returns `{ sessionId }` |
 | `GET` | `/api/sessions/:id/preview` | Rich read-only session detail — chat history, stats, top tools |
 | `GET` | `/api/sessions/:id/conversation` | Paginated user↔assistant conversation turns for a session. Query params: `offset` (number of turns to skip from end, default 0), `limit` (max turns to return, 0 = all, default 50). Returns `{ turns, totalTurns, hasMore }`. |
-| `GET` | `/api/sessions/:id/subagents` | Subagent lifecycle data for a session — launch, confirmation, and completion events mined from `message_nodes`. Returns an array of `{ id, title, profile, isBackground, agentId, task, launchedAt, completedAt, durationSec, resultPreview }`. |
-| `GET` | `/api/sessions/:id/context` | Context window breakdown for a session — estimated token counts per category (system prompt, user messages, assistant messages, tool calls, tool results) plus free capacity. Proportions are computed from character counts in the active context (post-compaction) and scaled to match the actual `num_tokens_preceding` value. Returns `{ categories, totalUsed, maxContext, freeTokens, compactionCount, model }`. |
-| `GET` | `/api/sessions/:id/config` | Per-session configuration extracted from `cogs_json` — active rules files, invoked skills, permission grants, current model, and permission mode. Returns `{ rules, activeSkills, permissions, model, permissionMode }`. |
+| `GET` | `/api/sessions/:id/subagents` | Reserved for linked Codex subagent/review thread data. Returns an array; v1 returns `[]`. |
+| `GET` | `/api/sessions/:id/context` | Estimated context breakdown for a Codex session based on rollout JSONL message and tool content. Returns `{ categories, totalUsed, maxContext, freeTokens, compactionCount, model }`. |
+| `GET` | `/api/sessions/:id/config` | Per-session Codex configuration metadata. Returns `{ rules, activeSkills, permissions, model, permissionMode }`. |
 | `GET` | `/api/sessions/:id` | Single session with `ptyActive` flag |
 | `POST` | `/api/sessions/:id/rename` | Update session title (body: `{ title: string }`) |
 | `POST` | `/api/sessions/:id/kill-pty` | Kill the active PTY for a session without archiving it |
@@ -70,12 +70,10 @@ requests needed after the initial connection.
 | --- | --- | --- |
 | `PORT` | `7575` | HTTP server port |
 | `NODE_ENV` | `—` | Set to `production` to enable static file serving from `client/dist/` |
-| `DEVIN_VERSION` | `—` |  |
 | `SHELL` | `—` | Shell binary for the node-pty process (falls back to `/bin/zsh` on macOS, then `/bin/bash`, then `/bin/sh`) |
-| `DEVIN_DB_PATH` | `—` | Override the auto-detected Devin CLI SQLite database path |
-| `DEVIN_DASHBOARD_DB_PATH` | `—` | Override the dashboard.db path (defaults to same dir as sessions.db) |
-| `XDG_DATA_HOME` | `—` | Override the XDG data directory (default: `~/.local/share`); affects DB path on all platforms |
-| `APPDATA` | `—` | Windows `%APPDATA%` directory — used to find the database path on Windows |
+| `CODEX_HOME` | `—` | Override the Codex home directory (default: `~/.codex`) |
+| `CODEX_STATE_DB_PATH` | `—` | Override the auto-detected Codex state SQLite database path |
+| `UI_MY_CLI_DB_PATH` | `—` | Override the dashboard metadata database path |
 
 ## Client localStorage Keys
 
@@ -84,9 +82,9 @@ browser reloads. They are never sent to the server.
 
 | Key | File |
 | --- | --- |
-| `devin-dash:sidebar-collapsed` | `App.jsx` |
-| `devin-dash:sidebar-width` | `App.jsx` |
-| `devin-dash:cold-days` | `App.jsx` |
-| `devin-dash:open-tabs` | `App.jsx` |
-| `devin-dash:search-archived` | `Sidebar.jsx` |
-| `devin-dash:show-headless` | `Sidebar.jsx` |
+| `codex-dash:sidebar-collapsed` | `App.jsx` |
+| `codex-dash:sidebar-width` | `App.jsx` |
+| `codex-dash:cold-days` | `App.jsx` |
+| `codex-dash:open-tabs` | `App.jsx` |
+| `codex-dash:search-archived` | `Sidebar.jsx` |
+| `codex-dash:show-headless` | `Sidebar.jsx` |

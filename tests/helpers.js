@@ -27,7 +27,7 @@ export async function ensureServerRunning() {
     if (!Array.isArray(sessions) || sessions.length === 0) {
       console.warn(
         'WARNING: No active sessions found. Tests that interact with ' +
-        'session cards will be skipped. Run `devin` to create a session.'
+        'session cards will be skipped. Run `codex` to create a session.'
       );
     }
   } catch (err) {

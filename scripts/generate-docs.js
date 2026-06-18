@@ -120,13 +120,13 @@ function parseStatusTable(jsdoc) {
 }
 
 /**
- * Extracts all 'devin-dash:key-name' localStorage key strings from a set of sources.
+ * Extracts all 'codex-dash:key-name' localStorage key strings from a set of sources.
  * For each, also captures the const variable name if the string is assigned to one.
  */
 function extractLocalStorageKeys(sources) {
   const keys = [];
   const seen = new Set();
-  const re   = /'(devin-dash:[\w-]+)'/g;
+  const re   = /'(codex-dash:[\w-]+)'/g;
   for (const { name, src } of sources) {
     let m;
     while ((m = re.exec(src)) !== null) {
@@ -151,6 +151,9 @@ function collect() {
   const statsSrc    = read('server/stats.js');
   const ptyMgrSrc   = read('server/pty-manager.js');
   const dbPathSrc   = read('server/db-path.js');
+  const codexPathSrc = read('server/codex-paths.js');
+  const codexStoreSrc = read('server/codex-store.js');
+  const dashboardStoreSrc = read('server/dashboard-store.js');
 
   const pkg       = JSON.parse(read('package.json'));
   const clientPkg = JSON.parse(read('client/package.json'));
@@ -161,6 +164,9 @@ function collect() {
     { name: 'server/stats.js',      src: statsSrc    },
     { name: 'server/pty-manager.js',src: ptyMgrSrc   },
     { name: 'server/db-path.js',    src: dbPathSrc   },
+    { name: 'server/codex-paths.js', src: codexPathSrc },
+    { name: 'server/codex-store.js', src: codexStoreSrc },
+    { name: 'server/dashboard-store.js', src: dashboardStoreSrc },
   ];
 
   const clientKeyFiles = [
@@ -189,6 +195,14 @@ function collect() {
 
   const statusJsdoc  = extractStatusJsdoc(sessionsSrc);
   const statusRows   = parseStatusTable(statusJsdoc);
+  if (statusRows.length === 0) {
+    statusRows.push(
+      { status: 'active', description: 'Codex activity within the last 60 seconds.' },
+      { status: 'question', description: 'Latest assistant text ends with `?`, indicating a likely prompt for your input.' },
+      { status: 'finished', description: 'Recent non-idle session with no detected question.' },
+      { status: 'idle', description: 'No activity for more than 10 minutes.' },
+    );
+  }
   const lsKeys       = extractLocalStorageKeys(
     clientKeyFiles.map(rel => ({ name: rel, src: tryRead(rel) }))
   );
@@ -226,9 +240,9 @@ function buildReadme(d) {
   const dbPathTable = mdTable(
     ['Platform', 'Default path'],
     [
-      ['Linux / WSL2', '`~/.local/share/devin/cli/sessions.db`'],
-      ['macOS',        '`~/.local/share/devin/cli/sessions.db`'],
-      ['Windows',      '`%APPDATA%\\devin\\cli\\sessions.db`'],
+      ['Linux / WSL2', '`~/.codex/state_*.sqlite` + `~/.codex/sessions/**/*.jsonl`'],
+      ['macOS',        '`~/.codex/state_*.sqlite` + `~/.codex/sessions/**/*.jsonl`'],
+      ['Windows / WSL', '`~/.codex/state_*.sqlite` inside the active WSL/Linux home'],
     ]
   );
 
@@ -276,8 +290,8 @@ ${prereqList}
 ### Install & Run
 
 \`\`\`bash
-git clone <repo-url> devin-dashboard
-cd devin-dashboard
+git clone <repo-url> codex-dashboard
+cd codex-dashboard
 npm install        # installs server + client deps; node-pty compiles native bindings
 npm run build      # compile the Vite client bundle
 npm start          # start the dashboard server
@@ -317,20 +331,21 @@ Default is \`7575\`. Override with the \`PORT\` environment variable:
 PORT=8080 npm start
 \`\`\`
 
-### Database Path
+### Codex State Path
 
-The dashboard reads the Devin CLI SQLite database. Platform defaults:
+The dashboard reads local Codex state. Platform defaults:
 
 ${dbPathTable}
 
-Override with \`DEVIN_DB_PATH\`:
+Override with \`CODEX_HOME\` or \`CODEX_STATE_DB_PATH\`:
 
 \`\`\`bash
-DEVIN_DB_PATH=/custom/path/sessions.db npm start
+CODEX_HOME=/custom/codex-home npm start
+CODEX_STATE_DB_PATH=/custom/path/state_5.sqlite npm start
 \`\`\`
 
-Session title renames are written back to the database, so they appear
-in \`devin list\` and inside active sessions.
+Session title renames are dashboard-local. Codex-owned state is read-only
+except archive/restore operations performed through the Codex CLI.
 
 ### All Environment Variables
 
@@ -360,7 +375,7 @@ ${clientSection}
 
 ### Status Detection
 
-Derived from the last few \`message_nodes\` rows in the SQLite database:
+Derived from Codex thread metadata and rollout JSONL activity:
 
 ${statusTable}
 
@@ -537,20 +552,21 @@ ${clientDepTable}
 
 ## Status State Machine
 
-The \`deriveStatus()\` function in \`server/sessions.js\` reads the last 5
-\`message_nodes\` rows for a session and returns one of four status values:
+The status adapter in \`server/codex-store.js\` reads Codex thread metadata
+and recent rollout JSONL messages and returns one of four status values:
 
 ${statusTable}
 
-The full logic (edge cases, timing thresholds) lives in \`server/sessions.js\`.
-This table is extracted verbatim from the function's JSDoc block.
+The full logic lives in \`server/codex-store.js\`.
 
 ## Storage Model
 
 | Data | Location | Access |
 |------|----------|--------|
-| Session records, titles, message history | Devin CLI \`sessions.db\` (SQLite) | Read-only; title renames write to \`sessions.title\` |
-| Archived session IDs | \`dashboard.db\` (SQLite, same directory as sessions.db) | Read-write (dashboard only) |
+| Session metadata | Codex \`~/.codex/state_*.sqlite\` | Read-only |
+| Message history and tool events | Codex rollout JSONL under \`~/.codex/sessions/\` | Read-only |
+| Archive state | Codex CLI \`archive\` / \`unarchive\` commands | Codex-owned |
+| Dashboard title overrides | \`~/.codex/ui-my-cli-dashboard.db\` | Read-write (dashboard only) |
 | User preferences (repo filters, cold-days threshold) | Browser \`localStorage\` | Client-side only; never sent to server |
 
 ## WebSocket Architecture
@@ -563,8 +579,8 @@ The server maintains two WebSocket namespaces:
    terminal history to new connections.
 
 2. **Status feed** (\`/ws/status\`) — Server-push only. Sends the full session
-   list every 3 seconds. Also watches the SQLite WAL file for write events
-   (debounced 120 ms) to deliver the latest user prompt without waiting for
+   list every 3 seconds. Also watches the Codex state DB, WAL/SHM files, and
+   sessions directory (debounced 120 ms) to deliver updates without waiting for
    the next poll interval.
 `;
 }
@@ -616,7 +632,7 @@ ${scriptList}
 
 | File | Why |
 |------|-----|
-| \`server/sessions.js\` | Core session data model, status detection, archive logic |
+| \`server/codex-store.js\` | Core Codex session data model, status detection, archive logic |
 | \`server/index.js\` | All REST endpoints, WebSocket protocol, broadcast logic |
 | \`client/src/hooks/useStatusFeed.js\` | How the client receives live session updates |
 | \`client/src/components/Terminal.jsx\` | xterm.js + PTY WebSocket bridge |
@@ -625,27 +641,28 @@ ${scriptList}
 
 ## Status Values (Canonical)
 
-These are the only valid status strings in the system, returned by \`deriveStatus()\`
-in \`server/sessions.js\`. Use them consistently across all client components.
+These are the only valid status strings in the system, returned by the Codex
+status adapter in \`server/codex-store.js\`. Use them consistently across all
+client components.
 
 | Value | Meaning |
 |-------|---------|
 | \`active\` | Tool calls in flight, or activity within the last 60 seconds |
-| \`question\` | Devin's last message ends with \`?\` — waiting for your reply |
-| \`finished\` | Devin stopped without a question — task done or paused |
+| \`question\` | Codex's last message ends with \`?\` — waiting for your reply |
+| \`finished\` | Codex stopped without a question — task done or paused |
 | \`idle\` | No activity for more than 10 minutes |
 
 The value \`archived\` is used at the API layer to mean "hidden from the active
-list" but is not stored in the database.
+list". Codex owns archive state through \`codex archive\` and \`codex unarchive\`.
 
 ## Session Object Shape
 
 \`\`\`js
-// Returned by listSessions() and getSession() in server/sessions.js
+// Returned by listSessions() and getSession() via server/sessions.js
 {
-  id:               string,  // Devin session UUID
+  id:               string,  // Codex session UUID
   title:            string,  // User-defined or truncated UUID
-  workingDir:       string,  // Repo path where devin was run
+  workingDir:       string,  // Repo path where codex was run
   project:          string,  // path.basename(workingDir)
   model:            string,  // LLM model name
   status:           string,  // active | question | finished | idle

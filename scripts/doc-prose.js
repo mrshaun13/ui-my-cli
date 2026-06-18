@@ -11,24 +11,24 @@
 
 module.exports = {
   project: {
-    title: 'Devin Dashboard',
+    title: 'Codex Dashboard',
     tagline:
-      'A browser-based dashboard for managing multiple Devin CLI agent sessions. ' +
+      'A browser-based dashboard for managing multiple Codex CLI agent sessions. ' +
       'Replaces tab-hunting with a click-driven UI: real embedded terminals, ' +
       'live status badges, analytics, and one-click agent switching.',
   },
 
   features: [
     '**Live status badges** — ⚡ Question / ⚙ Running / ✓ Finished / · Idle, updated every 3 seconds',
-    '**Real terminals** — xterm.js + node-pty: identical to running `devin --resume` in your shell',
+    '**Real terminals** — xterm.js + node-pty: identical to running `codex resume` in your shell',
     '**Click to switch** — click any agent in the sidebar to attach its live terminal; ' +
       'switching is instant with scrollback preserved',
-    '**New session** — floating "+" button in the sidebar lets you start a new Devin session ' +
+    '**New session** — floating "+" button in the sidebar lets you start a new Codex session ' +
       'in any previously-used repo; the terminal opens automatically',
     '**Session preview** — click the status badge to open a read-only view of any session\'s ' +
       'chat history without spawning a PTY',
     '**Inline rename** — double-click any session title to rename it ' +
-      '(writes back to the Devin CLI sessions database)',
+      '(stored in the dashboard metadata database; Codex internals stay read-only)',
     '**Needs-your-input filter** — one click to show only agents waiting for a reply',
     '**Repo filter pills** — filter sessions by project; selection persists across reloads',
     '**Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider',
@@ -40,13 +40,13 @@ module.exports = {
       '(system prompt, user messages, assistant messages, tool calls, tool results, free capacity)',
     '**Environment banner** — global config overview on the dashboard home page showing active ' +
       'model, MCP servers, skills, and plugins with color-coded chips',
-    '**Session config** — per-session configuration details (active rules, invoked skills, ' +
-      'permissions) extracted from the session\'s cogs_json',
+    '**Session config** — per-session Codex metadata: source, model, reasoning effort, ' +
+      'sandbox policy, approval mode, skills, plugins, and MCP servers where available',
   ],
 
   prerequisites: [
     '**Node.js 18+** — `node --version` to check',
-    '**Devin CLI installed and run at least once** — creates the sessions database',
+    '**Codex CLI installed and run at least once** — creates the sessions database',
     '**Native build tools** for node-pty compilation:',
     '  - **Ubuntu / Debian / WSL2**: `sudo apt install build-essential python3`',
     '  - **macOS**: `xcode-select --install`',
@@ -91,14 +91,14 @@ module.exports = {
     'unpin to rejoin the floated range.',
 
   architecture_overview:
-    'The server is a single Node.js process (Express + ws) that reads the Devin CLI\'s ' +
-    'SQLite database and spawns node-pty processes bridged to browser-based xterm.js terminals. ' +
-    'Session data flows one-way from the CLI database to the dashboard — ' +
-    'the only writes back to that database are session title renames.',
+    'The server is a single Node.js process (Express + ws) that reads Codex local state ' +
+    'from `~/.codex/state_*.sqlite` and rollout JSONL files under `~/.codex/sessions/`, ' +
+    'then spawns node-pty processes bridged to browser-based xterm.js terminals. ' +
+    'Codex-owned state is treated as read-only except for archive/restore through the Codex CLI.',
 
   data_flow: [
-    'Devin CLI  →  sessions.db (SQLite)  →  server polls every 3s  →  WebSocket push  →  React client',
-    'Browser  →  xterm.js keystrokes  →  WebSocket  →  node-pty  →  devin --resume <id>',
+    'Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  server polls every 3s  →  WebSocket push  →  React client',
+    'Browser  →  xterm.js keystrokes  →  WebSocket  →  node-pty  →  codex resume <id>',
   ].join('\n'),
 
   conventions: [
@@ -106,9 +106,8 @@ module.exports = {
       ' The value `archived` is used by the API but not stored in the database.',
     'All server modules use CommonJS (`require` / `module.exports`).',
     'The client uses ES modules with React 19 + Vite.',
-    'Archive state is stored in `dashboard.db` (a separate SQLite database in the ' +
-      'same directory as sessions.db), not in the Devin CLI\'s SQLite database. ' +
-      'If a legacy `hidden-sessions.json` sidecar exists it is migrated automatically on first start.',
+    'Codex archive state is changed through `codex archive` / `codex unarchive`. ' +
+      'Dashboard-only title overrides are stored in `~/.codex/ui-my-cli-dashboard.db`.',
     'Production: `npm start` — must run `npm run build` first.',
     'Development: `node --watch server/index.js` + `cd client && npm run dev`.',
     '**PM2 caveat** — PM2 keeps the old process in memory until explicitly restarted.' +
@@ -164,17 +163,17 @@ module.exports = {
   routeDescriptions: {
     'GET /api/status':               'Server health check — returns `ok`, active PTY count, uptime seconds',
     'GET /api/stats':                'Full dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins',
-    'GET /api/latest-prompt':        'Most recent user prompt from the `prompt_history` table',
+    'GET /api/latest-prompt':        'Most recent user prompt from Codex local thread state',
     'GET /api/sessions':             'List all active (non-archived) sessions with derived status',
     'GET /api/sessions/archived':    'List archived (hidden) sessions',
     'GET /api/sessions/search':      'Full-text session search — query param `q` (required), `archived=1` to include archived sessions. Searches title, working directory, prompt history, and user-role message content. Returns same shape as the sessions list.',
     'GET /api/repos':                'List all unique repos (working directories) from past sessions',
-    'POST /api/sessions/create':     'Start a new Devin session in the given working directory (body: `{ workingDir: string }`); returns `{ sessionId }`',
+    'POST /api/sessions/create':     'Start a new Codex session in the given working directory (body: `{ workingDir: string }`); returns `{ sessionId }`',
     'GET /api/sessions/:id/preview': 'Rich read-only session detail — chat history, stats, top tools',
     'GET /api/sessions/:id/conversation': 'Paginated user↔assistant conversation turns for a session. Query params: `offset` (number of turns to skip from end, default 0), `limit` (max turns to return, 0 = all, default 50). Returns `{ turns, totalTurns, hasMore }`.',
-    'GET /api/sessions/:id/subagents': 'Subagent lifecycle data for a session — launch, confirmation, and completion events mined from `message_nodes`. Returns an array of `{ id, title, profile, isBackground, agentId, task, launchedAt, completedAt, durationSec, resultPreview }`.',
-    'GET /api/sessions/:id/context': 'Context window breakdown for a session — estimated token counts per category (system prompt, user messages, assistant messages, tool calls, tool results) plus free capacity. Proportions are computed from character counts in the active context (post-compaction) and scaled to match the actual `num_tokens_preceding` value. Returns `{ categories, totalUsed, maxContext, freeTokens, compactionCount, model }`.',
-    'GET /api/sessions/:id/config': 'Per-session configuration extracted from `cogs_json` — active rules files, invoked skills, permission grants, current model, and permission mode. Returns `{ rules, activeSkills, permissions, model, permissionMode }`.',
+    'GET /api/sessions/:id/subagents': 'Reserved for linked Codex subagent/review thread data. Returns an array; v1 returns `[]`.',
+    'GET /api/sessions/:id/context': 'Estimated context breakdown for a Codex session based on rollout JSONL message and tool content. Returns `{ categories, totalUsed, maxContext, freeTokens, compactionCount, model }`.',
+    'GET /api/sessions/:id/config': 'Per-session Codex configuration metadata. Returns `{ rules, activeSkills, permissions, model, permissionMode }`.',
     'GET /api/sessions/:id':         'Single session with `ptyActive` flag',
     'POST /api/sessions/:id/rename': 'Update session title (body: `{ title: string }`)',
     'POST /api/sessions/:id/kill-pty': 'Kill the active PTY for a session without archiving it',
@@ -186,8 +185,9 @@ module.exports = {
   envVarDescriptions: {
     PORT:                    'HTTP server port',
     NODE_ENV:                'Set to `production` to enable static file serving from `client/dist/`',
-    DEVIN_DB_PATH:           'Override the auto-detected Devin CLI SQLite database path',
-    DEVIN_DASHBOARD_DB_PATH: 'Override the dashboard.db path (defaults to same dir as sessions.db)',
+    CODEX_HOME:              'Override the Codex home directory (default: `~/.codex`)',
+    CODEX_STATE_DB_PATH:     'Override the auto-detected Codex state SQLite database path',
+    UI_MY_CLI_DB_PATH:       'Override the dashboard metadata database path',
     XDG_DATA_HOME:           'Override the XDG data directory (default: `~/.local/share`); affects DB path on all platforms',
     SHELL:                   'Shell binary for the node-pty process (falls back to `/bin/zsh` on macOS, then `/bin/bash`, then `/bin/sh`)',
     APPDATA:                 'Windows `%APPDATA%` directory — used to find the database path on Windows',
@@ -206,7 +206,7 @@ module.exports = {
 
     prerequisites: [
       'Dashboard running via PM2: `npm run pm2:start` (or confirm with `pm2 list`)',
-      'At least one Devin CLI session must exist (run `devin` once) — tests interact with session cards',
+      'At least one Codex CLI session must exist (run `codex` once) — tests interact with session cards',
       'Playwright browsers installed: `npx playwright install chromium` (one-time setup)',
     ],
 

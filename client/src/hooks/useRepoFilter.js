@@ -12,7 +12,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import { isHeadless } from '../lib/headless.js'
 
-const STORAGE_KEY = 'devin-dash:visible-repos'
+const STORAGE_KEY = 'codex-dash:visible-repos'
 
 function loadRepoFilter() {
   try {

@@ -1,5 +1,5 @@
 /**
- * AgentCard — one row in the sidebar representing a Devin session.
+ * AgentCard — one row in the sidebar representing a Codex session.
  *
  * Click targets:
  *   Status icon (left square)  → onPreview(id)  — opens read-only preview, no PTY

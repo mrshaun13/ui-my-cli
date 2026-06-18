@@ -1,5 +1,5 @@
 /**
- * Devin Dashboard — Express server with WebSocket support.
+ * Codex Dashboard — Express server with WebSocket support.
  *
  * REST endpoints:
  *   GET  /api/sessions              — list all sessions with status
@@ -28,6 +28,7 @@ const { listSessions, listArchivedSessions, getSession, getSessionPreview, getSe
 const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
 const { getStats, getLatestPrompt } = require('./stats');
 const { extractSubagents } = require('./subagents');
+const { resolveStateDbPath, resolveSessionsDir } = require('./codex-paths');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
 const IS_DEV = process.env.NODE_ENV !== 'production';
@@ -139,10 +140,10 @@ app.post('/api/sessions/create', (req, res) => {
     console.log(`[create] spawned new session in ${workingDir} (key: ${tempKey})`);
 
     // Return immediately — the client connects its terminal to the temp key.
-    // The Devin CLI only writes a session record to SQLite after the user types
-    // their first prompt, so we poll in the background to re-key the PTY entry
-    // once the real session ID appears. This prevents a duplicate PTY from being
-    // spawned if the user clicks the sidebar card for the new session.
+    // Codex writes a thread record after the interactive session starts, so we
+    // poll in the background to re-key the PTY entry once the real session ID
+    // appears. This prevents a duplicate PTY from being spawned if the user
+    // clicks the sidebar card for the new session.
     const POLL_INTERVAL = 2000;
     const MAX_POLLS = 90;  // ~3 minutes of polling
     let polls = 0;
@@ -370,16 +371,15 @@ function broadcastLatestPrompt() {
   }
 }
 
-// Watch the SQLite WAL file — the Devin CLI writes here every time a prompt
-// is submitted. Debounce 120ms to avoid double-fires on WAL + SHM updates.
+// Watch Codex local state files. Debounce 120ms to avoid duplicate events from
+// SQLite WAL/SHM and rollout JSONL writes.
 // Returns watcher references so they can be closed on shutdown.
 function watchDbForPrompts() {
-  const { resolveDbPath } = require('./db-path');
-  const dbPath = resolveDbPath();
+  const dbPath = resolveStateDbPath();
   const walPath = dbPath + '-wal';
+  const shmPath = dbPath + '-shm';
+  const sessionsDir = resolveSessionsDir();
 
-  // Watch both the main DB and WAL — depending on SQLite journal mode either
-  // one may be the first file to change after a write.
   let debounceTimer = null;
   const watchers = [];
   function onDbChange() {
@@ -390,7 +390,7 @@ function watchDbForPrompts() {
     }, 120);
   }
 
-  for (const p of [dbPath, walPath]) {
+  for (const p of [dbPath, walPath, shmPath, sessionsDir]) {
     if (fs.existsSync(p)) {
       try {
         watchers.push(fs.watch(p, onDbChange));
@@ -468,7 +468,7 @@ wss.on('connection', (ws, req) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`\nDevin Dashboard running at http://localhost:${PORT}`);
+  console.log(`\nCodex Dashboard running at http://localhost:${PORT}`);
   if (IS_DEV) {
     console.log(`Client dev server: http://localhost:5173`);
   }

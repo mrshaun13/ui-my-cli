@@ -4,10 +4,10 @@
  * One PTY per session ID. Multiple WS clients can attach to the same PTY
  * (e.g. two browser tabs), all sharing the same terminal stream.
  *
- * The PTY runs: devin --resume <session-id>
+ * The PTY runs: codex resume <session-id>
  *
  * On WSL: we need to ensure the shell environment is properly inherited
- * so the devin binary is on PATH.
+ * so the codex binary is on PATH.
  *
  * Output buffering:
  *   Each PTY keeps a rolling byte buffer (SCROLLBACK_BYTES) of recent output.
@@ -115,20 +115,13 @@ function getShell() {
 const SESSION_ID_RE = /^[a-f0-9-]+$/i;
 
 /**
- * Returns the args to pass to the shell for launching devin.
- * If sessionId is provided, uses --resume; otherwise starts a new session.
+ * Returns the Codex argv for resuming or launching a session.
  */
-function getShellArgs(sessionId) {
+function getCodexArgs(sessionId) {
   if (sessionId && !SESSION_ID_RE.test(sessionId)) {
     throw new Error(`Invalid session ID: ${sessionId}`);
   }
-  const cmd = sessionId
-    ? `devin --resume ${sessionId} --respect-workspace-trust false`
-    : `devin --respect-workspace-trust false`;
-  if (process.platform === 'win32') {
-    return ['/k', cmd];
-  }
-  return ['-i', '-l', '-c', cmd];
+  return sessionId ? ['resume', sessionId] : [];
 }
 
 // ── Scrollback buffer ────────────────────────────────────────────────────────
@@ -212,9 +205,9 @@ function wirePtyEvents(entry, sessionId) {
  * On failure, logs a detailed diagnostic and (if a ws client is provided)
  * sends a user-friendly error to the terminal instead of crashing the server.
  */
-function doSpawn(shell, args, cwd, cols, rows, ws) {
+function doSpawn(command, args, cwd, cols, rows, ws) {
   try {
-    const p = pty.spawn(shell, args, {
+    const p = pty.spawn(command, args, {
       name: 'xterm-256color',
       cols,
       rows,
@@ -223,8 +216,8 @@ function doSpawn(shell, args, cwd, cols, rows, ws) {
         ...process.env,
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',
-        // Prevent nested devin dashboard from launching
-        DEVIN_DASHBOARD: '1',
+        // Let child Codex sessions know they were launched from this dashboard.
+        UI_MY_CLI_DASHBOARD: '1',
         // Strip Homebrew's npm_config_prefix so NVM loads cleanly in the PTY.
         // On macOS, Homebrew sets this to /opt/homebrew which makes NVM refuse
         // to start. Empty string effectively unsets it; harmless on Linux/WSL.
@@ -241,7 +234,7 @@ function doSpawn(shell, args, cwd, cols, rows, ws) {
   } catch (err) {
     // Log full diagnostic server-side
     console.error(`[pty] Failed to spawn PTY: ${err.message}`);
-    console.error(`[pty]   shell=${shell}, cwd=${cwd}, platform=${process.platform}, arch=${process.arch}`);
+    console.error(`[pty]   command=${command}, args=${JSON.stringify(args)}, cwd=${cwd}, platform=${process.platform}, arch=${process.arch}`);
     console.error(`[pty]   SHELL=$${process.env.SHELL || '(unset)'}, node=${process.version}`);
 
     // Send a helpful message to the browser terminal
@@ -263,8 +256,7 @@ function doSpawn(shell, args, cwd, cols, rows, ws) {
 
 /**
  * Spawns a new PTY for the given session, or attaches to existing one.
- * workingDir: the session's working_directory from the DB — used as PTY cwd
- * so Devin doesn't show the workspace trust prompt.
+ * workingDir: the Codex thread cwd — used as PTY cwd for resume/new sessions.
  * ws: initial WebSocket client to attach.
  */
 function spawnPty(sessionId, workingDir, ws, cols = 80, rows = 24) {
@@ -282,14 +274,14 @@ function spawnPty(sessionId, workingDir, ws, cols = 80, rows = 24) {
     return entry.pty;
   }
 
-  const shell = getShell();
-  const args = getShellArgs(sessionId);
+  const command = 'codex';
+  const args = getCodexArgs(sessionId);
 
-  // Use session's working directory so Devin doesn't prompt for workspace trust.
+  // Use the session's working directory so Codex resumes with the same root.
   // Fall back to home if the directory no longer exists (deleted repo, etc.).
   const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
 
-  const entry = doSpawn(shell, args, cwd, cols, rows, ws);
+  const entry = doSpawn(command, args, cwd, cols, rows, ws);
   if (!entry) return null;
 
   entry.clients.add(ws);
@@ -381,7 +373,7 @@ function activePtySessions() {
 }
 
 /**
- * Spawns a brand-new Devin session (no --resume) in the given working directory.
+ * Spawns a brand-new Codex session in the given working directory.
  * The PTY is stored under `tempKey` until the real session ID is detected from the
  * DB, at which point the caller should call rekeyPty(tempKey, realSessionId).
  *
@@ -389,11 +381,11 @@ function activePtySessions() {
  * standard /ws/terminal/:sessionId path once the real ID is known.
  */
 function spawnNewSession(tempKey, workingDir, cols = 80, rows = 24) {
-  const shell = getShell();
-  const args = getShellArgs(null);  // no sessionId → bare `devin`
+  const command = 'codex';
+  const args = getCodexArgs(null);
   const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
 
-  const entry = doSpawn(shell, args, cwd, cols, rows, null);
+  const entry = doSpawn(command, args, cwd, cols, rows, null);
   if (!entry) return null;
 
   ptys.set(tempKey, entry);

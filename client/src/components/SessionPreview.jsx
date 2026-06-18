@@ -394,7 +394,7 @@ function ChatBubble({ turn, index, total }) {
         >
           <CopyButton text={turn.assistantText} />
           <span className="preview-bubble-label">
-            devin
+            codex
             {assistTimestamp && <span className="preview-bubble-time">{assistTimestamp.time}</span>}
           </span>
           <p className="preview-bubble-text">{assistDisplay}</p>
@@ -403,7 +403,7 @@ function ChatBubble({ turn, index, total }) {
         <div className="preview-bubble preview-bubble-assistant preview-bubble-dim">
           {/* No copy button here — there is no real text to copy, just the
               "(tool calls only)" placeholder. */}
-          <span className="preview-bubble-label">devin</span>
+          <span className="preview-bubble-label">codex</span>
           <p className="preview-bubble-text" style={{ fontStyle: 'italic', opacity: 0.4 }}>
             (tool calls only — no text response)
           </p>
@@ -671,18 +671,18 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
         <StatPill
           label="user msgs"
           value={data.userMsgCount}
-          tip="Number of messages you sent to Devin in this session."
+          tip="Number of messages you sent to Codex in this session."
         />
         <StatPill
           label="tool calls"
           value={data.toolCallCount.toLocaleString()}
-          tip="Total number of tool invocations Devin made — exec, read, edit, grep, web fetch, etc. Higher counts mean more autonomous work."
+          tip="Total number of tool invocations Codex made — exec, read, edit, grep, web fetch, etc. Higher counts mean more autonomous work."
         />
         <StatPill
           label="compactions"
           value={data.compactionCount}
           highlight={data.compactionCount > 5 ? 'var(--yellow)' : undefined}
-          tip="Context compactions happen when the conversation history gets too long. Devin summarizes earlier turns to free up context window space. Frequent compactions may indicate a very long or complex session."
+          tip="Context compactions happen when the conversation history gets too long. Codex summarizes earlier turns to free up context window space. Frequent compactions may indicate a very long or complex session."
         />
         <StatPill
           label="peak ctx"
@@ -729,7 +729,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
             label="subagents"
             value={data.subagentCount}
             highlight="var(--purple)"
-            tip="Number of subagents spawned by Devin during this session. Subagents handle delegated tasks (code exploration, parallel work) in their own context."
+            tip="Number of subagents spawned by Codex during this session. Subagents handle delegated tasks (code exploration, parallel work) in their own context."
           />
         )}
       </div>
@@ -798,7 +798,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
         <div className="preview-tools-col">
           <div className="preview-section-label" style={{ marginTop: 14 }}>
             Tool breakdown
-            <InfoBubble tip="How often Devin used each tool in this session. Tools let Devin interact with your system — run commands, read/edit files, search code, browse the web, and more." />
+            <InfoBubble tip="How often Codex used each tool in this session. Tools let Codex interact with your system — run commands, read/edit files, search code, browse the web, and more." />
           </div>
           <ToolMiniBar tools={data.topTools} />
 
@@ -812,7 +812,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
             <>
               <div className="preview-section-label" style={{ marginTop: 14 }}>
                 Subagents
-                <InfoBubble tip="Background and foreground subagents spawned by Devin during this session. Each subagent runs in its own context with a specific profile (explore = read-only, general = full access)." />
+                <InfoBubble tip="Background and foreground subagents spawned by Codex during this session. Each subagent runs in its own context with a specific profile (explore = read-only, general = full access)." />
               </div>
               <SubagentTimeline subagents={subagents} />
             </>
@@ -869,7 +869,7 @@ export default function SessionPreview({ sessionId, onResume, onArchive, onResto
             <div className="preview-info-row">
               <span className="preview-info-key">
                 permission
-                <InfoBubble tip="Permission mode controls how freely Devin can act without asking you first. 'cautious' asks before most actions; 'normal' asks for risky operations; 'yolo' runs autonomously." />
+                <InfoBubble tip="Permission mode controls how freely Codex can act without asking you first. 'cautious' asks before most actions; 'normal' asks for risky operations; 'yolo' runs autonomously." />
               </span>
               <span className="preview-info-val">{data.permissionMode}</span>
             </div>
