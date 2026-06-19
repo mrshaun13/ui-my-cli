@@ -20,6 +20,11 @@ function getDb() {
       session_id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS hidden_sessions (
+      session_id TEXT PRIMARY KEY,
+      updated_at INTEGER NOT NULL
     )
   `);
   return db;
@@ -51,4 +56,35 @@ function setTitle(sessionId, title) {
   return { id: sessionId, title: trimmed };
 }
 
-module.exports = { titleOverrides, getTitle, setTitle };
+function hiddenSessions() {
+  const rows = getDb().prepare('SELECT session_id FROM hidden_sessions').all();
+  return new Set(rows.map(row => row.session_id));
+}
+
+function hideSession(sessionId) {
+  getDb().prepare(`
+    INSERT INTO hidden_sessions (session_id, updated_at)
+    VALUES (?, ?)
+    ON CONFLICT(session_id) DO UPDATE SET updated_at = excluded.updated_at
+  `).run(sessionId, Math.floor(Date.now() / 1000));
+  return { id: sessionId, archived: true };
+}
+
+function restoreSession(sessionId) {
+  getDb().prepare('DELETE FROM hidden_sessions WHERE session_id = ?').run(sessionId);
+  return { id: sessionId, archived: false };
+}
+
+function isHidden(sessionId) {
+  return !!getDb().prepare('SELECT 1 FROM hidden_sessions WHERE session_id = ?').get(sessionId);
+}
+
+module.exports = {
+  titleOverrides,
+  getTitle,
+  setTitle,
+  hiddenSessions,
+  hideSession,
+  restoreSession,
+  isHidden,
+};

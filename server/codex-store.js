@@ -11,9 +11,12 @@ const { execFileSync } = require('child_process');
 const Database = require('better-sqlite3');
 const { resolveCodexHome, resolveStateDbPath, findRolloutPath } = require('./codex-paths');
 const dashboardStore = require('./dashboard-store');
+const transcriptHeadless = require('./transcript-headless-store');
 
 const USER_SOURCES = new Set(['cli', 'vscode']);
 const DEFAULT_CONTEXT = 200000;
+const HEADLESS_PREFIX_RE = /^headless-\d{8}-/;
+const HEADLESS_STAMP_RE = /--(?:triage|continue|workflow|research-visualizer|interview-me|generate-presentation)-\d{4}-\d{2}-\d{2}T/;
 
 function formatDuration(sec) {
   if (!Number.isFinite(sec) || sec < 0) sec = 0;
@@ -248,6 +251,19 @@ function statusFor(thread, rollout) {
   return 'finished';
 }
 
+function isNativeHeadlessThread(thread) {
+  const haystack = [
+    thread.title,
+    thread.cwd,
+    thread.first_user_message,
+    thread.preview,
+    thread.id,
+  ].filter(Boolean).join('\n');
+  return HEADLESS_PREFIX_RE.test(thread.title || '')
+    || HEADLESS_PREFIX_RE.test(path.basename(thread.cwd || ''))
+    || HEADLESS_STAMP_RE.test(haystack);
+}
+
 function normalizeThread(thread, overrides = dashboardStore.titleOverrides(), rollout = null) {
   const parsed = rollout || readRollout(thread);
   const firstUser = thread.first_user_message || parsed.messages.find(m => m.role === 'user')?.text || null;
@@ -284,18 +300,25 @@ function normalizeThread(thread, overrides = dashboardStore.titleOverrides(), ro
 
 function listSessions() {
   const overrides = dashboardStore.titleOverrides();
-  return listThreads({ includeArchived: false, includeSystem: false })
-    .map(thread => normalizeThread(thread, overrides));
+  return [
+    ...listThreads({ includeArchived: false, includeSystem: false })
+      .map(thread => normalizeThread(thread, overrides)),
+    ...transcriptHeadless.listSessions(),
+  ].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
 
 function listArchivedSessions() {
   const overrides = dashboardStore.titleOverrides();
-  return listThreads({ includeArchived: true, includeSystem: false })
-    .filter(thread => !!thread.archived)
-    .map(thread => normalizeThread(thread, overrides));
+  return [
+    ...listThreads({ includeArchived: true, includeSystem: false })
+      .filter(thread => !!thread.archived)
+      .map(thread => normalizeThread(thread, overrides)),
+    ...transcriptHeadless.listArchivedSessions(),
+  ].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
 
 function getSession(id) {
+  if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.getSession(id);
   const thread = getThread(id, { includeArchived: false, includeSystem: false });
   return thread ? normalizeThread(thread) : null;
 }
@@ -382,6 +405,7 @@ function tokenTelemetry(rollout, thread) {
 }
 
 function getSessionPreview(id) {
+  if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.getSessionPreview(id);
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) return null;
   const rollout = readRollout(thread);
@@ -428,6 +452,7 @@ function projectDuration(cwd) {
 }
 
 function getSessionConversation(id, offset = 0, limit = 50) {
+  if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.getSessionConversation(id, offset, limit);
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) return null;
   const turns = readRollout(thread).turns.filter(t => t.userText || t.assistantText);
@@ -448,6 +473,7 @@ function getSessionConversation(id, offset = 0, limit = 50) {
 }
 
 function getSessionContextBreakdown(id) {
+  if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.getSessionContextBreakdown(id);
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) return null;
   const rollout = readRollout(thread);
@@ -483,6 +509,7 @@ function getSessionContextBreakdown(id) {
 }
 
 function getSessionConfig(id) {
+  if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.getSessionConfig(id);
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) return null;
   const sandbox = thread.sandbox_policy ? safeJson(thread.sandbox_policy) : null;
@@ -518,11 +545,13 @@ function runCodexCommand(args) {
 }
 
 function hideSession(id) {
+  if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.hideSession(id);
   runCodexCommand(['archive', id]);
   return { id, archived: true };
 }
 
 function restoreSession(id) {
+  if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.restoreSession(id);
   runCodexCommand(['unarchive', id]);
   return { id, archived: false };
 }
@@ -530,16 +559,23 @@ function restoreSession(id) {
 function listRepos() {
   const seen = new Set();
   const repos = [];
-  for (const thread of listThreads({ includeArchived: true, includeSystem: false })) {
-    if (!thread.cwd || seen.has(thread.cwd)) continue;
-    seen.add(thread.cwd);
-    repos.push({ workingDir: thread.cwd, project: projectName(thread.cwd) });
+  for (const repo of [
+    ...listThreads({ includeArchived: true, includeSystem: false })
+      .map(thread => ({ workingDir: thread.cwd, project: projectName(thread.cwd) })),
+    ...transcriptHeadless.listRepos(),
+  ]) {
+    if (!repo.workingDir || seen.has(repo.workingDir)) continue;
+    seen.add(repo.workingDir);
+    repos.push(repo);
   }
   return repos.sort((a, b) => a.project.localeCompare(b.project));
 }
 
 function listSessionIds() {
-  return new Set(listThreads({ includeArchived: true, includeSystem: false }).map(thread => thread.id));
+  return new Set([
+    ...listThreads({ includeArchived: true, includeSystem: false }).map(thread => thread.id),
+    ...transcriptHeadless.listSessionIds(),
+  ]);
 }
 
 function findNewSessionInDir(workingDir, excludeIds) {
@@ -552,7 +588,7 @@ function findNewSessionInDir(workingDir, excludeIds) {
 function searchSessions(query, includeArchived) {
   const q = (query || '').toLowerCase();
   const overrides = dashboardStore.titleOverrides();
-  return listThreads({ includeArchived: true, includeSystem: false })
+  const native = listThreads({ includeArchived: true, includeSystem: false })
     .filter(thread => includeArchived || !thread.archived)
     .map(thread => {
       const rollout = readRollout(thread);
@@ -570,23 +606,37 @@ function searchSessions(query, includeArchived) {
       return haystack.includes(q);
     })
     .map(({ session }) => session);
+  return [...native, ...transcriptHeadless.searchSessions(query, includeArchived)]
+    .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
 
 function latestPrompt() {
   const threads = listThreads({ includeArchived: true, includeSystem: false });
   const thread = threads.find(t => t.first_user_message || t.preview);
-  if (!thread) return null;
-  return {
+  const native = thread ? {
     sessionId: thread.id,
     title: dashboardStore.getTitle(thread.id) || thread.title || thread.id.slice(0, 8),
     project: projectName(thread.cwd),
     prompt: thread.first_user_message || thread.preview,
     timestamp: thread.updated_at,
-  };
+  } : null;
+  const external = transcriptHeadless.latestPrompt();
+  if (!native) return external;
+  if (!external) return native;
+  return external.timestamp > native.timestamp ? external : native;
 }
 
-function stats() {
-  const threads = listThreads({ includeArchived: false, includeSystem: false });
+function stats(options = {}) {
+  const requestedMode = options.statsMode || (
+    options.includeTranscriptHeadless === '0' || options.includeTranscriptHeadless === 'false' || options.includeTranscriptHeadless === false
+      ? 'codex'
+      : 'combined'
+  );
+  const statsMode = ['combined', 'triage', 'codex'].includes(requestedMode) ? requestedMode : 'combined';
+  const nativeThreadsAll = listThreads({ includeArchived: false, includeSystem: false });
+  const threads = statsMode === 'triage' ? [] : nativeThreadsAll;
+  const externalSessionsAll = transcriptHeadless.listSessions();
+  const externalSessions = statsMode === 'codex' ? [] : externalSessionsAll;
   const rollouts = new Map();
   const getRollout = thread => {
     if (!rollouts.has(thread.id)) rollouts.set(thread.id, readRollout(thread));
@@ -601,6 +651,10 @@ function stats() {
   }
   for (const thread of threads) {
     const d = new Date((thread.created_at || 0) * 1000).toISOString().slice(0, 10);
+    if (d in byDay) byDay[d]++;
+  }
+  for (const session of externalSessions) {
+    const d = new Date((session.lastActivityAt || session.createdAt || 0) * 1000).toISOString().slice(0, 10);
     if (d in byDay) byDay[d]++;
   }
 
@@ -621,17 +675,39 @@ function stats() {
       messages: rollout.messages.length,
     });
   }
+  for (const session of externalSessions) {
+    const preview = transcriptHeadless.getSessionPreview(session.id);
+    const durationSec = preview?.durationSec || 0;
+    const messages = (preview?.userMsgCount || 0) + (preview?.assistantMsgCount || 0);
+    const bucket = projectMap['transcript-pipeline'] ||= { name: 'transcript-pipeline', sessions: 0, messages: 0, durationSec: 0, sessions_detail: [] };
+    bucket.sessions++;
+    bucket.messages += messages;
+    bucket.durationSec += durationSec;
+    bucket.sessions_detail.push({
+      id: session.id,
+      title: dashboardStore.getTitle(session.id) || session.title || session.id,
+      durationSec,
+      durationStr: formatDuration(durationSec),
+      messages,
+    });
+  }
   const projects = Object.values(projectMap).map(p => ({ ...p, durationStr: formatDuration(p.durationSec) }));
 
   const toolInteractive = {};
+  const toolHeadlessOther = {};
   const modelMap = {};
   const tokensByHour = emptyTokenWindows();
   const tokenHeatmap = emptyTokenHeatmap();
   const recentPrompts = [];
 
+  for (const thread of nativeThreadsAll) {
+    const rollout = getRollout(thread);
+    const toolBucket = isNativeHeadlessThread(thread) ? toolHeadlessOther : toolInteractive;
+    for (const tool of rollout.tools) toolBucket[tool.name] = (toolBucket[tool.name] || 0) + 1;
+  }
+
   for (const thread of threads) {
     const rollout = getRollout(thread);
-    for (const tool of rollout.tools) toolInteractive[tool.name] = (toolInteractive[tool.name] || 0) + 1;
     const model = thread.model || 'codex';
     const reasoningEffort = thread.reasoning_effort || rollout.metadata.reasoning_effort || 'unknown';
     const modelKey = `${model}::${reasoningEffort}`;
@@ -686,6 +762,48 @@ function stats() {
     .map(([name, calls]) => ({ name, calls }))
     .sort((a, b) => b.calls - a.calls)
     .slice(0, 12);
+  const transcriptHeadlessCounts = {};
+  for (const session of externalSessionsAll) {
+    const name = session.externalKind || 'transcript-pipeline';
+    transcriptHeadlessCounts[name] = (transcriptHeadlessCounts[name] || 0) + 1;
+  }
+  const allHeadlessCounts = { ...toolHeadlessOther };
+  for (const [name, calls] of Object.entries(transcriptHeadlessCounts)) {
+    allHeadlessCounts[name] = (allHeadlessCounts[name] || 0) + calls;
+  }
+
+  const addModelUsage = (model, reasoningEffort, tokens) => {
+    const modelKey = `${model}::${reasoningEffort || 'unknown'}`;
+    const modelEntry = modelMap[modelKey] ||= {
+      key: modelKey,
+      model,
+      reasoningEffort: reasoningEffort || 'unknown',
+      calls: 0,
+      inputTokens: 0,
+      totalInputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      visibleOutputTokens: 0,
+      reasoningOutputTokens: 0,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0,
+      unclassifiedTokens: 0,
+      totalTokens: 0,
+      sessions: 0,
+    };
+    modelEntry.inputTokens += tokens.inputTokens || 0;
+    modelEntry.totalInputTokens += tokens.totalInputTokens || 0;
+    modelEntry.cachedInputTokens += tokens.cachedInputTokens || 0;
+    modelEntry.outputTokens += tokens.outputTokens || 0;
+    modelEntry.visibleOutputTokens += tokens.visibleOutputTokens || 0;
+    modelEntry.reasoningOutputTokens += tokens.reasoningOutputTokens || 0;
+    modelEntry.cacheReadTokens += tokens.cacheReadTokens || 0;
+    modelEntry.cacheWriteTokens += tokens.cacheWriteTokens || 0;
+    modelEntry.unclassifiedTokens += tokens.unclassifiedTokens || 0;
+    modelEntry.totalTokens += tokens.totalTokens || 0;
+    modelEntry.sessions++;
+    modelEntry.calls += tokens.calls || 1;
+  };
 
   const sessionMap = Object.fromEntries(threads.map(thread => {
     const rollout = getRollout(thread);
@@ -701,18 +819,59 @@ function stats() {
       ...tokens,
     }];
   }));
+  for (const session of externalSessions) {
+    const preview = transcriptHeadless.getSessionPreview(session.id);
+    if (!preview) continue;
+    const tokens = {
+      inputTokens: preview.inputTokens || 0,
+      totalInputTokens: preview.totalInputTokens || 0,
+      cachedInputTokens: preview.cachedInputTokens || 0,
+      outputTokens: preview.outputTokens || 0,
+      visibleOutputTokens: preview.visibleOutputTokens || 0,
+      reasoningOutputTokens: preview.reasoningOutputTokens || 0,
+      cacheReadTokens: preview.cacheReadTokens || 0,
+      cacheWriteTokens: preview.cacheWriteTokens || 0,
+      unclassifiedTokens: preview.unclassifiedTokens || 0,
+      totalTokens: preview.totalTokens || 0,
+      calls: preview.calls || 1,
+    };
+    addModelUsage(session.model || 'codex', session.reasoningEffort || 'unknown', tokens);
+    if (tokens.totalTokens) addTokenActivity(tokensByHour, tokenHeatmap, session.lastActivityAt || session.createdAt || 0, tokens);
+    if (session.firstUserPrompt) {
+      recentPrompts.push({
+        sessionId: session.id,
+        title: dashboardStore.getTitle(session.id) || session.title || session.id,
+        project: session.project || 'transcript-pipeline',
+        prompt: session.firstUserPrompt,
+        timestamp: session.lastActivityAt,
+      });
+    }
+    sessionMap[session.id] = {
+      id: session.id,
+      title: dashboardStore.getTitle(session.id) || session.title || session.id,
+      project: session.project || 'transcript-pipeline',
+      model: session.model || 'codex',
+      reasoningEffort: session.reasoningEffort || null,
+      durationSec: preview.durationSec || 0,
+      userMsgCount: preview.userMsgCount || 0,
+      ...tokens,
+    };
+  }
 
   return {
     activity: {
-      h24: threads.filter(t => now - t.updated_at < 86400).length,
-      h48: threads.filter(t => now - t.updated_at < 172800).length,
-      h72: threads.filter(t => now - t.updated_at < 259200).length,
-      older: threads.filter(t => now - t.updated_at >= 259200).length,
-      total: threads.length,
+      h24: threads.filter(t => now - t.updated_at < 86400).length + externalSessions.filter(s => now - s.lastActivityAt < 86400).length,
+      h48: threads.filter(t => now - t.updated_at < 172800).length + externalSessions.filter(s => now - s.lastActivityAt < 172800).length,
+      h72: threads.filter(t => now - t.updated_at < 259200).length + externalSessions.filter(s => now - s.lastActivityAt < 259200).length,
+      older: threads.filter(t => now - t.updated_at >= 259200).length + externalSessions.filter(s => now - s.lastActivityAt >= 259200).length,
+      total: threads.length + externalSessions.length,
     },
     sessionsByDay: byDay,
     projects: projects.sort((a, b) => b.messages - a.messages),
-    tools: { interactive: toolRank(toolInteractive), headless: [] },
+    tools: {
+      interactive: toolRank(toolInteractive),
+      headless: toolRank(allHeadlessCounts),
+    },
     activityByHour: { b24: new Array(24).fill(0), b48: new Array(24).fill(0), b7d: [] },
     tokensByHour,
     tokenHeatmap,
@@ -735,7 +894,14 @@ function stats() {
       .sort((a, b) => b.totalTokens - a.totalTokens)
       .slice(0, 10),
     totalSubagents: 0,
-    sources: sourceBreakdown(threads),
+    sources: {
+      ...sourceBreakdown(threads),
+      ...(externalSessions.length ? { 'transcript-pipeline': externalSessions.length } : {}),
+    },
+    statsFilters: {
+      statsMode,
+      transcriptHeadlessCount: externalSessionsAll.length,
+    },
   };
 }
 

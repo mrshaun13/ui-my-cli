@@ -1308,6 +1308,38 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+.stats-cohort-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 26px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.stats-cohort-toggle-btn {
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: 10px var(--font-mono);
+  cursor: pointer;
+}
+
+.stats-cohort-toggle-btn:hover,
+.stats-cohort-toggle-btn.active {
+  border-color: var(--purple);
+  color: var(--text-primary);
+}
+
+.stats-cohort-toggle-btn.active {
+  background: color-mix(in srgb, var(--purple) 12%, var(--bg-surface));
+}
+
 /* ── Heatmap HTML tooltip ───────────────────────────────────────── */
 .heatmap-tooltip {
   position: absolute;

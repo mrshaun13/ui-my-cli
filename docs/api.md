@@ -9,8 +9,8 @@ with an appropriate HTTP status code.
 | --- | --- | --- |
 | `GET` | `/api/status` | Server health check — returns `ok`, default provider, provider availability, active PTY count, uptime seconds |
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
-| `GET` | `/api/:providerId/stats` | Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins |
-| `GET` | `/api/stats` | Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default |
+| `GET` | `/api/:providerId/stats` | Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex supports `statsMode=combined|triage|codex` to switch chart cohorts while leaving tool-call columns stable. |
+| `GET` | `/api/stats` | Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default; accepts the same stats query params |
 | `GET` | `/api/:providerId/latest-prompt` | Most recent user prompt from the selected provider local state |
 | `GET` | `/api/latest-prompt` | Compatibility alias for the default provider latest prompt |
 | `GET` | `/api/:providerId/sessions` | List all active (non-archived) sessions for one provider with derived status |
@@ -96,6 +96,8 @@ Compatibility alias: `/ws/status` uses the default provider.
 | `CODEX_HOME` | `—` | Override the Codex home directory (default: `~/.codex`) |
 | `CODEX_STATE_DB_PATH` | `—` | Override the auto-detected Codex state SQLite database path |
 | `UI_MY_CLI_DB_PATH` | `—` | Override the dashboard metadata database path |
+| `TRANSCRIPT_PIPELINE_HEADLESS_SESSIONS_DIR` | `—` | Override the exact transcript-pipeline `data/headless-sessions` ledger directory |
+| `TRANSCRIPT_PIPELINE_DIR` | `—` | Override the transcript-pipeline checkout used to discover Codex headless run ledgers |
 | `UI_MY_CLI_DEFAULT_PROVIDER` | `codex` | Override the compatibility/default provider for legacy `/api/...` and `/ws/...` aliases (default: `codex`) |
 | `DEVIN_DB_PATH` | `—` | Override the auto-detected Devin `sessions.db` path |
 | `DEVIN_DASHBOARD_DB_PATH` | `—` | Override the Devin dashboard metadata database path |

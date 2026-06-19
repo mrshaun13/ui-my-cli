@@ -167,6 +167,7 @@ function collect() {
   const codexPathSrc = read('server/codex-paths.js');
   const codexStoreSrc = read('server/codex-store.js');
   const dashboardStoreSrc = read('server/dashboard-store.js');
+  const transcriptHeadlessStoreSrc = read('server/transcript-headless-store.js');
   const providerIndexSrc = read('server/providers/index.js');
   const providerCodexSrc = read('server/providers/codex/index.js');
   const providerDevinSrc = read('server/providers/devin/index.js');
@@ -184,6 +185,7 @@ function collect() {
     { name: 'server/codex-paths.js', src: codexPathSrc },
     { name: 'server/codex-store.js', src: codexStoreSrc },
     { name: 'server/dashboard-store.js', src: dashboardStoreSrc },
+    { name: 'server/transcript-headless-store.js', src: transcriptHeadlessStoreSrc },
     { name: 'server/providers/index.js', src: providerIndexSrc },
     { name: 'server/providers/codex/index.js', src: providerCodexSrc },
     { name: 'server/providers/devin/index.js', src: providerDevinSrc },
@@ -371,6 +373,16 @@ Override Devin with \`DEVIN_DB_PATH\` or \`DEVIN_DASHBOARD_DB_PATH\`.
 ### All Environment Variables
 
 ${envTable}
+
+### Codex Stats Cohorts
+
+The Codex stats endpoint accepts \`statsMode=combined|triage|codex\`.
+
+- \`combined\` blends native Codex sessions with transcript-pipeline Codex headless triage runs.
+- \`triage\` shows only transcript-pipeline Codex headless triage runs in the page-level charts.
+- \`codex\` shows native Codex CLI / VS Code sessions without transcript-pipeline triage.
+
+Tool Calls intentionally keeps its interactive/headless split stable across modes.
 
 ## Architecture
 
@@ -593,7 +605,8 @@ The Codex logic lives in \`server/codex-store.js\`; the Devin logic lives in
 | Session metadata | Codex \`~/.codex/state_*.sqlite\` | Read-only |
 | Message history and tool events | Codex rollout JSONL under \`~/.codex/sessions/\` | Read-only |
 | Archive state | Codex CLI \`archive\` / \`unarchive\` commands | Codex-owned |
-| Dashboard title overrides | \`~/.codex/ui-my-cli-dashboard.db\` | Read-write (dashboard only) |
+| Transcript-pipeline Codex headless ledgers | \`TRANSCRIPT_PIPELINE_HEADLESS_SESSIONS_DIR\` or \`~/git/ai-tell-my-story/transcript-pipeline/data/headless-sessions\` | Read-only |
+| Dashboard title overrides and external headless hide state | \`~/.codex/ui-my-cli-dashboard.db\` | Read-write (dashboard only) |
 | Devin session metadata/history | Devin \`sessions.db\` | Read-only except title rename |
 | Devin archive state | Devin dashboard metadata DB next to \`sessions.db\` | Read-write (dashboard only) |
 | User preferences (repo filters, cold-days threshold) | Browser \`localStorage\` | Client-side only; never sent to server |

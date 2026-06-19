@@ -12,21 +12,26 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { providerApiPath } from '../lib/providers.js'
 
-function useStats(providerId, enabled = true) {
+function useStats(providerId, enabled = true, statsMode = 'combined') {
   const [stats, setStats] = useState(null)
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    let cancelled = false
     setStats(null)
     setError(null)
+  }, [providerId, enabled])
+
+  useEffect(() => {
+    let cancelled = false
+    setError(null)
     if (!enabled) return () => { cancelled = true }
-    fetch(providerApiPath(providerId, 'stats'))
+    const url = `${providerApiPath(providerId, 'stats')}?statsMode=${encodeURIComponent(statsMode)}`
+    fetch(url)
       .then(r => r.json())
       .then(d => { if (!cancelled) setStats(d) })
       .catch(e => { if (!cancelled) setError(e.message) })
     return () => { cancelled = true }
-  }, [providerId, enabled])
+  }, [providerId, enabled, statsMode])
 
   return { stats, error }
 }
@@ -550,11 +555,11 @@ function ToolBarChart({ tools }) {
   // array payload (older server still running): treat it as the interactive
   // column with no headless data.
   const interactive = Array.isArray(tools) ? tools : (tools?.interactive || [])
-  const headless    = Array.isArray(tools) ? []    : (tools?.headless    || [])
-
+  const rawHeadless = Array.isArray(tools) ? [] : (tools?.headless || [])
+  const headless = Array.isArray(rawHeadless) ? rawHeadless : (rawHeadless.all || [])
   const showHeadless = headless.length > 0
 
-  if (!interactive.length && !headless.length) {
+  if (!interactive.length && !showHeadless) {
     return <div className="splash-empty-note">No tool data yet.</div>
   }
 
@@ -1213,7 +1218,8 @@ function LoadingMsg() {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function DashboardSplash({ providerId, providerLabel, statsEnabled = true, connected, latestPrompt, onSelectSession }) {
-  const { stats, error } = useStats(providerId, statsEnabled)
+  const [statsMode, setStatsMode] = useState('combined')
+  const { stats, error } = useStats(providerId, statsEnabled, statsMode)
 
   if (!connected) return (
     <div className="splash-loading"><div className="spinner" />Connecting…</div>
@@ -1235,6 +1241,32 @@ export default function DashboardSplash({ providerId, providerLabel, statsEnable
   return (
     <div className="splash">
       <LatestPromptBanner prompt={latestPrompt} />
+      {stats.statsFilters?.transcriptHeadlessCount > 0 && (
+        <div className="stats-cohort-toggle">
+          <span>stats cohort</span>
+          {[
+            ['combined', 'combined'],
+            ['triage', 'triage'],
+            ['codex', 'codex'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={`stats-cohort-toggle-btn ${statsMode === value ? 'active' : ''}`}
+              onClick={() => setStatsMode(value)}
+              title={
+                value === 'combined'
+                  ? 'Show native Codex plus transcript-pipeline triage stats'
+                  : value === 'triage'
+                    ? 'Show only transcript-pipeline triage stats'
+                    : 'Show native Codex stats without transcript-pipeline triage'
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="splash-body">
 
         {/* ── Left column ──────────────────────────────────────────── */}

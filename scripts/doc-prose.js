@@ -36,7 +36,7 @@ module.exports = {
     '**Archive / restore** — hide sessions from the list without deleting them; ' +
       'restore from the collapsible drawer at the bottom of the sidebar',
     '**Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), ' +
-      'token usage, tool call breakdown, model distribution, shown when no session is selected',
+      'token usage, tool call breakdown, model distribution, and Codex stats cohort switching, shown when no session is selected',
     '**Context window pie chart** — per-session donut chart showing context window composition ' +
       '(system prompt, user messages, assistant messages, tool calls, tool results, free capacity)',
     '**Environment banner** — global config overview on the dashboard home page showing active ' +
@@ -95,10 +95,12 @@ module.exports = {
   architecture_overview:
     'The server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. ' +
     'Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. ' +
-    'The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view.',
+    'The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. ' +
+    'The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions.',
 
   data_flow: [
     'Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  Codex provider adapter  →  WebSocket push  →  React client',
+    'transcript-pipeline Codex headless ledger  →  data/headless-sessions status/events files  →  Codex provider external-read adapter  →  React client',
     'Devin CLI  →  Devin sessions.db + dashboard.db  →  Devin provider adapter  →  WebSocket push  →  React client',
     'Browser  →  xterm.js keystrokes  →  provider-scoped WebSocket  →  node-pty  →  selected provider resume command',
   ].join('\n'),
@@ -109,7 +111,7 @@ module.exports = {
     'All server modules use CommonJS (`require` / `module.exports`).',
     'The client uses ES modules with React 19 + Vite.',
     'Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).',
-    'Codex archive state is changed through `codex archive` / `codex unarchive`. Dashboard-only Codex title overrides are stored in `~/.codex/ui-my-cli-dashboard.db`.',
+    'Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Dashboard-only Codex title overrides and external transcript-pipeline headless hide/restore state are stored in `~/.codex/ui-my-cli-dashboard.db`.',
     'Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.',
     'Production: `npm start` — must run `npm run build` first.',
     'Development: `node --watch server/index.js` + `cd client && npm run dev`.',
@@ -166,8 +168,8 @@ module.exports = {
   routeDescriptions: {
     'GET /api/status':               'Server health check — returns `ok`, default provider, provider availability, active PTY count, uptime seconds',
     'GET /api/providers':            'Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata',
-    'GET /api/:providerId/stats':    'Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins',
-    'GET /api/stats':                'Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default',
+    'GET /api/:providerId/stats':    'Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex supports `statsMode=combined|triage|codex` to switch chart cohorts while leaving tool-call columns stable.',
+    'GET /api/stats':                'Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default; accepts the same stats query params',
     'GET /api/:providerId/latest-prompt': 'Most recent user prompt from the selected provider local state',
     'GET /api/latest-prompt':        'Compatibility alias for the default provider latest prompt',
     'GET /api/:providerId/sessions': 'List all active (non-archived) sessions for one provider with derived status',
@@ -208,6 +210,8 @@ module.exports = {
     NODE_ENV:                'Set to `production` to enable static file serving from `client/dist/`',
     CODEX_HOME:              'Override the Codex home directory (default: `~/.codex`)',
     CODEX_STATE_DB_PATH:     'Override the auto-detected Codex state SQLite database path',
+    TRANSCRIPT_PIPELINE_DIR:  'Override the transcript-pipeline checkout used to discover Codex headless run ledgers',
+    TRANSCRIPT_PIPELINE_HEADLESS_SESSIONS_DIR: 'Override the exact transcript-pipeline `data/headless-sessions` ledger directory',
     UI_MY_CLI_DB_PATH:       'Override the dashboard metadata database path',
     UI_MY_CLI_DEFAULT_PROVIDER: 'Override the compatibility/default provider for legacy `/api/...` and `/ws/...` aliases (default: `codex`)',
     DEVIN_DB_PATH:           'Override the auto-detected Devin `sessions.db` path',

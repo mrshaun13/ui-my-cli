@@ -2,12 +2,13 @@
 
 ## Overview
 
-The server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view.
+The server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions.
 
 ## Data Flow
 
 ```
 Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  Codex provider adapter  →  WebSocket push  →  React client
+transcript-pipeline Codex headless ledger  →  data/headless-sessions status/events files  →  Codex provider external-read adapter  →  React client
 Devin CLI  →  Devin sessions.db + dashboard.db  →  Devin provider adapter  →  WebSocket push  →  React client
 Browser  →  xterm.js keystrokes  →  provider-scoped WebSocket  →  node-pty  →  selected provider resume command
 ```
@@ -24,6 +25,7 @@ Browser  →  xterm.js keystrokes  →  provider-scoped WebSocket  →  node-pty
 | `server/codex-paths.js` | Resolves local Codex state paths. |
 | `server/codex-store.js` | Codex session adapter. |
 | `server/dashboard-store.js` | Dashboard-owned metadata for local Codex sessions. |
+| `server/transcript-headless-store.js` | Read-only adapter for transcript-pipeline headless session ledgers. |
 | `server/providers/index.js` | Provider registry for local headless-agent adapters. |
 | `server/providers/codex/index.js` | Codex provider adapter wiring local Codex state into the dashboard contract. |
 | `server/providers/devin/index.js` | Devin provider adapter wiring legacy Devin CLI state into the dashboard contract. |
@@ -85,7 +87,8 @@ The Codex logic lives in `server/codex-store.js`; the Devin logic lives in
 | Session metadata | Codex `~/.codex/state_*.sqlite` | Read-only |
 | Message history and tool events | Codex rollout JSONL under `~/.codex/sessions/` | Read-only |
 | Archive state | Codex CLI `archive` / `unarchive` commands | Codex-owned |
-| Dashboard title overrides | `~/.codex/ui-my-cli-dashboard.db` | Read-write (dashboard only) |
+| Transcript-pipeline Codex headless ledgers | `TRANSCRIPT_PIPELINE_HEADLESS_SESSIONS_DIR` or `~/git/ai-tell-my-story/transcript-pipeline/data/headless-sessions` | Read-only |
+| Dashboard title overrides and external headless hide state | `~/.codex/ui-my-cli-dashboard.db` | Read-write (dashboard only) |
 | Devin session metadata/history | Devin `sessions.db` | Read-only except title rename |
 | Devin archive state | Devin dashboard metadata DB next to `sessions.db` | Read-write (dashboard only) |
 | User preferences (repo filters, cold-days threshold) | Browser `localStorage` | Client-side only; never sent to server |

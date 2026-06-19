@@ -87,9 +87,9 @@ function pendingKey(providerId, tempKey) {
   return `${providerId}:${tempKey}`;
 }
 
-app.get(['/api/:providerId/stats', '/api/stats'], providerRoute((provider, _req, res) => {
+app.get(['/api/:providerId/stats', '/api/stats'], providerRoute((provider, req, res) => {
   try {
-    res.json(provider.stats());
+    res.json(provider.stats(req.query || {}));
   } catch (err) {
     console.error(`[${provider.id}:stats] error:`, err.message);
     res.status(500).json({ error: err.message });

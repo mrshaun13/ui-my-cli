@@ -86,7 +86,7 @@ list". Archive behavior is provider-owned: Codex uses `codex archive` /
 - All server modules use CommonJS (`require` / `module.exports`).
 - The client uses ES modules with React 19 + Vite.
 - Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).
-- Codex archive state is changed through `codex archive` / `codex unarchive`. Dashboard-only Codex title overrides are stored in `~/.codex/ui-my-cli-dashboard.db`.
+- Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Dashboard-only Codex title overrides and external transcript-pipeline headless hide/restore state are stored in `~/.codex/ui-my-cli-dashboard.db`.
 - Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.
 - Production: `npm start` — must run `npm run build` first.
 - Development: `node --watch server/index.js` + `cd client && npm run dev`.

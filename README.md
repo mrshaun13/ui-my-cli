@@ -15,7 +15,7 @@ A browser-based dashboard for managing multiple local headless-agent sessions ac
 - **Repo filter pills** — filter sessions by project; selection persists across reloads
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
 - **Archive / restore** — hide sessions from the list without deleting them; restore from the collapsible drawer at the bottom of the sidebar
-- **Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), token usage, tool call breakdown, model distribution, shown when no session is selected
+- **Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), token usage, tool call breakdown, model distribution, and Codex stats cohort switching, shown when no session is selected
 - **Context window pie chart** — per-session donut chart showing context window composition (system prompt, user messages, assistant messages, tool calls, tool results, free capacity)
 - **Environment banner** — global config overview on the dashboard home page showing active model, MCP servers, skills, and plugins with color-coded chips
 - **Session config** — per-session provider metadata: source, model, reasoning effort, sandbox policy, approval mode, skills, plugins, and MCP servers where available
@@ -106,11 +106,23 @@ Override Devin with `DEVIN_DB_PATH` or `DEVIN_DASHBOARD_DB_PATH`.
 | `CODEX_HOME` | `—` | Override the Codex home directory (default: `~/.codex`) |
 | `CODEX_STATE_DB_PATH` | `—` | Override the auto-detected Codex state SQLite database path |
 | `UI_MY_CLI_DB_PATH` | `—` | Override the dashboard metadata database path |
+| `TRANSCRIPT_PIPELINE_HEADLESS_SESSIONS_DIR` | `—` | Override the exact transcript-pipeline `data/headless-sessions` ledger directory |
+| `TRANSCRIPT_PIPELINE_DIR` | `—` | Override the transcript-pipeline checkout used to discover Codex headless run ledgers |
 | `UI_MY_CLI_DEFAULT_PROVIDER` | `codex` | Override the compatibility/default provider for legacy `/api/...` and `/ws/...` aliases (default: `codex`) |
 | `DEVIN_DB_PATH` | `—` | Override the auto-detected Devin `sessions.db` path |
 | `DEVIN_DASHBOARD_DB_PATH` | `—` | Override the Devin dashboard metadata database path |
 | `XDG_DATA_HOME` | `—` | Override the XDG data directory (default: `~/.local/share`); affects DB path on all platforms |
 | `APPDATA` | `—` | Windows `%APPDATA%` directory — used to find the database path on Windows |
+
+### Codex Stats Cohorts
+
+The Codex stats endpoint accepts `statsMode=combined|triage|codex`.
+
+- `combined` blends native Codex sessions with transcript-pipeline Codex headless triage runs.
+- `triage` shows only transcript-pipeline Codex headless triage runs in the page-level charts.
+- `codex` shows native Codex CLI / VS Code sessions without transcript-pipeline triage.
+
+Tool Calls intentionally keeps its interactive/headless split stable across modes.
 
 ## Architecture
 
@@ -124,6 +136,7 @@ server/
   server/codex-paths.js        Resolves local Codex state paths.
   server/codex-store.js        Codex session adapter.
   server/dashboard-store.js    Dashboard-owned metadata for local Codex sessions.
+  server/transcript-headless-store.js Read-only adapter for transcript-pipeline headless session ledgers.
   server/providers/index.js    Provider registry for local headless-agent adapters.
   server/providers/codex/index.js Codex provider adapter wiring local Codex state into the dashboard contract.
   server/providers/devin/index.js Devin provider adapter wiring legacy Devin CLI state into the dashboard contract.
