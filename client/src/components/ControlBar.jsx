@@ -11,6 +11,7 @@
 
 import { useState, useEffect } from 'react'
 import ContextPieChart from './ContextPieChart.jsx'
+import { shortcutHintsForProvider } from '../lib/codexShortcuts.js'
 import { isHeadless, displayTitle, HEADLESS_ICON } from '../lib/headless.js'
 
 function statusExplanation(providerLabel) {
@@ -81,6 +82,7 @@ export default function ControlBar({ providerId, providerLabel = 'Agent', sessio
   const explanation = headless
     ? 'Headless run — no live terminal'
     : (statusExplanation(providerLabel)[session.status] || session.status)
+  const shortcutHints = shortcutHintsForProvider(providerId)
 
   return (
     <div className="controlbar">
@@ -110,10 +112,11 @@ export default function ControlBar({ providerId, providerLabel = 'Agent', sessio
           {!headless && (
             <>
               <div className="controlbar-shortcuts">
-                <span className="shortcut-hint"><kbd>Alt+T</kbd> thinking</span>
-                <span className="shortcut-hint"><kbd>!</kbd> shell</span>
-                <span className="shortcut-hint"><kbd>Ctrl+C</kbd> clear line</span>
-                <span className="shortcut-hint"><kbd>Ctrl+Enter</kbd> newline</span>
+                {shortcutHints.map(({ keys, label }) => (
+                  <span className="shortcut-hint" key={`${keys}:${label}`}>
+                    <kbd>{keys}</kbd> {label}
+                  </span>
+                ))}
               </div>
               <div className="controlbar-divider" />
             </>

@@ -27,6 +27,7 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
+import { codexInputForKeyEvent } from '../lib/codexShortcuts.js'
 import { providerWsPath } from '../lib/providers.js'
 
 const WS_BASE = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
@@ -194,19 +195,6 @@ export default function Terminal({ providerId, sessionId, active }) {
     xterm.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
 
-      // Ctrl+Enter → newline.
-      // xterm.js doesn't support the kitty keyboard protocol, so it sends
-      // \r for both Enter and Ctrl+Enter (indistinguishable). The Codex CLI
-      // expects \n (same as Ctrl+J) to insert a newline in its input editor.
-      // We intercept Ctrl+Enter here and inject \n directly into the PTY.
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'Enter') {
-        const ws = wsRef.current
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'input', data: '\n' }))
-        }
-        return false  // swallow — don't let xterm send \r
-      }
-
       if (e.ctrlKey && e.key === 'c') {
         const sel = xterm.getSelection()
         if (sel) {
@@ -215,6 +203,17 @@ export default function Terminal({ providerId, sessionId, active }) {
           return false  // swallow — don't send \x03 to PTY
         }
         return true  // no selection — let SIGINT through normally
+      }
+
+      // Normalize Codex TUI shortcuts that browsers/xterm do not forward
+      // reliably, such as Shift+Enter, Shift+arrows, and Ctrl+O.
+      const codexInput = codexInputForKeyEvent(e)
+      if (codexInput != null) {
+        const ws = wsRef.current
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', data: codexInput }))
+        }
+        return false
       }
 
       return true

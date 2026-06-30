@@ -828,6 +828,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   flex-shrink: 0;
 }
 
@@ -842,7 +843,10 @@ html, body, #root {
 .controlbar-shortcuts {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  max-width: min(620px, 48vw);
 }
 
 .shortcut-hint {
@@ -852,6 +856,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: 4px;
+  white-space: nowrap;
 }
 
 .shortcut-hint kbd {
