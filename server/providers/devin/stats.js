@@ -109,6 +109,63 @@ function _isHeadlessSession(session) {
          TRAILING_ID_RE.test(project);
 }
 
+function _messageText(msg) {
+  const rawContent = msg?.content;
+  return Array.isArray(rawContent)
+    ? rawContent.find(c => c.type === 'text')?.text || ''
+    : typeof rawContent === 'string' ? rawContent : '';
+}
+
+function _normalizeMessageText(text) {
+  return String(text || '').replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
+}
+
+/**
+ * Devin may store duplicate copies of the same logical message in
+ * message_nodes.  For analytics that represent user-visible turns, tool calls,
+ * or model calls, count each message_id once per session.  Raw DB node counts
+ * stay raw where the UI explicitly describes stored nodes.
+ */
+function _uniqueMessageRows(rows) {
+  const seenIds = new Set();
+  const recent = [];
+  const result = [];
+
+  for (const row of rows) {
+    let msg;
+    try { msg = JSON.parse(row.chat_message); } catch {
+      result.push(row);
+      continue;
+    }
+
+    if (msg.message_id) {
+      const key = `${row.session_id || ''}:${msg.message_id}`;
+      if (seenIds.has(key)) continue;
+      seenIds.add(key);
+    } else {
+      const norm = _normalizeMessageText(_messageText(msg));
+      const duplicate = norm && recent.some(prev =>
+        prev.sessionId === row.session_id &&
+        prev.role === msg.role &&
+        prev.text === norm &&
+        Math.abs((row.created_at || 0) - (prev.createdAt || 0)) <= 2
+      );
+      if (duplicate) continue;
+      recent.push({
+        sessionId: row.session_id,
+        role: msg.role,
+        text: norm,
+        createdAt: row.created_at || 0,
+      });
+      if (recent.length > 20) recent.shift();
+    }
+
+    result.push(row);
+  }
+
+  return result;
+}
+
 /** Per-project session + message node counts + total duration + per-session detail */
 function projectBreakdown(db, sessions) {
   const msgBySession = {};
@@ -197,11 +254,11 @@ function projectBreakdown(db, sessions) {
 function topTools(db, sessions) {
   const headlessIds = new Set(sessions.filter(_isHeadlessSession).map(s => s.id));
   const rows = db.prepare(
-    "SELECT session_id, chat_message FROM message_nodes WHERE chat_message LIKE '%\"name\":%' ORDER BY rowid DESC LIMIT 8000"
+    "SELECT session_id, created_at, chat_message FROM message_nodes WHERE chat_message LIKE '%\"name\":%' ORDER BY rowid DESC LIMIT 8000"
   ).all();
   const interactiveCounts = {};
   const headlessCounts    = {};
-  for (const r of rows) {
+  for (const r of _uniqueMessageRows(rows)) {
     let m;
     try { m = JSON.parse(r.chat_message); } catch { continue; }
     if (!Array.isArray(m.tool_calls)) continue;
@@ -270,7 +327,7 @@ function activityByHour(db) {
 function tokenBreakdown(db) {
   const now = Math.floor(Date.now() / 1000);
   const rows = db.prepare(
-    "SELECT session_id, created_at, chat_message FROM message_nodes WHERE chat_message LIKE '%generation_model%'"
+    "SELECT session_id, created_at, chat_message FROM message_nodes WHERE chat_message LIKE '%generation_model%' ORDER BY rowid ASC"
   ).all();
 
   const byModel   = {};
@@ -290,7 +347,7 @@ function tokenBreakdown(db) {
     }))
   );
 
-  for (const r of rows) {
+  for (const r of _uniqueMessageRows(rows)) {
     let msg;
     try { msg = JSON.parse(r.chat_message); } catch { continue; }
     if (msg?.role !== 'assistant') continue;
@@ -456,10 +513,15 @@ function getStats() {
 
   // Per-session user message counts (for leaderboard)
   const userMsgRows = db.prepare(
-    "SELECT session_id, COUNT(*) as c FROM message_nodes WHERE chat_message LIKE '%\"role\":\"user\"%' GROUP BY session_id"
+    "SELECT session_id, created_at, chat_message FROM message_nodes WHERE chat_message LIKE '%\"role\":\"user\"%' ORDER BY rowid ASC"
   ).all();
   const userMsgBySession = {};
-  for (const r of userMsgRows) userMsgBySession[r.session_id] = r.c;
+  for (const r of _uniqueMessageRows(userMsgRows)) {
+    let msg;
+    try { msg = JSON.parse(r.chat_message); } catch { continue; }
+    if (msg?.role !== 'user') continue;
+    userMsgBySession[r.session_id] = (userMsgBySession[r.session_id] || 0) + 1;
+  }
 
   // Build session lookup for leaderboard enrichment
   const sessionMap = {};

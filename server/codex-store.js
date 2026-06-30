@@ -140,19 +140,49 @@ function responseMessage(payload) {
   const text = Array.isArray(payload.content)
     ? payload.content.map(item => textFromContent(item?.text ?? item?.content ?? item)).filter(Boolean).join('\n')
     : textFromContent(payload.content);
-  return text ? { role, text, createdAt: null } : null;
+  return text ? { role, text, createdAt: null, source: 'response_item' } : null;
 }
 
 function eventMessage(payload) {
   if (!payload?.message) return null;
-  if (payload.type === 'user_message') return { role: 'user', text: payload.message, createdAt: null };
-  if (payload.type === 'agent_message') return { role: 'assistant', text: payload.message, createdAt: null };
+  if (payload.type === 'user_message') return { role: 'user', text: payload.message, createdAt: null, source: 'event_msg' };
+  if (payload.type === 'agent_message') return { role: 'assistant', text: payload.message, createdAt: null, source: 'event_msg' };
   return null;
 }
 
 function extractToolName(payload) {
   if (!payload) return null;
   return payload.name || payload.tool_name || payload.recipient_name || payload.tool || null;
+}
+
+function normalizeMessageText(text) {
+  return String(text || '').replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
+}
+
+function isDuplicateMessage(a, b) {
+  if (!a || !b) return false;
+  if (a.role !== b.role) return false;
+  if (normalizeMessageText(a.text) !== normalizeMessageText(b.text)) return false;
+  if (!a.createdAt || !b.createdAt) return true;
+  return Math.abs(a.createdAt - b.createdAt) <= 2;
+}
+
+function appendMessage(messages, msg) {
+  if (!msg?.text) return;
+  const recentStart = Math.max(0, messages.length - 4);
+  const existingOffset = messages.slice(recentStart).findIndex(existing => isDuplicateMessage(existing, msg));
+  const existingIndex = existingOffset === -1 ? -1 : recentStart + existingOffset;
+  if (existingIndex === -1) {
+    messages.push(msg);
+    return;
+  }
+
+  // Codex writes both response_item messages and event_msg mirrors. Prefer the
+  // response_item copy when both exist because it is the canonical transcript.
+  const existing = messages[existingIndex];
+  if (existing.source !== 'response_item' && msg.source === 'response_item') {
+    messages[existingIndex] = { ...msg, createdAt: existing.createdAt || msg.createdAt };
+  }
 }
 
 function readRollout(thread) {
@@ -166,6 +196,7 @@ function readRollout(thread) {
     errors: [],
     tokenEvents: [],
     metadata: {},
+    runtime: {},
     totalEvents: 0,
   };
   if (!file) return result;
@@ -182,6 +213,15 @@ function readRollout(thread) {
     const createdAt = event.timestamp ? Math.floor(Date.parse(event.timestamp) / 1000) : null;
     if (event.type === 'session_meta') {
       result.metadata = { ...result.metadata, ...(event.payload || {}) };
+      continue;
+    }
+    if (event.type === 'turn_context') {
+      const payload = event.payload || {};
+      result.runtime = {
+        approvalMode: payload.approval_policy || result.runtime.approvalMode || null,
+        sandboxPolicy: payload.sandbox_policy || result.runtime.sandboxPolicy || null,
+        permissionProfile: payload.permission_profile || result.runtime.permissionProfile || null,
+      };
       continue;
     }
 
@@ -218,7 +258,7 @@ function readRollout(thread) {
 
     if (msg?.text) {
       msg.createdAt = createdAt;
-      result.messages.push(msg);
+      appendMessage(result.messages, msg);
     }
   }
 
@@ -270,6 +310,7 @@ function normalizeThread(thread, overrides = dashboardStore.titleOverrides(), ro
   const lastUser = [...parsed.messages].reverse().find(m => m.role === 'user')?.text || firstUser;
   const lastAssistant = [...parsed.messages].reverse().find(m => m.role === 'assistant')?.text || null;
   const title = overrides.get(thread.id) || thread.title || firstUser || thread.id.slice(0, 8);
+  const access = accessProfile(thread, parsed);
 
   return {
     id: thread.id,
@@ -281,8 +322,9 @@ function normalizeThread(thread, overrides = dashboardStore.titleOverrides(), ro
     project: projectName(thread.cwd),
     model: thread.model || parsed.metadata.model || 'codex',
     reasoningEffort: thread.reasoning_effort || parsed.metadata.reasoning_effort || null,
-    sandboxPolicy: thread.sandbox_policy || null,
-    approvalMode: thread.approval_mode || null,
+    sandboxPolicy: access?.rawSandboxType || thread.sandbox_policy || null,
+    approvalMode: access?.rawApprovalMode || thread.approval_mode || null,
+    permissionMode: access?.label || null,
     memoryMode: thread.memory_mode || null,
     status: thread.archived ? 'archived' : statusFor(thread, parsed),
     snippet: thread.preview || lastAssistant || firstUser || null,
@@ -404,6 +446,61 @@ function tokenTelemetry(rollout, thread) {
   };
 }
 
+function runtimePolicy(thread, rollout = null) {
+  const threadSandbox = thread?.sandbox_policy ? safeJson(thread.sandbox_policy) : null;
+  return {
+    approvalMode: rollout?.runtime?.approvalMode || thread?.approval_mode || null,
+    sandboxPolicy: rollout?.runtime?.sandboxPolicy || threadSandbox || null,
+    permissionProfile: rollout?.runtime?.permissionProfile || null,
+  };
+}
+
+function sandboxType(policy) {
+  if (!policy) return null;
+  if (typeof policy === 'string') return policy;
+  return policy.type || null;
+}
+
+function approvalLabel(mode) {
+  switch (mode) {
+    case 'never': return 'no approvals';
+    case 'on-request': return 'asks on request';
+    case 'on-failure': return 'asks on failure';
+    case 'untrusted': return 'asks for untrusted actions';
+    default: return mode || null;
+  }
+}
+
+function sandboxLabel(type) {
+  switch (type) {
+    case 'danger-full-access':
+    case 'disabled':
+      return 'full access';
+    case 'workspace-write':
+      return 'workspace write';
+    case 'read-only':
+      return 'read only';
+    default:
+      return type || null;
+  }
+}
+
+function accessProfile(thread, rollout = null) {
+  const runtime = runtimePolicy(thread, rollout);
+  const sandbox = sandboxLabel(sandboxType(runtime.sandboxPolicy));
+  const approval = approvalLabel(runtime.approvalMode);
+  if (!sandbox && !approval) return null;
+
+  return {
+    label: [sandbox, approval].filter(Boolean).join(', '),
+    sandbox,
+    approval,
+    rawApprovalMode: runtime.approvalMode,
+    rawSandboxType: sandboxType(runtime.sandboxPolicy),
+    rawPermissionProfileType: sandboxType(runtime.permissionProfile),
+  };
+}
+
 function getSessionPreview(id) {
   if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.getSessionPreview(id);
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
@@ -412,13 +509,15 @@ function getSessionPreview(id) {
   const session = normalizeThread(thread, dashboardStore.titleOverrides(), rollout);
   const durationSec = Math.max(0, (thread.updated_at || 0) - (thread.created_at || 0));
   const tokens = tokenTelemetry(rollout, thread);
+  const access = accessProfile(thread, rollout);
 
   return {
     ...session,
     startingModel: session.model,
     currentModel: session.model,
     modelSwitches: [],
-    permissionMode: thread.approval_mode || 'unknown',
+    permissionMode: access?.label || null,
+    accessProfile: access,
     backendType: thread.source || 'local',
     source: thread.source || 'cli',
     createdAtStr: thread.created_at ? new Date(thread.created_at * 1000).toLocaleString() : 'unknown',
@@ -436,8 +535,8 @@ function getSessionPreview(id) {
     ...tokens,
     chatThread: rollout.turns.slice(-5),
     rolloutPath: rollout.path,
-    sandboxPolicy: thread.sandbox_policy,
-    approvalMode: thread.approval_mode,
+    sandboxPolicy: access?.rawSandboxType || thread.sandbox_policy,
+    approvalMode: access?.rawApprovalMode || thread.approval_mode,
     memoryMode: thread.memory_mode,
     gitBranch: thread.git_branch,
     gitSha: thread.git_sha,
@@ -512,18 +611,20 @@ function getSessionConfig(id) {
   if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.getSessionConfig(id);
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) return null;
-  const sandbox = thread.sandbox_policy ? safeJson(thread.sandbox_policy) : null;
+  const rollout = readRollout(thread);
+  const access = accessProfile(thread, rollout);
   const permissions = [];
-  if (thread.approval_mode) permissions.push({ scope: 'approval mode', action: thread.approval_mode });
-  if (sandbox?.type) permissions.push({ scope: 'sandbox', action: sandbox.type });
-  if (sandbox?.network) permissions.push({ scope: 'network', action: sandbox.network });
+  if (access?.label) permissions.push({ scope: 'runtime access', action: access.label, label: access.label });
+  if (access?.rawSandboxType && access.rawSandboxType !== 'danger-full-access' && access.rawSandboxType !== 'disabled') {
+    permissions.push({ scope: 'sandbox', action: access.sandbox || access.rawSandboxType });
+  }
 
   return {
     rules: [],
     activeSkills: [],
     permissions,
     model: thread.model || null,
-    permissionMode: thread.approval_mode || null,
+    permissionMode: access?.label || null,
   };
 }
 

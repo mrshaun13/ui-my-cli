@@ -327,7 +327,7 @@ function listSessions() {
         ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY row_id DESC) AS rn
       FROM message_nodes
       WHERE session_id IN (${placeholders})
-    ) WHERE rn <= 5
+    ) WHERE rn <= 10
   `).all(...visibleIds);
 
   const tailBySession = {};
@@ -335,7 +335,10 @@ function listSessions() {
     (tailBySession[r.session_id] ||= []).push(r);
   }
   // Reverse each group (query returned DESC order)
-  for (const id of Object.keys(tailBySession)) tailBySession[id].reverse();
+  for (const id of Object.keys(tailBySession)) {
+    tailBySession[id].reverse();
+    tailBySession[id] = _dedupeMessageNodes(tailBySession[id]).slice(-5);
+  }
 
   // ── Bulk-fetch first user prompt per session ──
   const firstPromptRows = db.prepare(`
@@ -432,6 +435,57 @@ function _findEndingAssistantReply(nodes, userIdx) {
   return { text, createdAt };
 }
 
+function _messageText(msg) {
+  const rawContent = msg?.content;
+  return Array.isArray(rawContent)
+    ? rawContent.find(c => c.type === 'text')?.text || ''
+    : typeof rawContent === 'string' ? rawContent : '';
+}
+
+function _normalizeMessageText(text) {
+  return String(text || '').replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
+}
+
+/**
+ * Devin can persist the same logical message more than once in message_nodes
+ * when it stores repeated request context snapshots.  The repeated rows carry
+ * the same message_id and should not become extra dashboard turns, prompt
+ * counts, or tool counts.  Fallback text/timestamp dedupe covers older rows
+ * that may not have message_id.
+ */
+function _dedupeMessageNodes(nodes) {
+  const seenMessageIds = new Set();
+  const recent = [];
+  const result = [];
+
+  for (const node of nodes) {
+    let msg;
+    try { msg = JSON.parse(node.chat_message); } catch {
+      result.push(node);
+      continue;
+    }
+
+    if (msg.message_id) {
+      if (seenMessageIds.has(msg.message_id)) continue;
+      seenMessageIds.add(msg.message_id);
+    } else {
+      const norm = _normalizeMessageText(_messageText(msg));
+      const duplicate = norm && recent.some(prev =>
+        prev.role === msg.role &&
+        prev.text === norm &&
+        Math.abs((node.created_at || 0) - (prev.createdAt || 0)) <= 2
+      );
+      if (duplicate) continue;
+      recent.push({ role: msg.role, text: norm, createdAt: node.created_at || 0 });
+      if (recent.length > 6) recent.shift();
+    }
+
+    result.push(node);
+  }
+
+  return result;
+}
+
 /** Extracts user text from a raw chat_message JSON string. */
 function _extractUserText(chatMessage) {
   let msg;
@@ -458,11 +512,11 @@ function getSession(id) {
 
   if (!session) return null;
 
-  const nodes = db.prepare(`
+  const nodes = _dedupeMessageNodes(db.prepare(`
     SELECT chat_message FROM message_nodes
     WHERE session_id = ?
-    ORDER BY row_id DESC LIMIT 5
-  `).all(session.id).reverse();
+    ORDER BY row_id DESC LIMIT 10
+  `).all(session.id).reverse()).slice(-5);
 
   const status = deriveStatus(nodes, session.last_activity_at);
   const snippet = extractSnippet(nodes);
@@ -588,9 +642,10 @@ function getSessionPreview(id) {
   }));
 
   // ── Single pass over all message_nodes for this session ──────────────────
-  const allNodes = db.prepare(
+  const rawAllNodes = db.prepare(
     'SELECT chat_message, metadata, created_at FROM message_nodes WHERE session_id = ? ORDER BY row_id ASC'
   ).all(id);
+  const allNodes = _dedupeMessageNodes(rawAllNodes);
 
   let userMsgCount = 0;
   let assistantMsgCount = 0;
@@ -737,7 +792,7 @@ function getSessionPreview(id) {
     durationStr,
     projectDurationStr,
     // Conversation stats
-    totalNodes: allNodes.length,
+    totalNodes: rawAllNodes.length,
     userMsgCount,
     assistantMsgCount,
     toolCallCount,
@@ -777,9 +832,10 @@ function getSessionConversation(id, offset = 0, limit = 50) {
   if (!session) return null;
 
   // Pull only the columns we need — chat_message for text, created_at for timestamps
-  const allNodes = db.prepare(
+  const rawAllNodes = db.prepare(
     'SELECT chat_message, created_at FROM message_nodes WHERE session_id = ? ORDER BY row_id ASC'
   ).all(id);
+  const allNodes = _dedupeMessageNodes(rawAllNodes);
 
   // Build all user→assistant turns (same pairing logic as getSessionPreview)
   const allTurns = [];
@@ -1002,9 +1058,10 @@ function getSessionContextBreakdown(id) {
 
   const maxContext = MODEL_LIMITS[currentModel] || 200000;
 
-  const allNodes = db.prepare(
+  const rawAllNodes = db.prepare(
     'SELECT node_id, chat_message, metadata FROM message_nodes WHERE session_id = ? ORDER BY row_id ASC'
   ).all(id);
+  const allNodes = _dedupeMessageNodes(rawAllNodes);
 
   // Find last compaction boundary and actual token count
   let lastCompactionNode = 0;

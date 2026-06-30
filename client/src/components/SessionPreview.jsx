@@ -299,8 +299,7 @@ function CopyButton({ text }) {
   useEffect(() => () => clearTimeout(timerRef.current), [])
 
   const onClick = (e) => {
-    // Without this, the click would also trigger the bubble's per-bubble
-    // expand handler — copy should never expand.
+    // Keep copy isolated from any future bubble-level interactions.
     e.stopPropagation()
     if (!text) return
 
@@ -332,84 +331,32 @@ function CopyButton({ text }) {
 }
 
 function ChatBubble({ turn, index, total, providerLabel }) {
-  // Per-bubble expansion state — split from a single boolean so each side
-  // can be opened independently.  Both flags are one-way at the bubble level
-  // (the per-bubble click only ever sets to true) so a user mid-selection
-  // can't accidentally collapse the text by clicking again.  The bottom
-  // button is the only way back to a collapsed state.
-  const [userExpanded, setUserExpanded]           = useState(false)
-  const [assistantExpanded, setAssistantExpanded] = useState(false)
   const isLatest = index === total - 1
-
-  const USER_LIMIT   = 220
-  const ASSIST_LIMIT = 320
-
-  const userTrunc   = turn.userText      && turn.userText.length      > USER_LIMIT
-  const assistTrunc = turn.assistantText && turn.assistantText.length > ASSIST_LIMIT
-
-  const userOpen   = userExpanded   || !userTrunc
-  const assistOpen = assistantExpanded || !assistTrunc
-
-  const userDisplay   = userOpen   ? (turn.userText || '')          : turn.userText.slice(0, USER_LIMIT) + '…'
-  const assistDisplay = assistOpen ? turn.assistantText             : turn.assistantText?.slice(0, ASSIST_LIMIT) + '…'
-
-  const canExpand = userTrunc || assistTrunc
-  // "Fully expanded" means nothing is hidden, accounting for sides that
-  // never needed expansion in the first place.  Without this, a turn where
-  // only the assistant is truncated would leave the bottom button stuck on
-  // "show full" forever (since userExpanded would never be set).
-  const fullyExpanded = (!userTrunc || userExpanded) && (!assistTrunc || assistantExpanded)
-
-  const onBottomClick = () => {
-    if (fullyExpanded) {
-      setUserExpanded(false)
-      setAssistantExpanded(false)
-    } else {
-      if (userTrunc)   setUserExpanded(true)
-      if (assistTrunc) setAssistantExpanded(true)
-    }
-  }
-
-  // Per-bubble one-way expand.  No-op once expanded so clicks never
-  // collapse text the user might be selecting.
-  const expandUser   = () => { if (userTrunc   && !userExpanded)      setUserExpanded(true) }
-  const expandAssist = () => { if (assistTrunc && !assistantExpanded) setAssistantExpanded(true) }
 
   const timestamp = formatTurnTime(turn.createdAt)
   const assistTimestamp = formatTurnTime(turn.assistantCreatedAt)
 
-  const userClickable   = userTrunc   && !userExpanded
-  const assistClickable = assistTrunc && !assistantExpanded
-
   return (
     <div className={`preview-turn${isLatest ? ' preview-turn-latest' : ''}`}>
       {/* User bubble */}
-      <div
-        className={`preview-bubble preview-bubble-user${userClickable ? ' clickable' : ''}`}
-        onClick={userClickable ? expandUser : undefined}
-        title={userClickable ? 'Click to expand' : undefined}
-      >
+      <div className="preview-bubble preview-bubble-user">
         {turn.userText && <CopyButton text={turn.userText} />}
         <span className="preview-bubble-label">
           you
           {timestamp && <span className="preview-bubble-time">{timestamp.date} {timestamp.time}</span>}
         </span>
-        <p className="preview-bubble-text">{userDisplay}</p>
+        <p className="preview-bubble-text">{turn.userText || ''}</p>
       </div>
 
       {/* Assistant bubble */}
-      {assistDisplay ? (
-        <div
-          className={`preview-bubble preview-bubble-assistant${assistClickable ? ' clickable' : ''}`}
-          onClick={assistClickable ? expandAssist : undefined}
-          title={assistClickable ? 'Click to expand' : undefined}
-        >
+      {turn.assistantText ? (
+        <div className="preview-bubble preview-bubble-assistant">
           <CopyButton text={turn.assistantText} />
           <span className="preview-bubble-label">
             {providerLabel}
             {assistTimestamp && <span className="preview-bubble-time">{assistTimestamp.time}</span>}
           </span>
-          <p className="preview-bubble-text">{assistDisplay}</p>
+          <p className="preview-bubble-text">{turn.assistantText}</p>
         </div>
       ) : (
         <div className="preview-bubble preview-bubble-assistant preview-bubble-dim">
@@ -422,16 +369,18 @@ function ChatBubble({ turn, index, total, providerLabel }) {
         </div>
       )}
 
-      {canExpand && (
-        <button className="preview-expand-btn" onClick={onBottomClick}>
-          {fullyExpanded ? '▲ collapse' : '▼ show full'}
-        </button>
-      )}
-
       {/* Separator between turns (not after last) */}
       {!isLatest && <div className="preview-turn-sep" />}
     </div>
   )
+}
+
+function permissionLabel(permission) {
+  if (permission.label) return permission.label
+  const prefix = permission.action === 'Allow' ? '\u2713'
+    : permission.action === 'ForceAsk' ? '?'
+      : permission.action
+  return `${prefix} ${permission.scope.length > 30 ? permission.scope.slice(0, 29) + '\u2026' : permission.scope}`
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -892,7 +841,7 @@ export default function SessionPreview({ providerId, providerLabel = 'Agent', se
                     <div className="session-config-chips">
                       {sessionConfig.permissions.slice(0, 8).map((p, i) => (
                         <span key={i} className="session-config-chip session-config-chip-perm" title={`${p.scope} → ${p.action}`}>
-                          {p.action === 'Allow' ? '\u2713' : p.action === 'ForceAsk' ? '?' : p.action} {p.scope.length > 30 ? p.scope.slice(0, 29) + '\u2026' : p.scope}
+                          {permissionLabel(p)}
                         </span>
                       ))}
                       {sessionConfig.permissions.length > 8 && (
@@ -907,13 +856,15 @@ export default function SessionPreview({ providerId, providerLabel = 'Agent', se
 
           <div className="preview-section-label" style={{ marginTop: 14 }}>Session info</div>
           <div className="preview-info-rows">
-            <div className="preview-info-row">
-              <span className="preview-info-key">
-                permission
-                <InfoBubble tip={`Permission mode controls how freely ${providerLabel} can act without asking you first. 'cautious' asks before most actions; 'normal' asks for risky operations; 'yolo' runs autonomously.`} />
-              </span>
-              <span className="preview-info-val">{data.permissionMode}</span>
-            </div>
+            {data.permissionMode && (
+              <div className="preview-info-row">
+                <span className="preview-info-key">
+                  access
+                  <InfoBubble tip={`Runtime access combines sandbox scope and approval policy. For Codex, this is derived from rollout turn_context when available, then the thread database as a fallback.`} />
+                </span>
+                <span className="preview-info-val">{data.permissionMode}</span>
+              </div>
+            )}
             <div className="preview-info-row">
               <span className="preview-info-key">backend</span>
               <span className="preview-info-val">{data.backendType}</span>
