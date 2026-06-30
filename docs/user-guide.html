@@ -1,932 +1,117 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Devin Dashboard — User Guide</title>
-<style>
-  /* ─── Reset & Base ────────────────────────────────────────────── */
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html { scroll-behavior: smooth; }
-  body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    background: #080c10;
-    color: #c9d6e3;
-    line-height: 1.7;
-    font-size: 16px;
-  }
-
-  /* ─── Layout ──────────────────────────────────────────────────── */
-  .page { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
-
-  /* ─── Header ──────────────────────────────────────────────────── */
-  .hero {
-    text-align: center;
-    padding: 4rem 0 3rem;
-    border-bottom: 1px solid #1e2d3d;
-    margin-bottom: 3rem;
-  }
-  .hero-dot {
-    display: inline-block;
-    width: 12px; height: 12px;
-    background: #00ffa3;
-    border-radius: 50%;
-    margin-right: 8px;
-    box-shadow: 0 0 12px rgba(0,255,163,0.4);
-    vertical-align: middle;
-  }
-  .hero h1 {
-    font-family: 'Syne', 'Inter', sans-serif;
-    font-size: 2.8rem;
-    font-weight: 700;
-    color: #e2e8f0;
-    margin-bottom: 0.5rem;
-  }
-  .hero h1 span { color: #00ffa3; }
-  .hero .subtitle {
-    font-size: 1.15rem;
-    color: #7a94ae;
-    max-width: 600px;
-    margin: 0 auto;
-  }
-  .hero .version {
-    display: inline-block;
-    margin-top: 1rem;
-    padding: 4px 14px;
-    background: rgba(0,255,163,0.08);
-    border: 1px solid rgba(0,255,163,0.2);
-    border-radius: 20px;
-    color: #00ffa3;
-    font-size: 0.85rem;
-    font-family: 'Fira Code', 'Cascadia Code', monospace;
-  }
-
-  /* ─── Navigation ──────────────────────────────────────────────── */
-  nav.toc {
-    background: #0d1117;
-    border: 1px solid #1e2d3d;
-    border-radius: 8px;
-    padding: 1.5rem 2rem;
-    margin-bottom: 3rem;
-  }
-  nav.toc h2 {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-    color: #7a94ae;
-    margin-bottom: 1rem;
-  }
-  nav.toc .toc-columns {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.3rem 2rem;
-  }
-  nav.toc a {
-    color: #4d9fff;
-    text-decoration: none;
-    font-size: 0.95rem;
-    padding: 2px 0;
-    display: block;
-  }
-  nav.toc a:hover { color: #00ffa3; }
-  nav.toc .toc-section {
-    color: #e2e8f0;
-    font-weight: 600;
-    margin-top: 0.8rem;
-  }
-  nav.toc .toc-section:first-child { margin-top: 0; }
-
-  /* ─── Section Headers ─────────────────────────────────────────── */
-  h2 {
-    font-family: 'Syne', 'Inter', sans-serif;
-    font-size: 1.8rem;
-    font-weight: 700;
-    color: #e2e8f0;
-    margin: 3rem 0 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid #1e2d3d;
-  }
-  h2 .section-num {
-    color: #00ffa3;
-    font-family: 'Fira Code', monospace;
-    font-size: 0.9rem;
-    margin-right: 8px;
-  }
-  h3 {
-    font-size: 1.25rem;
-    color: #e2e8f0;
-    margin: 2rem 0 0.75rem;
-    font-weight: 600;
-  }
-  h4 {
-    font-size: 1.05rem;
-    color: #b0c8e0;
-    margin: 1.5rem 0 0.5rem;
-    font-weight: 600;
-  }
-
-  /* ─── Typography ──────────────────────────────────────────────── */
-  p { margin-bottom: 1rem; }
-  strong { color: #e2e8f0; }
-  a { color: #4d9fff; text-decoration: none; }
-  a:hover { color: #00ffa3; text-decoration: underline; }
-
-  ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
-  li { margin-bottom: 0.4rem; }
-
-  /* ─── Code ────────────────────────────────────────────────────── */
-  code {
-    font-family: 'Fira Code', 'Cascadia Code', monospace;
-    background: #131a22;
-    color: #00ffa3;
-    padding: 2px 7px;
-    border-radius: 4px;
-    font-size: 0.9em;
-  }
-  pre {
-    background: #0d1117;
-    border: 1px solid #1e2d3d;
-    border-radius: 8px;
-    padding: 1rem 1.25rem;
-    overflow-x: auto;
-    margin: 1rem 0;
-    font-size: 0.9rem;
-    line-height: 1.6;
-  }
-  pre code {
-    background: none;
-    padding: 0;
-    color: #b0c8e0;
-  }
-
-  /* ─── Screenshots ─────────────────────────────────────────────── */
-  figure {
-    margin: 1.5rem 0;
-    background: #0d1117;
-    border: 1px solid #1e2d3d;
-    border-radius: 8px;
-    overflow: hidden;
-  }
-  figure img {
-    width: 100%;
-    display: block;
-  }
-  figcaption {
-    padding: 0.75rem 1rem;
-    font-size: 0.85rem;
-    color: #7a94ae;
-    border-top: 1px solid #1e2d3d;
-  }
-  figcaption strong { color: #b0c8e0; }
-
-  /* ─── Info Boxes ──────────────────────────────────────────────── */
-  .tip, .note, .warning {
-    padding: 1rem 1.25rem;
-    border-radius: 8px;
-    margin: 1.5rem 0;
-    font-size: 0.95rem;
-  }
-  .tip {
-    background: rgba(0,255,163,0.06);
-    border-left: 3px solid #00ffa3;
-  }
-  .tip::before { content: "Tip: "; font-weight: 700; color: #00ffa3; }
-  .note {
-    background: rgba(77,159,255,0.06);
-    border-left: 3px solid #4d9fff;
-  }
-  .note::before { content: "Note: "; font-weight: 700; color: #4d9fff; }
-  .warning {
-    background: rgba(245,197,66,0.06);
-    border-left: 3px solid #f5c542;
-  }
-  .warning::before { content: "Warning: "; font-weight: 700; color: #f5c542; }
-
-  /* ─── Tables ──────────────────────────────────────────────────── */
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 1rem 0;
-    font-size: 0.93rem;
-  }
-  th {
-    text-align: left;
-    padding: 0.6rem 1rem;
-    background: #131a22;
-    color: #7a94ae;
-    font-weight: 600;
-    text-transform: uppercase;
-    font-size: 0.8rem;
-    letter-spacing: 1px;
-    border-bottom: 1px solid #1e2d3d;
-  }
-  td {
-    padding: 0.6rem 1rem;
-    border-bottom: 1px solid #131a22;
-  }
-  tr:hover td { background: rgba(77,159,255,0.04); }
-
-  /* ─── Keyboard shortcuts ──────────────────────────────────────── */
-  kbd {
-    display: inline-block;
-    padding: 2px 8px;
-    background: #131a22;
-    border: 1px solid #2a3f56;
-    border-radius: 4px;
-    font-family: 'Fira Code', monospace;
-    font-size: 0.85em;
-    color: #e2e8f0;
-    box-shadow: 0 1px 0 #2a3f56;
-  }
-
-  /* ─── Status badges (mimic the app) ──────────────────────────── */
-  .badge {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    font-family: 'Fira Code', monospace;
-  }
-  .badge-active   { background: rgba(77,159,255,0.12); color: #4d9fff; }
-  .badge-question { background: rgba(245,197,66,0.15); color: #f5c542; }
-  .badge-finished { background: rgba(0,255,163,0.12); color: #00ffa3; }
-  .badge-idle     { background: rgba(122,148,174,0.12); color: #7a94ae; }
-
-  /* ─── Dividers ────────────────────────────────────────────────── */
-  hr {
-    border: none;
-    border-top: 1px solid #1e2d3d;
-    margin: 3rem 0;
-  }
-
-  /* ─── Responsive ──────────────────────────────────────────────── */
-  @media (max-width: 768px) {
-    .page { padding: 1rem; }
-    .hero h1 { font-size: 2rem; }
-    nav.toc .toc-columns { grid-template-columns: 1fr; }
-  }
-
-  /* ─── Footer ──────────────────────────────────────────────────── */
-  .footer {
-    text-align: center;
-    padding: 2rem 0;
-    color: #3d5470;
-    font-size: 0.85rem;
-    border-top: 1px solid #1e2d3d;
-    margin-top: 4rem;
-  }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Dashboard User Guide</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0d1117;
+      color: #e6edf3;
+      font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { max-width: 920px; margin: 0 auto; padding: 48px 24px 72px; }
+    h1, h2 { line-height: 1.15; }
+    h1 { font-size: 42px; margin: 0 0 12px; }
+    h2 { margin-top: 36px; color: #7ee787; }
+    a { color: #79c0ff; }
+    code {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 2px 6px;
+    }
+    pre {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow-x: auto;
+      padding: 14px 16px;
+    }
+    .lead { color: #8b949e; font-size: 19px; max-width: 760px; }
+    .note {
+      border-left: 3px solid #f2cc60;
+      background: rgba(242, 204, 96, 0.08);
+      padding: 12px 16px;
+      margin: 20px 0;
+    }
+    li { margin: 8px 0; }
+  </style>
 </head>
 <body>
-<div class="page">
+  <main>
+    <h1>Agent Dashboard</h1>
+    <p class="lead">
+      A local browser dashboard for managing Codex and Devin sessions with a
+      hard provider switch, embedded terminals, live status, search,
+      archive/restore, previews, and provider-scoped analytics.
+    </p>
 
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- HERO                                                               -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<header class="hero">
-  <h1><span class="hero-dot"></span>Devin <span>Dashboard</span></h1>
-  <p class="subtitle">
-    A browser-based command center for managing all your Devin CLI agent sessions in one place.
-    Real terminals, live status, analytics, and one-click switching.
-  </p>
-  <span class="version">User Guide &mdash; v1.0</span>
-</header>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- TABLE OF CONTENTS                                                  -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<nav class="toc">
-  <h2>Contents</h2>
-  <div class="toc-columns">
-    <div>
-      <div class="toc-section">Quick Start</div>
-      <a href="#quick-start">1. Quick Start (5 minutes)</a>
-      <a href="#qs-prereqs">&nbsp;&nbsp;Prerequisites</a>
-      <a href="#qs-install">&nbsp;&nbsp;Install &amp; Run</a>
-      <a href="#qs-first-look">&nbsp;&nbsp;Your First Look</a>
-      <a href="#qs-workflow">&nbsp;&nbsp;Basic Workflow</a>
-
-      <div class="toc-section">Full Manual</div>
-      <a href="#overview">2. Interface Overview</a>
-      <a href="#sidebar">3. Sidebar — Session List</a>
-      <a href="#terminal">4. Live Terminal</a>
-      <a href="#preview">5. Session Preview</a>
-    </div>
-    <div>
-      <a href="#analytics">6. Analytics Dashboard</a>
-      <a href="#topbar">7. Top Bar &amp; Environment</a>
-      <a href="#controlbar">8. Control Bar</a>
-      <a href="#search">9. Search &amp; Filtering</a>
-      <a href="#new-session">10. Creating New Sessions</a>
-      <a href="#archive">11. Archive &amp; Restore</a>
-      <a href="#config">12. Configuration</a>
-      <a href="#keyboard">13. Keyboard &amp; Interaction Tips</a>
-      <a href="#security">14. Security</a>
-      <a href="#troubleshooting">15. Troubleshooting</a>
-    </div>
-  </div>
-</nav>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- PART I: QUICK START                                                -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="quick-start"><span class="section-num">01</span> Quick Start</h2>
-
-<p>Get up and running in under five minutes. This section covers the essentials &mdash;
-install, launch, and the core workflow of managing your Devin sessions.</p>
-
-<!-- Prerequisites -->
-<h3 id="qs-prereqs">Prerequisites</h3>
-<ul>
-  <li><strong>Node.js 18+</strong> &mdash; check with <code>node --version</code></li>
-  <li><strong>Devin CLI</strong> installed and run at least once (creates the sessions database)</li>
-  <li><strong>Native build tools</strong> for compiling <code>node-pty</code>:
+    <h2>Prerequisites</h2>
     <ul>
-      <li>Ubuntu / Debian / WSL2: <code>sudo apt install build-essential python3</code></li>
-      <li>macOS: <code>xcode-select --install</code></li>
+      <li>Node.js 18 or newer.</li>
+      <li>Codex CLI installed and run at least once for the Codex dashboard.</li>
+      <li>Devin CLI installed and run at least once for the Devin dashboard.</li>
+      <li>Local Codex state under <code>~/.codex</code>, including <code>state_*.sqlite</code> and rollout JSONL files.</li>
+      <li>Local Devin state under <code>~/.local/share/devin/cli/sessions.db</code> or <code>$XDG_DATA_HOME/devin/cli/sessions.db</code>.</li>
+      <li>For tests: Playwright Chromium installed with <code>npx playwright install chromium</code>.</li>
     </ul>
-  </li>
-</ul>
 
-<!-- Install -->
-<h3 id="qs-install">Install &amp; Run</h3>
-<pre><code>git clone &lt;repo-url&gt; devin-dashboard
-cd devin-dashboard
-npm install        # installs server + client dependencies
-npm run build      # compile the Vite client bundle
-npm start          # start the dashboard server</code></pre>
-<p>Open <strong><a href="http://localhost:7575">http://localhost:7575</a></strong> in your browser. That&rsquo;s it.</p>
-
-<div class="tip">
-  For persistent background running, use PM2: <code>npm run pm2:start</code>.
-  This builds the client and starts the server under PM2 process management.
-</div>
-
-<!-- First Look -->
-<h3 id="qs-first-look">Your First Look</h3>
-<p>When you open the dashboard with no session selected, you land on the <strong>Analytics Dashboard</strong> &mdash;
-a bird&rsquo;s-eye view of all your Devin activity.</p>
-
-<figure>
-  <img src="screenshots/01-dashboard-home.png" alt="Dashboard home screen showing analytics and session sidebar" loading="lazy">
-  <figcaption><strong>Dashboard Home</strong> &mdash; Analytics on the right, session list on the left. Status badges update every 3 seconds.</figcaption>
-</figure>
-
-<p>The layout has three permanent areas:</p>
-<ol>
-  <li><strong>Sidebar</strong> (left) &mdash; lists all your Devin sessions with live status icons</li>
-  <li><strong>Main area</strong> (center/right) &mdash; shows either the analytics dashboard, a live terminal, or a session preview</li>
-  <li><strong>Control bar</strong> (bottom) &mdash; shows context about the selected session</li>
-</ol>
-
-<!-- Basic Workflow -->
-<h3 id="qs-workflow">Basic Workflow</h3>
-<p>Here&rsquo;s the typical daily workflow:</p>
-<ol>
-  <li><strong>Scan your sessions</strong> &mdash; glance at the sidebar for status badges:
-    <span class="badge badge-question">&#9889; needs you</span>
-    <span class="badge badge-active">&#9881; running</span>
-    <span class="badge badge-finished">&#10003; finished</span>
-    <span class="badge badge-idle">&middot; idle</span>
-  </li>
-  <li><strong>Click a session card</strong> to open its <strong>live terminal</strong> &mdash; identical to running <code>devin --resume</code> in your shell</li>
-  <li><strong>Click the status icon</strong> (the colored square on the left of each card) to open a <strong>read-only preview</strong> without spawning a terminal process</li>
-  <li><strong>Click the logo</strong> &ldquo;Devin Dashboard&rdquo; to return to the analytics home screen</li>
-  <li><strong>Click the + button</strong> at the bottom of the sidebar to start a new Devin session in any project</li>
-</ol>
-
-<hr>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- PART II: FULL MANUAL                                               -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="overview"><span class="section-num">02</span> Interface Overview</h2>
-
-<p>The dashboard is a <strong>single-page application</strong> with no URL-based routing. Everything is
-controlled by clicking elements on screen. There are three mutually exclusive views in the main area:</p>
-
-<table>
-  <tr><th>View</th><th>Triggered by</th><th>What it shows</th></tr>
-  <tr>
-    <td><strong>Analytics Dashboard</strong></td>
-    <td>No session selected (home)</td>
-    <td>Activity charts, project breakdown, tool usage, token stats, leaderboards</td>
-  </tr>
-  <tr>
-    <td><strong>Live Terminal</strong></td>
-    <td>Clicking a session card</td>
-    <td>Full xterm.js terminal connected to a real <code>devin --resume</code> process</td>
-  </tr>
-  <tr>
-    <td><strong>Session Preview</strong></td>
-    <td>Clicking the status icon</td>
-    <td>Read-only conversation history, stats, tool breakdown, subagent timeline</td>
-  </tr>
-</table>
-
-<p>Additionally, three UI elements are always visible regardless of which view is active:</p>
-<ul>
-  <li><strong>Top bar</strong> &mdash; logo, environment chips (MCP servers, skills, plugins), context window pie chart, waiting-count indicator</li>
-  <li><strong>Sidebar</strong> &mdash; session list with search, filters, and archive drawer</li>
-  <li><strong>Control bar</strong> &mdash; status explanation, session path, and action buttons</li>
-</ul>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="sidebar"><span class="section-num">03</span> Sidebar &mdash; Session List</h2>
-
-<figure>
-  <img src="screenshots/02-sidebar.png" alt="Sidebar showing session list with status badges and repo filter pills" loading="lazy">
-  <figcaption><strong>Sidebar</strong> &mdash; Sessions grouped by recency. Green pills filter by project. Status icons indicate each session's state.</figcaption>
-</figure>
-
-<h3>Session Cards</h3>
-<p>Each session appears as a card showing:</p>
-<ul>
-  <li><strong>Status icon</strong> (left square) &mdash; color-coded by status. <em>Clicking this opens the session preview.</em></li>
-  <li><strong>Title</strong> &mdash; editable by double-clicking. Changes are saved to the Devin CLI database.</li>
-  <li><strong>Time ago</strong> &mdash; when the session was last active (e.g., &ldquo;2m ago&rdquo;)</li>
-  <li><strong>Project name</strong> &mdash; derived from the working directory. Shows a &#9282; badge if the session used subagents.</li>
-  <li><strong>Archive button</strong> &mdash; a small &ldquo;&#10005;&rdquo; on recent cards, or a prominent &ldquo;&#8856; Archive&rdquo; button on older cards</li>
-</ul>
-
-<h3>Hot / Cold Grouping</h3>
-<p>Sessions are split into two groups separated by an &ldquo;older&rdquo; divider:</p>
-<ul>
-  <li><strong>Hot</strong> (recent) &mdash; sessions active within the last N days</li>
-  <li><strong>Cold</strong> (older) &mdash; sessions past the threshold, shown dimmed with a prominent archive button</li>
-</ul>
-<p>The threshold is configurable &mdash; click the <code>&#9201; 3d</code> control at the top of the sidebar
-to change the number of days. This setting persists in your browser&rsquo;s localStorage.</p>
-
-<h3>Repo Filter Pills</h3>
-<p>Green pills appear below the search bar, one per project, showing the session count
-(e.g., &ldquo;my-repo (5) &times;&rdquo;). Click a pill to filter the
-session list to only that project. Click the <code>+</code> button to add pills for hidden projects.
-Active filters persist across page reloads.</p>
-
-<h3>Priority Sorting</h3>
-<p>Within each group (hot/cold), sessions are sorted by priority:</p>
-<ol>
-  <li><span class="badge badge-question">&#9889; needs you</span> sessions appear first</li>
-  <li><span class="badge badge-active">&#9881; running</span> sessions next</li>
-  <li>Then by most recent activity</li>
-</ol>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="terminal"><span class="section-num">04</span> Live Terminal</h2>
-
-<figure>
-  <img src="screenshots/07-live-terminal.png" alt="Live terminal view showing an active Devin session" loading="lazy">
-  <figcaption><strong>Live Terminal</strong> &mdash; A full xterm.js terminal connected to a server-side PTY process running <code>devin --resume</code>.</figcaption>
-</figure>
-
-<p>Click any session card in the sidebar to open its live terminal. This is <strong>identical</strong> to
-running <code>devin --resume &lt;session-id&gt;</code> in your own terminal &mdash; same output, same
-scrollback, full bidirectional I/O.</p>
-
-<h3>Key Features</h3>
-<ul>
-  <li><strong>Full terminal emulation</strong> &mdash; powered by xterm.js with 5,000-line scrollback</li>
-  <li><strong>Scrollback preservation</strong> &mdash; a 256 KB server-side buffer replays terminal history when you switch back to a session</li>
-  <li><strong>Multi-tab sharing</strong> &mdash; multiple browser tabs can view the same session simultaneously and see the same live output</li>
-  <li><strong>Auto-reconnect</strong> &mdash; if the WebSocket connection drops, it reconnects with exponential backoff (500 ms &rarr; 8 s). A &ldquo;Reconnect now&rdquo; button appears as an overlay.</li>
-  <li><strong>Smart Ctrl+C</strong> &mdash; if you have text selected, <kbd>Ctrl</kbd>+<kbd>C</kbd> copies to clipboard. Without selection, it sends SIGINT to the running process.</li>
-  <li><strong>Auto-resize</strong> &mdash; the terminal automatically adjusts to fit the available space when you resize your browser window.</li>
-</ul>
-
-<h3>Prompt Strip</h3>
-<p>When a terminal is open, a thin <strong>prompt strip</strong> appears above the control bar showing
-the session&rsquo;s most recent user prompt (or the first prompt if no subsequent ones exist). Long prompts are truncated to one line &mdash; click to expand.</p>
-
-<div class="tip">
-  Switching between sessions is instant. Click a different session card and the terminal swaps.
-  Your scrollback in the previous session is preserved server-side.
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="preview"><span class="section-num">05</span> Session Preview</h2>
-
-<figure>
-  <img src="screenshots/05-session-preview.png" alt="Session preview showing conversation history, stats, and tools" loading="lazy">
-  <figcaption><strong>Session Preview</strong> &mdash; Read-only view with conversation history, stats pills, tool breakdown, model usage, and subagent timeline.</figcaption>
-</figure>
-
-<p>Click the <strong>status icon</strong> (the colored square on the left of any session card) to open a
-<strong>read-only preview</strong>. This does <em>not</em> spawn a terminal process &mdash; it&rsquo;s a lightweight
-view of the session&rsquo;s data.</p>
-
-<h3>Header</h3>
-<p>The preview header shows:</p>
-<ul>
-  <li><strong>Session title</strong> (double-click to rename)</li>
-  <li><strong>Session ID</strong> and working directory</li>
-  <li><strong>Status badge</strong> &mdash; color-coded with the current state</li>
-  <li><strong>Model badge</strong> &mdash; which LLM model the session is using</li>
-  <li><strong>Backend type badge</strong> &mdash; e.g., &ldquo;Windsurf&rdquo;</li>
-  <li><strong>&ldquo;&#8644; switched&rdquo; badge</strong> &mdash; appears when the model has changed since session start</li>
-  <li><strong>Project total duration</strong> &mdash; cumulative time across all sessions in the same project</li>
-</ul>
-
-<h3>Stats Row</h3>
-<p>A row of stat pills provides at-a-glance metrics, each with an info tooltip (hover the &#9432; icon):</p>
-<table>
-  <tr><th>Stat</th><th>What it means</th></tr>
-  <tr><td>Created</td><td>When the session was first started</td></tr>
-  <tr><td>Duration</td><td>Total elapsed time from creation to last activity</td></tr>
-  <tr><td>Last active</td><td>How long ago the session was last active</td></tr>
-  <tr><td>User msgs</td><td>Total user messages in the conversation</td></tr>
-  <tr><td>Tool calls</td><td>Total tool invocations (exec, read, edit, grep, etc.)</td></tr>
-  <tr><td>Compactions</td><td>Number of context window compactions performed</td></tr>
-  <tr><td>Peak ctx</td><td>Highest context window usage (tokens)</td></tr>
-  <tr><td>Nodes</td><td>Total message nodes in the session graph</td></tr>
-  <tr><td>Output tok</td><td>Output tokens generated</td></tr>
-  <tr><td>Input tok</td><td>Input tokens consumed</td></tr>
-  <tr><td>Cache read</td><td>Tokens served from cache</td></tr>
-  <tr><td>Cache write</td><td>Tokens written to cache</td></tr>
-  <tr><td>Subagents</td><td>Number of subagents launched</td></tr>
-</table>
-
-<h3>Conversation Thread</h3>
-<p>The left column shows the full user &harr; assistant conversation with timestamps.
-Long messages are collapsed with a &ldquo;show full&rdquo; toggle. Conversations load the most
-recent 50 exchanges first, with &ldquo;Load more&rdquo; and &ldquo;Load all&rdquo; buttons for older messages.</p>
-
-<h3>Right Column Details</h3>
-
-<figure>
-  <img src="screenshots/06-session-preview-details.png" alt="Session preview scrolled down to show tool breakdown, model usage, and subagents" loading="lazy">
-  <figcaption><strong>Preview Details</strong> &mdash; Tool breakdown bars, model switch history, subagent timeline with profile badges, and session config.</figcaption>
-</figure>
-
-<ul>
-  <li><strong>Tool Breakdown</strong> &mdash; mini bar chart showing per-tool call counts for this session</li>
-  <li><strong>Model Usage</strong> &mdash; shows the starting model and current model, plus a timeline of model switches</li>
-  <li><strong>Subagent Timeline</strong> &mdash; vertical timeline of subagent launches with a summary header (e.g., &ldquo;3 subagents &mdash; 2 bg &middot; 1 fg &middot; 3/3 completed&rdquo;). Entries are color-coded by profile (blue = explore, purple = general) and tagged as background (bg) or foreground (fg). Each entry shows task preview, duration, and an expandable &ldquo;details&rdquo; section.</li>
-  <li><strong>Session Config</strong> &mdash; active rules files, invoked skills, and permission grants extracted from the session&rsquo;s <code>cogs_json</code></li>
-  <li><strong>Session Info</strong> &mdash; permission mode (cautious/normal/yolo), backend type, project name, and assistant message count</li>
-</ul>
-
-<h3>Footer Actions</h3>
-<ul>
-  <li><strong>&#9724; Archive</strong> &mdash; archives the session (hides it from the active list, kills any running PTY)</li>
-  <li><strong>&#9654; Resume session</strong> &mdash; switches to the live terminal for this session</li>
-</ul>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="analytics"><span class="section-num">06</span> Analytics Dashboard</h2>
-
-<figure>
-  <img src="screenshots/03-analytics-top.png" alt="Analytics dashboard showing activity chart, project combo chart, tool calls, and token usage" loading="lazy">
-  <figcaption><strong>Analytics Dashboard</strong> &mdash; Shown when no session is selected. Activity trends, project breakdown, tool usage, and model token consumption.</figcaption>
-</figure>
-
-<p>The analytics dashboard appears when no session is selected (the &ldquo;home screen&rdquo;). It gives
-you a bird&rsquo;s-eye view of your Devin usage across all sessions. A <strong>latest prompt banner</strong>
-at the top shows the most recent user prompt across all sessions.</p>
-
-<h3>Activity Chart</h3>
-<p>Shows AI turns per hour with three views (toggle via tabs):</p>
-<ul>
-  <li><strong>Last 24h</strong> &mdash; line chart of activity in the last 24 hours</li>
-  <li><strong>24-48h</strong> &mdash; comparison of the last two days</li>
-  <li><strong>7-day grid</strong> &mdash; heatmap showing activity by hour and day of week</li>
-</ul>
-<p>Hover over any point for exact counts.</p>
-
-<h3>Project Combo Chart</h3>
-<p>A grouped bar + line chart showing per-project statistics:</p>
-<ul>
-  <li><strong>Cyan bars</strong> &mdash; total duration (hours)</li>
-  <li><strong>Purple bars</strong> &mdash; total AI turns</li>
-  <li><strong>Yellow line</strong> &mdash; number of sessions (right axis)</li>
-</ul>
-<p>Hover over a project bar to see a popover with per-session breakdown (title, duration, messages).
-Click legend items to toggle data series on or off.</p>
-
-<h3>Tool Call Breakdown</h3>
-<p>Horizontal bar chart showing cumulative tool usage across all sessions.
-Common tools include <code>exec</code>, <code>read</code>, <code>edit</code>, <code>grep</code>, <code>write</code>, and <code>todo_write</code>.</p>
-
-<h3>Model Token Usage</h3>
-<p>Stacked horizontal bars per model showing:</p>
-<ul>
-  <li><span style="color:#00ffa3">&#9632;</span> Output tokens</li>
-  <li><span style="color:#4d9fff">&#9632;</span> Input tokens</li>
-  <li><span style="color:#f5c542">&#9632;</span> Cache write tokens</li>
-  <li><span style="color:#7a94ae">&#9632;</span> Cache read tokens</li>
-</ul>
-<p>Each row shows the model name, total output token count, and total API calls.
-Hover over a model row to expand it and see exact token counts per category.
-Click legend items to toggle token categories.</p>
-
-<h3>Leaderboards</h3>
-
-<figure>
-  <img src="screenshots/04-analytics-leaderboards.png" alt="Leaderboard section showing top 10 session durations, user messages, and token usage" loading="lazy">
-  <figcaption><strong>Leaderboards</strong> &mdash; Top 10 sessions by duration, user messages, and token usage. Click any entry to open its preview.</figcaption>
-</figure>
-
-<p>Three leaderboard panels at the bottom:</p>
-<ul>
-  <li><strong>Top 10 Session Durations</strong> &mdash; longest-running sessions</li>
-  <li><strong>Top 10 User Messages</strong> &mdash; sessions with the most user turns</li>
-  <li><strong>Top 10 Token Usage</strong> &mdash; sessions consuming the most tokens (stacked input/output bars)</li>
-</ul>
-<p><em>Click any leaderboard entry to jump to that session&rsquo;s preview.</em></p>
-
-<h3>Subagent Counter</h3>
-<p>Below the tool calls chart, a counter shows the total number of subagents launched across all sessions.</p>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="topbar"><span class="section-num">07</span> Top Bar &amp; Environment</h2>
-
-<figure>
-  <img src="screenshots/08-topbar.png" alt="Top bar showing logo, MCP servers, skills, plugins, context pie chart, and waiting count" loading="lazy">
-  <figcaption><strong>Top Bar</strong> &mdash; Environment chips show your configured MCP servers (blue), skills (green), and plugins (purple). The context pie chart and waiting count are on the right.</figcaption>
-</figure>
-
-<p>The top bar is always visible and contains:</p>
-
-<h4>Logo</h4>
-<p>Click <strong>&ldquo;Devin Dashboard&rdquo;</strong> to return to the analytics home screen from any view.</p>
-
-<h4>Environment Chips</h4>
-<p>Color-coded pills showing your global Devin configuration:</p>
-<ul>
-  <li><strong style="color:#4d9fff">Blue</strong> &mdash; MCP servers (e.g., GitHub, Jira, Backstage)</li>
-  <li><strong style="color:#00ffa3">Green</strong> &mdash; Skills (e.g., /frontend-design, /research-visualizer)</li>
-  <li><strong style="color:#9d6fff">Purple</strong> &mdash; Plugins (e.g., typescript-lsp, code-simplifier)</li>
-  <li><strong style="color:#ff4d6a">Red</strong> &mdash; Missing plugins (configured but not found on disk)</li>
-</ul>
-<p>Hover over any chip to see additional details (URL, description, or directory path).</p>
-
-<h4>Context Window Pie Chart</h4>
-<p>When a session is selected (terminal or preview), a compact donut chart appears in the top-right
-showing the session&rsquo;s context window composition:</p>
-<ul>
-  <li>System prompt, user messages, assistant messages, tool calls, tool results, and free capacity</li>
-  <li>Shows percentage used (e.g., &ldquo;35k / 200k (17% used)&rdquo;)</li>
-  <li>Hover over segments for exact token counts</li>
-</ul>
-
-<h4>Waiting Indicator</h4>
-<p>If any sessions have status <span class="badge badge-question">&#9889; needs you</span>,
-a yellow counter appears: e.g., <strong style="color:#f5c542">&#9889; 1 waiting</strong>.</p>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="controlbar"><span class="section-num">08</span> Control Bar</h2>
-
-<figure>
-  <img src="screenshots/09-controlbar.png" alt="Control bar showing session status, path, and action buttons" loading="lazy">
-  <figcaption><strong>Control Bar</strong> &mdash; Always visible at the bottom. Shows status explanation, session path, and Rename/Archive actions when a session is selected.</figcaption>
-</figure>
-
-<p>The control bar sits at the bottom of the screen and adapts to the current state:</p>
-
-<h4>When a session is selected:</h4>
-<ul>
-  <li><strong>Status dot</strong> + explanation text (e.g., &ldquo;Devin finished and is waiting for your reply&rdquo;)</li>
-  <li><strong>Last message snippet</strong> &mdash; shown when the session is waiting for your input (status = &ldquo;question&rdquo;)</li>
-  <li><strong>Session ID</strong> and <strong>working directory</strong> path</li>
-  <li><strong>&#9998; Rename</strong> button &mdash; click to rename the session</li>
-  <li><strong>&#9724; Archive</strong> button &mdash; click to archive (with confirmation)</li>
-</ul>
-
-<h4>When no session is selected:</h4>
-<p>Centered text: &ldquo;SELECT AN AGENT TO BEGIN&rdquo;</p>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="search"><span class="section-num">09</span> Search &amp; Filtering</h2>
-
-<figure>
-  <img src="screenshots/10-search.png" alt="Search results showing filtered session list" loading="lazy">
-  <figcaption><strong>Search</strong> &mdash; Type in the search bar to filter sessions. Results include matches from titles, project names, prompt history, and message content.</figcaption>
-</figure>
-
-<h3>How Search Works</h3>
-<ol>
-  <li><strong>Instant client-side pre-filter</strong> &mdash; immediately filters visible sessions by title/project as you type</li>
-  <li><strong>Debounced server search</strong> (200 ms delay) &mdash; searches across titles, working directories, prompt history, and user message content in the database</li>
-  <li>Results replace the normal session list in the sidebar</li>
-</ol>
-
-<h3>Include Archived</h3>
-<p>Check the &ldquo;incl. archived&rdquo; checkbox below the search bar to also search through
-archived sessions. This is useful for finding old sessions you may have hidden.</p>
-
-<h3>Filtering Options</h3>
-<table>
-  <tr><th>Filter</th><th>How to use</th><th>Persists?</th></tr>
-  <tr>
-    <td><strong>Repo filter pills</strong></td>
-    <td>Click green pills below the search bar to filter by project</td>
-    <td>Yes (localStorage)</td>
-  </tr>
-  <tr>
-    <td><strong>&#9889; Needs-you filter</strong></td>
-    <td>Click the &#9889; button next to the search bar to show only sessions with status &ldquo;question&rdquo;</td>
-    <td>No (resets on reload)</td>
-  </tr>
-  <tr>
-    <td><strong>Hot/cold threshold</strong></td>
-    <td>Click &#9201; 3d to change the day divider between recent and older sessions</td>
-    <td>Yes (localStorage)</td>
-  </tr>
-  <tr>
-    <td><strong>Text search</strong></td>
-    <td>Type in the search bar</td>
-    <td>No</td>
-  </tr>
-  <tr>
-    <td><strong>Include archived</strong></td>
-    <td>Check &ldquo;incl. archived&rdquo; below the search bar</td>
-    <td>Yes (localStorage)</td>
-  </tr>
-</table>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="new-session"><span class="section-num">10</span> Creating New Sessions</h2>
-
-<figure>
-  <img src="screenshots/11-new-session.png" alt="New session dropdown showing available repos" loading="lazy">
-  <figcaption><strong>New Session</strong> &mdash; Click the green <strong>+</strong> button at the bottom of the sidebar. A dropdown lists all previously-used repos.</figcaption>
-</figure>
-
-<p>To start a new Devin session:</p>
-<ol>
-  <li>Click the green <strong>+</strong> floating button at the bottom-right of the sidebar</li>
-  <li>A dropdown appears listing all repositories you&rsquo;ve previously used with Devin</li>
-  <li>Click a repo name</li>
-  <li>The dashboard spawns a new terminal running <code>devin</code> in that directory</li>
-  <li>The terminal opens automatically &mdash; type your first prompt to begin the session</li>
-</ol>
-
-<div class="note">
-  The new session appears in the sidebar once Devin writes its first record to the database
-  (typically after you submit your first prompt). Until then, the terminal shows a &ldquo;pending&rdquo;
-  state which automatically resolves.
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="archive"><span class="section-num">11</span> Archive &amp; Restore</h2>
-
-<p>Archiving hides a session from the active list without deleting it. It also kills
-any running PTY process for that session.</p>
-
-<h3>Archiving a Session</h3>
-<p>Three ways to archive:</p>
-<ul>
-  <li>Click the <strong>&#10005;</strong> button on a recent session card</li>
-  <li>Click the <strong>&#8856; Archive</strong> button on an older (cold) session card</li>
-  <li>Click <strong>&#9724; Archive</strong> in the control bar or session preview footer</li>
-</ul>
-
-<h3>Restoring Archived Sessions</h3>
-<ol>
-  <li>Click <strong>&#9656; Archived</strong> at the bottom of the sidebar to expand the archive drawer</li>
-  <li>Archived sessions load with a &ldquo;Restore&rdquo; button next to each</li>
-  <li>Click <strong>Restore</strong> to move a session back to the active list</li>
-</ol>
-
-<div class="tip">
-  Archiving is fully reversible. Session data is never deleted &mdash; the archive state is stored
-  in a separate <code>dashboard.db</code> database. The Devin CLI&rsquo;s <code>sessions.db</code> is not modified.
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="config"><span class="section-num">12</span> Configuration</h2>
-
-<h3>Port</h3>
-<p>Default port is <strong>7575</strong>. Override with:</p>
-<pre><code>PORT=8080 npm start</code></pre>
-
-<h3>Database Path</h3>
-<p>The dashboard reads the Devin CLI&rsquo;s SQLite database. Platform defaults:</p>
-<table>
-  <tr><th>Platform</th><th>Default path</th></tr>
-  <tr><td>Linux / WSL2</td><td><code>~/.local/share/devin/cli/sessions.db</code></td></tr>
-  <tr><td>macOS</td><td><code>~/Library/Application Support/devin/cli/sessions.db</code></td></tr>
-  <tr><td>Windows</td><td><code>%APPDATA%\devin\cli\sessions.db</code></td></tr>
-</table>
-<p>Override with:</p>
-<pre><code>DEVIN_DB_PATH=/custom/path/sessions.db npm start</code></pre>
-
-<h3>All Environment Variables</h3>
-<table>
-  <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
-  <tr><td><code>PORT</code></td><td>7575</td><td>HTTP server port</td></tr>
-  <tr><td><code>NODE_ENV</code></td><td>&mdash;</td><td>Set to <code>production</code> to serve built client files</td></tr>
-  <tr><td><code>DEVIN_DB_PATH</code></td><td>(auto-detect)</td><td>Override Devin CLI database path</td></tr>
-  <tr><td><code>DEVIN_DASHBOARD_DB_PATH</code></td><td>(same dir)</td><td>Override dashboard.db path</td></tr>
-  <tr><td><code>SHELL</code></td><td>/bin/bash</td><td>Shell binary used for terminal sessions</td></tr>
-</table>
-
-<h3>Development Mode</h3>
-<p>For hot reload during development, run two terminals:</p>
-<pre><code># Terminal 1 — server with auto-restart
-node --watch server/index.js
-
-# Terminal 2 — Vite client with HMR
-cd client && npm run dev</code></pre>
-<p>The Vite dev server runs at <strong>http://localhost:5173</strong> and proxies API/WebSocket calls to the server.</p>
-
-<h3>PM2 (Persistent Background)</h3>
-<pre><code>npm run pm2:start    # build + start under PM2
-npm run pm2:restart  # rebuild + restart
-npm run pm2:stop     # stop
-npm run pm2:logs     # tail logs</code></pre>
-
-<div class="warning">
-  PM2 keeps the old process in memory. After any server-side code change, always run
-  <code>npm run pm2:restart</code>. A bare <code>npm run build</code> is <strong>not enough</strong>.
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="keyboard"><span class="section-num">13</span> Keyboard &amp; Interaction Tips</h2>
-
-<table>
-  <tr><th>Action</th><th>How</th></tr>
-  <tr><td>Copy text from terminal</td><td>Select text, then <kbd>Ctrl</kbd>+<kbd>C</kbd></td></tr>
-  <tr><td>Send SIGINT (interrupt Devin)</td><td><kbd>Ctrl</kbd>+<kbd>C</kbd> without selection</td></tr>
-  <tr><td>Rename a session</td><td>Double-click the title in the sidebar or preview header</td></tr>
-  <tr><td>Return to home screen</td><td>Click the &ldquo;Devin Dashboard&rdquo; logo</td></tr>
-  <tr><td>Preview without PTY</td><td>Click the status icon (colored square) on a card</td></tr>
-  <tr><td>Open live terminal</td><td>Click anywhere else on a session card</td></tr>
-  <tr><td>Expand a long prompt</td><td>Click the prompt strip above the control bar</td></tr>
-  <tr><td>Expand a long message</td><td>Click &ldquo;show full&rdquo; in the session preview</td></tr>
-  <tr><td>Clear search</td><td><kbd>Esc</kbd> while the search input is focused</td></tr>
-</table>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="security"><span class="section-num">14</span> Security</h2>
-
-<p>The dashboard is designed to run <strong>locally on your development machine only</strong>.</p>
-
-<h3>Security Model</h3>
-<ul>
-  <li>Binds to <strong>127.0.0.1</strong> (localhost) only &mdash; not accessible from the network</li>
-  <li><strong>No authentication</strong> &mdash; anyone who can reach the port has full access</li>
-  <li>Anyone on the port can view sessions, spawn terminals, and rename sessions</li>
-</ul>
-
-<h3>Remote Access</h3>
-<p>If you need to access the dashboard from another machine, use <strong>SSH port forwarding</strong>
-instead of exposing the port directly:</p>
-<pre><code>ssh -L 7575:localhost:7575 your-remote-host</code></pre>
-<p>This tunnels traffic through SSH, keeping the dashboard behind authentication.</p>
-
-<div class="warning">
-  Do not expose port 7575 to the internet. The dashboard has no authentication and
-  grants full terminal access to anyone who connects.
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<h2 id="troubleshooting"><span class="section-num">15</span> Troubleshooting</h2>
-
-<h3>&ldquo;Cannot find sessions.db&rdquo;</h3>
-<p>The Devin CLI must have been run at least once to create its database. Run <code>devin</code>
-in any directory, then restart the dashboard. Alternatively, set <code>DEVIN_DB_PATH</code>
-to point to the correct database file.</p>
-
-<h3>Terminal shows blank / won&rsquo;t connect</h3>
-<ul>
-  <li>Check that the dashboard server is running (<code>curl http://localhost:7575/api/status</code>)</li>
-  <li>Ensure the <code>devin</code> CLI binary is on your <code>PATH</code></li>
-  <li>Check server logs for PTY spawn errors: <code>npm run pm2:logs</code> or check the terminal running the server</li>
-</ul>
-
-<h3>node-pty build fails on install</h3>
-<p>This usually means missing native build tools:</p>
-<ul>
-  <li><strong>Ubuntu/WSL2:</strong> <code>sudo apt install build-essential python3</code></li>
-  <li><strong>macOS:</strong> <code>xcode-select --install</code></li>
-</ul>
-<p>After installing build tools, delete <code>node_modules</code> and run <code>npm install</code> again.</p>
-
-<h3>Sessions not updating / stale data</h3>
-<p>The dashboard polls every 3 seconds via WebSocket. If sessions appear stale:</p>
-<ul>
-  <li>Check for a yellow <strong>warning banner</strong> at the top of the main area &mdash; this appears when the WebSocket connection fails</li>
-  <li>Check the browser console for WebSocket connection errors</li>
-  <li>Verify the server is running and the green connection indicator is active</li>
-  <li>Try refreshing the page</li>
-</ul>
-
-<h3>Port already in use</h3>
-<p>If port 7575 is taken, either stop the conflicting process or use a different port:</p>
-<pre><code>PORT=8080 npm start</code></pre>
-
-<h3>PM2 serving old code</h3>
-<p>After code changes, always use <code>npm run pm2:restart</code> (not just <code>npm run build</code>).
-PM2 caches the Node.js process and won&rsquo;t reload server changes without an explicit restart.</p>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<footer class="footer">
-  <p>Devin Dashboard User Guide &mdash; Generated March 2026</p>
-  <p>Screenshots captured with Playwright from a live dashboard instance.</p>
-</footer>
-
-</div>
+    <h2>Run</h2>
+    <pre><code>npm install
+npm run build
+npm start</code></pre>
+    <p>Open <a href="http://localhost:7575">http://localhost:7575</a>.</p>
+
+    <h2>PM2</h2>
+    <pre><code>npm run pm2:start
+npm run pm2:restart
+npm run pm2:logs
+npm run pm2:stop</code></pre>
+    <div class="note">
+      After server-side changes, use <code>npm run pm2:restart</code>. A build
+      alone does not replace the Node process already running under PM2.
+    </div>
+
+    <h2>What It Reads</h2>
+    <ul>
+      <li>Codex thread metadata from <code>~/.codex/state_*.sqlite</code>.</li>
+      <li>Codex conversation and tool history from <code>~/.codex/sessions/**/*.jsonl</code>.</li>
+      <li>Codex CLI and VS Code extension sessions from the same local Codex thread store.</li>
+      <li>Devin session metadata and message history from Devin <code>sessions.db</code>.</li>
+      <li>Provider-scoped dashboard metadata for title overrides and archive state.</li>
+    </ul>
+
+    <h2>What It Changes</h2>
+    <ul>
+      <li>New sessions launch the selected local provider CLI in the selected working directory.</li>
+      <li>Existing Codex sessions resume with <code>codex resume &lt;session-id&gt;</code>.</li>
+      <li>Existing Devin sessions resume with <code>devin --resume &lt;session-id&gt; --respect-workspace-trust false</code>.</li>
+      <li>Codex archive and restore call <code>codex archive</code> and <code>codex unarchive</code>.</li>
+      <li>Devin archive and restore use dashboard-local archive metadata.</li>
+      <li>Codex session renames are dashboard-local; Devin renames update Devin's session title field.</li>
+    </ul>
+
+    <h2>Configuration</h2>
+    <ul>
+      <li><code>PORT</code>: HTTP server port, default <code>7575</code>.</li>
+      <li><code>CODEX_HOME</code>: Codex home directory, default <code>~/.codex</code>.</li>
+      <li><code>CODEX_STATE_DB_PATH</code>: explicit Codex state SQLite path.</li>
+      <li><code>UI_MY_CLI_DB_PATH</code>: explicit dashboard metadata SQLite path.</li>
+      <li><code>DEVIN_DB_PATH</code>: explicit Devin <code>sessions.db</code> path.</li>
+      <li><code>DEVIN_DASHBOARD_DB_PATH</code>: explicit Devin dashboard metadata SQLite path.</li>
+      <li><code>UI_MY_CLI_DEFAULT_PROVIDER</code>: default provider for compatibility routes, default <code>codex</code>.</li>
+    </ul>
+
+    <h2>Testing</h2>
+    <pre><code>npm run build
+npm run docs:check
+npm run test:smoke</code></pre>
+    <p>
+      Playwright tests expect the PM2-managed server to already be running on
+      the configured port.
+    </p>
+  </main>
 </body>
 </html>

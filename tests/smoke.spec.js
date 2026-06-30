@@ -27,6 +27,35 @@ test.describe('Dashboard smoke tests', () => {
     expect(Array.isArray(sessions)).toBe(true);
   });
 
+  test('providers API returns Codex and Devin entries', async ({ request }) => {
+    const res = await request.get('/api/providers');
+    expect(res.ok()).toBeTruthy();
+    const providers = await res.json();
+    const ids = providers.map(p => p.id);
+    expect(ids).toContain('codex');
+    expect(ids).toContain('devin');
+  });
+
+  test('Codex model stats are uniquely keyed by model and reasoning effort', async ({ request }) => {
+    const res = await request.get('/api/codex/stats');
+    expect(res.ok()).toBeTruthy();
+    const stats = await res.json();
+    expect(Array.isArray(stats.models)).toBe(true);
+
+    const seen = new Set();
+    for (const row of stats.models) {
+      const key = `${row.model}:${row.reasoningEffort || 'unknown'}`;
+      expect(seen.has(key)).toBe(false);
+      seen.add(key);
+
+      if (row.unclassifiedTokens > 0) continue;
+      expect(row.key).toBe(`${row.model}::${row.reasoningEffort || 'unknown'}`);
+      expect(row.totalInputTokens).toBe((row.inputTokens || 0) + (row.cachedInputTokens || 0));
+      expect(row.outputTokens).toBe((row.visibleOutputTokens || 0) + (row.reasoningOutputTokens || 0));
+      expect(row.totalTokens).toBe((row.totalInputTokens || 0) + (row.outputTokens || 0));
+    }
+  });
+
   test('dashboard loads and renders sidebar + topbar', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator(SELECTORS.sidebar)).toBeVisible();
@@ -36,6 +65,29 @@ test.describe('Dashboard smoke tests', () => {
   test('new session FAB is visible', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator(SELECTORS.newSessionFab)).toBeVisible();
+  });
+
+  test('provider switch toggles dashboard identity', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator(SELECTORS.providerSwitch)).toBeVisible();
+
+    await page.getByRole('tab', { name: /Devin/ }).click();
+    await expect(page.locator(SELECTORS.topbarLogo)).toContainText('Devin');
+
+    await page.getByRole('tab', { name: /Codex/ }).click();
+    await expect(page.locator(SELECTORS.topbarLogo)).toContainText('Codex');
+  });
+
+  test('Codex model usage table visibly labels reasoning effort', async ({ page, request }) => {
+    const res = await request.get('/api/codex/stats');
+    expect(res.ok()).toBeTruthy();
+    const stats = await res.json();
+    const hasReasoningRows = stats.models.some(row => row.reasoningEffort && row.reasoningEffort !== 'unknown');
+    test.skip(!hasReasoningRows, 'No Codex reasoning telemetry rows available');
+
+    await page.goto('/');
+    await expect(page.locator('.model-usage-table')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.model-usage-table')).toContainText(/reasoning:\s*(low|medium|high|x-high)/i);
   });
 
   test('session cards appear after WebSocket connects', async ({ page }) => {

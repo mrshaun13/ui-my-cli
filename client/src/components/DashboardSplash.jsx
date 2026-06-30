@@ -10,19 +10,28 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { providerApiPath } from '../lib/providers.js'
 
-function useStats() {
+function useStats(providerId, enabled = true, statsMode = 'combined') {
   const [stats, setStats] = useState(null)
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    setStats(null)
+    setError(null)
+  }, [providerId, enabled])
+
+  useEffect(() => {
     let cancelled = false
-    fetch('/api/stats')
+    setError(null)
+    if (!enabled) return () => { cancelled = true }
+    const url = `${providerApiPath(providerId, 'stats')}?statsMode=${encodeURIComponent(statsMode)}`
+    fetch(url)
       .then(r => r.json())
       .then(d => { if (!cancelled) setStats(d) })
       .catch(e => { if (!cancelled) setError(e.message) })
     return () => { cancelled = true }
-  }, [])
+  }, [providerId, enabled, statsMode])
 
   return { stats, error }
 }
@@ -443,8 +452,8 @@ const TOOL_COLORS = {
   run_subagent:      'var(--purple)',
 }
 
-const TOOL_TIP =
-  'Total number of times Devin called each tool across all sessions ever recorded. ' +
+const toolTip = (providerLabel) =>
+  `Total number of times ${providerLabel} called each tool across all sessions ever recorded. ` +
   '"exec" runs shell commands, "read" reads files, "edit" rewrites file content, ' +
   '"grep" searches code, "mcp_call_tool" calls external MCP integrations, etc.'
 
@@ -546,11 +555,11 @@ function ToolBarChart({ tools }) {
   // array payload (older server still running): treat it as the interactive
   // column with no headless data.
   const interactive = Array.isArray(tools) ? tools : (tools?.interactive || [])
-  const headless    = Array.isArray(tools) ? []    : (tools?.headless    || [])
-
+  const rawHeadless = Array.isArray(tools) ? [] : (tools?.headless || [])
+  const headless = Array.isArray(rawHeadless) ? rawHeadless : (rawHeadless.all || [])
   const showHeadless = headless.length > 0
 
-  if (!interactive.length && !headless.length) {
+  if (!interactive.length && !showHeadless) {
     return <div className="splash-empty-note">No tool data yet.</div>
   }
 
@@ -841,7 +850,7 @@ function fmtTokens(n) {
 }
 
 function friendlyModel(raw) {
-  return raw
+  return (raw || 'unknown')
     .replace('MODEL_PRIVATE_2',       'Private Preview')
     .replace('MODEL_CLAUDE_4_SONNET', 'Sonnet 4 (early)')
     .replace('claude-sonnet-4-6-thinking', 'Sonnet 4.6 ✦')
@@ -850,13 +859,22 @@ function friendlyModel(raw) {
     .replace('claude-opus-4-6',            'Opus 4.6')
 }
 
+function friendlyReasoningEffort(effort) {
+  if (!effort || effort === 'unknown') return null
+  return String(effort).replace(/^xhigh$/i, 'x-high')
+}
+
+function tokenValue(entry, field) {
+  if (field === 'visibleOutputTokens' && entry.visibleOutputTokens == null) return entry.outputTokens || 0
+  return entry[field] || 0
+}
+
 /**
  * ModelUsageTable — shows real per-model token consumption.
  *
- * Primary metric: output tokens (proxy for "how much the model did").
- * Bar: stacked output / input / cache_write / cache_read — each bucket
- *      drawn proportionally so the relative cost structure is visible.
- * Numbers: output tokens headline, calls secondary.
+ * Codex rows are grouped by model + reasoning effort. Token categories avoid
+ * double-counting cached input and reasoning output when the provider reports
+ * those as subsets of input/output.
  */
 function ModelUsageTable({ models }) {
   const [hovered, setHovered] = useState(null)
@@ -873,52 +891,62 @@ function ModelUsageTable({ models }) {
   })
 
   const MODEL_CATS = [
-    { key: 'output', field: 'outputTokens',    pctBase: 'outputTokens', scale: 1, barClass: 'model-bar-output' },
-    { key: 'input',  field: 'inputTokens',     pctBase: 'outputTokens', scale: 1, barClass: 'model-bar-input' },
-    { key: 'cwrite', field: 'cacheWriteTokens', pctBase: 'outputTokens', scale: 1, barClass: 'model-bar-cwrite' },
-    { key: 'cread',  field: 'cacheReadTokens',  pctBase: 'outputTokens', scale: 0.08, barClass: 'model-bar-cread' },
+    { key: 'output', field: 'visibleOutputTokens', barClass: 'model-bar-output', label: 'visible output' },
+    { key: 'reasoning', field: 'reasoningOutputTokens', barClass: 'model-bar-reasoning', label: 'reasoning output' },
+    { key: 'input',  field: 'inputTokens', barClass: 'model-bar-input', label: 'fresh input' },
+    { key: 'cread',  field: 'cacheReadTokens', barClass: 'model-bar-cread', label: 'cached input' },
+    { key: 'cwrite', field: 'cacheWriteTokens', barClass: 'model-bar-cwrite', label: 'cache write' },
+    { key: 'unknown', field: 'unclassifiedTokens', barClass: 'model-bar-unknown', label: 'unclassified' },
   ]
 
-  // Scale bars by output tokens — the "work done" axis
-  const maxOutput = models[0]?.outputTokens || 1
+  const maxTotal = Math.max(...models.map(m => m.totalTokens || MODEL_CATS.reduce((sum, c) => sum + tokenValue(m, c.field), 0)), 1)
 
   return (
     <div className="model-usage-table">
       {models.map(m => {
-        const isHov = hovered === m.model
+        const rowKey = m.key || `${m.model}:${m.reasoningEffort || ''}`
+        const isHov = hovered === rowKey
+        const reasoning = friendlyReasoningEffort(m.reasoningEffort)
+        const modelLabel = friendlyModel(m.model)
         return (
           <div
-            key={m.model}
+            key={rowKey}
             className="model-usage-row"
-            onMouseEnter={() => setHovered(m.model)}
+            onMouseEnter={() => setHovered(rowKey)}
             onMouseLeave={() => setHovered(null)}
           >
             <div className="model-usage-header">
               <span className="model-usage-name" style={{ color: MODEL_COLORS[m.model] || 'var(--text-secondary)' }}>
-                {friendlyModel(m.model)}
+                <span className="model-usage-model">{modelLabel}</span>
+                {reasoning && (
+                  <span className="model-usage-name-reasoning">
+                    {' / reasoning: '}{reasoning}
+                  </span>
+                )}
               </span>
               <span className="model-usage-out">
-                {fmtTokens(m.outputTokens)} out
+                {fmtTokens(m.totalTokens || 0)} total
               </span>
               <span className="model-usage-calls">
-                {m.calls.toLocaleString()} calls
+                {m.calls.toLocaleString()} {m.calls === 1 ? 'call' : 'calls'}
               </span>
             </div>
 
-            {/* Stacked bar: output | input | cache_write | cache_read */}
+            {/* Stacked bar: visible output | reasoning output | fresh input | cached input */}
             <div className="model-usage-bar-track" title={
-              `Output: ${m.outputTokens.toLocaleString()}\n` +
-              `Input: ${m.inputTokens.toLocaleString()}\n` +
-              `Cache write: ${m.cacheWriteTokens.toLocaleString()}\n` +
-              `Cache read: ${m.cacheReadTokens.toLocaleString()}\n` +
-              `Total API calls: ${m.calls.toLocaleString()}`
+              `Total: ${(m.totalTokens || 0).toLocaleString()}\n` +
+              `Output: ${(m.outputTokens || 0).toLocaleString()}\n` +
+              `Reasoning output: ${(m.reasoningOutputTokens || 0).toLocaleString()}\n` +
+              `Fresh input: ${(m.inputTokens || 0).toLocaleString()}\n` +
+              `Total input: ${(m.totalInputTokens || m.inputTokens || 0).toLocaleString()}\n` +
+              `Cached input: ${(m.cachedInputTokens || m.cacheReadTokens || 0).toLocaleString()}\n` +
+              `Cache write: ${(m.cacheWriteTokens || 0).toLocaleString()}\n` +
+              `Reasoning effort: ${m.reasoningEffort || 'n/a'}\n` +
+              `Total API calls: ${(m.calls || 0).toLocaleString()}`
             }>
               {MODEL_CATS.filter(c => !hidden.has(c.key)).map(c => {
-                const pct = c.key === 'output'
-                  ? Math.max(2, (m[c.field] / maxOutput) * 100)
-                  : c.key === 'cread'
-                    ? (m[c.field] / maxOutput) * 8
-                    : (m[c.field] / maxOutput) * 100
+                const value = tokenValue(m, c.field)
+                const pct = value > 0 ? Math.max(1, (value / maxTotal) * 100) : 0
                 return <div key={c.key} className={`model-bar-seg ${c.barClass}`} style={{ width: pct + '%' }} />
               })}
             </div>
@@ -926,10 +954,12 @@ function ModelUsageTable({ models }) {
             {/* Expanded detail on hover */}
             {isHov && (
               <div className="model-usage-detail">
-                <span><span className="model-detail-dot model-bar-output" />Output <b>{m.outputTokens.toLocaleString()}</b></span>
-                <span><span className="model-detail-dot model-bar-input" />Input <b>{m.inputTokens.toLocaleString()}</b></span>
-                <span><span className="model-detail-dot model-bar-cwrite" />Cache write <b>{m.cacheWriteTokens.toLocaleString()}</b></span>
-                <span><span className="model-detail-dot model-bar-cread" />Cache read <b>{m.cacheReadTokens.toLocaleString()}</b></span>
+                <span><span className="model-detail-dot model-bar-output" />Visible output <b>{tokenValue(m, 'visibleOutputTokens').toLocaleString()}</b></span>
+                <span><span className="model-detail-dot model-bar-reasoning" />Reasoning output <b>{(m.reasoningOutputTokens || 0).toLocaleString()}</b></span>
+                <span><span className="model-detail-dot model-bar-input" />Fresh input <b>{(m.inputTokens || 0).toLocaleString()}</b></span>
+                <span><span className="model-detail-dot model-bar-cread" />Cached input <b>{(m.cachedInputTokens || m.cacheReadTokens || 0).toLocaleString()}</b></span>
+                <span><span className="model-detail-dot model-bar-cwrite" />Cache write <b>{(m.cacheWriteTokens || 0).toLocaleString()}</b></span>
+                {(m.unclassifiedTokens || 0) > 0 && <span><span className="model-detail-dot model-bar-unknown" />Unclassified <b>{m.unclassifiedTokens.toLocaleString()}</b></span>}
               </div>
             )}
           </div>
@@ -939,10 +969,12 @@ function ModelUsageTable({ models }) {
       {/* Legend */}
       <div className="model-usage-legend">
         {[
-          { key: 'output', cls: 'model-bar-output', label: 'output' },
-          { key: 'input',  cls: 'model-bar-input',  label: 'input' },
+          { key: 'output', cls: 'model-bar-output', label: 'visible output' },
+          { key: 'reasoning', cls: 'model-bar-reasoning', label: 'reasoning' },
+          { key: 'input',  cls: 'model-bar-input',  label: 'fresh input' },
+          { key: 'cread',  cls: 'model-bar-cread',  label: 'cached input' },
           { key: 'cwrite', cls: 'model-bar-cwrite', label: 'cache write' },
-          { key: 'cread',  cls: 'model-bar-cread',  label: 'cache read' },
+          { key: 'unknown', cls: 'model-bar-unknown', label: 'unclassified' },
         ].map(c => (
           <span key={c.key}
             className={`legend-toggle${hidden.has(c.key) ? ' legend-off' : ''}`}
@@ -967,10 +999,9 @@ const MODEL_COLORS = {
 }
 
 const MODEL_TIP =
-  'Real token consumption per model, read from each API call recorded in your ' +
-  'local sessions database. Output = tokens generated. Input = fresh context. ' +
-  'Cache write = prompt cache creation (1.25× input rate). ' +
-  'Cache read = cache hits (0.1× input rate). Hover a row for exact counts.'
+  'Real token consumption by model and reasoning effort, read from local provider telemetry. ' +
+  'Codex splits visible output, reasoning output, fresh input, and cached input when those fields are available. ' +
+  'Pricing is intentionally not estimated here. Hover a row for exact counts.'
 
 const PROJECT_TIP =
   'Breakdown by working directory (folder name). Duration bars (cyan) show total wall-clock ' +
@@ -1051,15 +1082,17 @@ function LeaderboardChart({ entries, valueFn, color, onSelectSession }) {
 
 /**
  * LeaderboardTokenChart — stacked horizontal bars for top-10 sessions by token usage.
- * Each bar shows output / input / cache_write / cache_read segments.
+ * Each bar shows the provider's non-overlapping token categories.
  * Legend items are toggleable to filter visible token categories.
  * Clicking a session label navigates to its preview panel.
  */
 const TOKEN_CATEGORIES = [
-  { key: 'output', field: 'outputTokens',     color: 'var(--accent)', label: 'output' },
-  { key: 'input',  field: 'inputTokens',      color: 'var(--blue)',   label: 'input' },
-  { key: 'cwrite', field: 'cacheWriteTokens',  color: 'var(--yellow)', label: 'cache write' },
-  { key: 'cread',  field: 'cacheReadTokens',   color: 'var(--purple)', label: 'cache read' },
+  { key: 'output', field: 'visibleOutputTokens', color: 'var(--accent)', label: 'visible output', className: 'model-bar-output' },
+  { key: 'reasoning', field: 'reasoningOutputTokens', color: '#ff8a4c', label: 'reasoning', className: 'model-bar-reasoning' },
+  { key: 'input',  field: 'inputTokens', color: 'var(--blue)', label: 'fresh input', className: 'model-bar-input' },
+  { key: 'cread',  field: 'cacheReadTokens', color: 'var(--purple)', label: 'cached input', className: 'model-bar-cread' },
+  { key: 'cwrite', field: 'cacheWriteTokens', color: 'var(--yellow)', label: 'cache write', className: 'model-bar-cwrite' },
+  { key: 'unknown', field: 'unclassifiedTokens', color: 'var(--text-muted)', label: 'unclassified', className: 'model-bar-unknown' },
 ]
 
 function LeaderboardTokenChart({ entries, onSelectSession }) {
@@ -1076,7 +1109,7 @@ function LeaderboardTokenChart({ entries, onSelectSession }) {
   const visibleCats = TOKEN_CATEGORIES.filter(c => !hidden.has(c.key))
 
   // Recalculate max based on visible categories
-  const visibleTotal = (e) => visibleCats.reduce((sum, c) => sum + (e[c.field] || 0), 0)
+  const visibleTotal = (e) => visibleCats.reduce((sum, c) => sum + tokenValue(e, c.field), 0)
   const maxTotal = Math.max(...entries.map(visibleTotal), 1)
   const totalH = entries.length * LB_ROW_H - LB_GAP
 
@@ -1096,7 +1129,7 @@ function LeaderboardTokenChart({ entries, onSelectSession }) {
           // Build stacked segments from visible categories
           let cx = bx
           const segments = visibleCats.map(c => {
-            const w = Math.max(0, Math.round((e[c.field] || 0) / maxTotal * LB_BAR_AREA))
+            const w = Math.max(0, Math.round(tokenValue(e, c.field) / maxTotal * LB_BAR_AREA))
             const seg = { x: cx, w, color: c.color, key: c.key }
             cx += w
             return seg
@@ -1142,7 +1175,7 @@ function LeaderboardTokenChart({ entries, onSelectSession }) {
             role="button" tabIndex={0}
             onClick={() => toggleCat(c.key)}
             onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCat(c.key) } }}>
-            <span className={`model-detail-dot model-bar-${c.key === 'output' ? 'output' : c.key === 'input' ? 'input' : c.key === 'cwrite' ? 'cwrite' : 'cread'}`} />
+            <span className={`model-detail-dot ${c.className}`} />
             {c.label}
           </span>
         ))}
@@ -1155,14 +1188,14 @@ const DURATION_LB_TIP =
   'Top 10 sessions ranked by wall-clock duration (last activity minus creation time). ' +
   'This measures total elapsed time, not active coding time.'
 
-const MESSAGES_LB_TIP =
-  'Top 10 sessions ranked by the number of messages you sent to Devin. ' +
+const messagesLbTip = (providerLabel) =>
+  `Top 10 sessions ranked by the number of messages you sent to ${providerLabel}. ` +
   'More messages usually means a longer, more interactive session.'
 
 const TOKENS_LB_TIP =
   'Top 10 sessions ranked by total token consumption across all LLM API calls. ' +
-  'The stacked bar shows the breakdown: output (work done), input (context), ' +
-  'cache write, and cache read.'
+  'The stacked bar shows the available telemetry breakdown: visible output, reasoning output, ' +
+  'fresh input, cached input, cache write, and unclassified fallback tokens.'
 
 // ── Loading easter eggs ───────────────────────────────────────────────────────
 
@@ -1171,7 +1204,7 @@ const LOADING_MSGS = [
   'Consulting the oracle…',
   'Counting tokens like sheep…',
   'Warming up the flux capacitor…',
-  'Asking Devin how Devin is doing…',
+  'Asking the active agent how it is doing…',
   'Reticulating splines…',
   'Calibrating the vibes…',
   'Scanning the multiverse…',
@@ -1184,8 +1217,9 @@ function LoadingMsg() {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function DashboardSplash({ connected, latestPrompt, onSelectSession }) {
-  const { stats, error } = useStats()
+export default function DashboardSplash({ providerId, providerLabel, statsEnabled = true, connected, latestPrompt, onSelectSession }) {
+  const [statsMode, setStatsMode] = useState('combined')
+  const { stats, error } = useStats(providerId, statsEnabled, statsMode)
 
   if (!connected) return (
     <div className="splash-loading"><div className="spinner" />Connecting…</div>
@@ -1207,6 +1241,32 @@ export default function DashboardSplash({ connected, latestPrompt, onSelectSessi
   return (
     <div className="splash">
       <LatestPromptBanner prompt={latestPrompt} />
+      {stats.statsFilters?.transcriptHeadlessCount > 0 && (
+        <div className="stats-cohort-toggle">
+          <span>stats cohort</span>
+          {[
+            ['combined', 'combined'],
+            ['triage', 'triage'],
+            ['codex', 'codex'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={`stats-cohort-toggle-btn ${statsMode === value ? 'active' : ''}`}
+              onClick={() => setStatsMode(value)}
+              title={
+                value === 'combined'
+                  ? 'Show native Codex plus transcript-pipeline triage stats'
+                  : value === 'triage'
+                    ? 'Show only transcript-pipeline triage stats'
+                    : 'Show native Codex stats without transcript-pipeline triage'
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="splash-body">
 
         {/* ── Left column ──────────────────────────────────────────── */}
@@ -1228,7 +1288,7 @@ export default function DashboardSplash({ connected, latestPrompt, onSelectSessi
         {/* ── Right column ─────────────────────────────────────────── */}
         <div className="splash-col">
 
-          <Section title="Tool Calls" tip={TOOL_TIP}>
+          <Section title="Tool Calls" tip={toolTip(providerLabel)}>
             <ToolBarChart tools={tools} />
           </Section>
 
@@ -1258,7 +1318,7 @@ export default function DashboardSplash({ connected, latestPrompt, onSelectSessi
           />
         </Section>
 
-        <Section title="Top 10 User Messages" tip={MESSAGES_LB_TIP}>
+        <Section title="Top 10 User Messages" tip={messagesLbTip(providerLabel)}>
           <LeaderboardChart
             entries={msgEntries}
             valueFn={e => e.userMsgCount}

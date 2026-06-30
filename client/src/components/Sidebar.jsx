@@ -1,5 +1,5 @@
 /**
- * Sidebar — left panel listing all Devin sessions.
+ * Sidebar — left panel listing all sessions for the selected provider.
  *
  * Features:
  *  - Repo filter pills (persist to localStorage)
@@ -17,34 +17,32 @@ import AgentCard from './AgentCard.jsx'
 import { STATUS_ICON, STATUS_LABEL, HEADLESS_ICON } from './AgentCard.jsx'
 import { useRepoFilter } from '../hooks/useRepoFilter.js'
 import { isHeadless, displayTitle } from '../lib/headless.js'
+import { providerApiPath, providerStorageKey } from '../lib/providers.js'
 
-const STORAGE_SEARCH_ARCHIVED  = 'devin-dash:search-archived'
-const STORAGE_SHOW_HEADLESS    = 'devin-dash:show-headless'
-
-function loadSearchArchived() {
-  try { return localStorage.getItem(STORAGE_SEARCH_ARCHIVED) === 'true' } catch { return false }
+function loadSearchArchived(providerId) {
+  try { return localStorage.getItem(providerStorageKey(providerId, 'search-archived')) === 'true' } catch { return false }
 }
 
-function saveSearchArchived(v) {
-  try { localStorage.setItem(STORAGE_SEARCH_ARCHIVED, String(v)) } catch { /* ignore */ }
+function saveSearchArchived(providerId, v) {
+  try { localStorage.setItem(providerStorageKey(providerId, 'search-archived'), String(v)) } catch { /* ignore */ }
 }
 
 // Headless section visibility — default true (user wants to see them by default).
-function loadShowHeadless() {
+function loadShowHeadless(providerId) {
   try {
-    const raw = localStorage.getItem(STORAGE_SHOW_HEADLESS)
+    const raw = localStorage.getItem(providerStorageKey(providerId, 'show-headless'))
     if (raw === null) return true
     return raw === 'true'
   } catch { return true }
 }
 
-function saveShowHeadless(v) {
-  try { localStorage.setItem(STORAGE_SHOW_HEADLESS, String(v)) } catch { /* ignore */ }
+function saveShowHeadless(providerId, v) {
+  try { localStorage.setItem(providerStorageKey(providerId, 'show-headless'), String(v)) } catch { /* ignore */ }
 }
 
 // ── New Session FAB — floating button at bottom-right of sidebar ─────────────
 
-function NewSessionFAB({ onCreateSession }) {
+function NewSessionFAB({ providerId, providerLabel, onCreateSession }) {
   const [open, setOpen]         = useState(false)
   const [repos, setRepos]       = useState(null)
   const [loading, setLoading]   = useState(false)
@@ -54,7 +52,7 @@ function NewSessionFAB({ onCreateSession }) {
 
   const fetchRepos = useCallback(() => {
     setLoading(true)
-    fetch('/api/repos')
+    fetch(providerApiPath(providerId, 'repos'))
       .then(r => r.json())
       .then(d => { setRepos(d); setLoading(false) })
       .catch(() => { setRepos([]); setLoading(false) })
@@ -134,7 +132,7 @@ function NewSessionFAB({ onCreateSession }) {
         className={`new-session-fab${creating ? ' creating' : ''}`}
         onClick={toggle}
         disabled={creating}
-        title="Start a new Devin session"
+        title={`Start a new ${providerLabel} session`}
       >
         {creating ? <span className="spinner" /> : '+'}
       </button>
@@ -144,14 +142,14 @@ function NewSessionFAB({ onCreateSession }) {
 
 // ── Archive drawer — lazy-fetches archived sessions on open ──────────────────
 
-function ArchiveDrawer({ onRestore }) {
+function ArchiveDrawer({ providerId, onRestore }) {
   const [open, setOpen]           = useState(false)
   const [sessions, setSessions]   = useState(null)
   const [loading, setLoading]     = useState(false)
 
   const fetchArchived = useCallback(() => {
     setLoading(true)
-    fetch('/api/sessions/archived')
+    fetch(providerApiPath(providerId, 'sessions/archived'))
       .then(r => r.json())
       .then(d => { setSessions(d); setLoading(false) })
       .catch(() => { setSessions([]); setLoading(false) })
@@ -210,18 +208,18 @@ function ArchiveDrawer({ onRestore }) {
 
 // ── Main Sidebar ─────────────────────────────────────────────────────────────
 
-export default function Sidebar({ sessions, selectedId, previewId, collapsed, onToggleCollapse, onSelect, onPreview, onRename, onRemove, onRestore, filterNeedsYou, onToggleFilter, onCreateSession, coldDays, onSetColdDays }) {
+export default function Sidebar({ providerId, providerLabel, providerCommand, sessions, selectedId, previewId, collapsed, onToggleCollapse, onSelect, onPreview, onRename, onRemove, onRestore, filterNeedsYou, onToggleFilter, onCreateSession, coldDays, onSetColdDays }) {
   const {
     repoFilter, allRepos, addedRepos,
     sortedHiddenRepos, activeRepos, repoSessionCounts,
     addRepo, removeRepo, toggleRepo, addAllRepos, clearAllRepos,
-  } = useRepoFilter(sessions)
+  } = useRepoFilter(sessions, providerId)
 
   const [addOpen, setAddOpen]           = useState(false)
   const [dropdownSearch, setDropdownSearch] = useState('')
   const [editingCold, setEditingCold]   = useState(false)
   const [coldInput, setColdInput]       = useState(String(coldDays))
-  const [showHeadless, setShowHeadless] = useState(loadShowHeadless)
+  const [showHeadless, setShowHeadless] = useState(() => loadShowHeadless(providerId))
   const addRef      = useRef(null)
   const addDropRef  = useRef(null)
   const coldRef     = useRef(null)
@@ -229,19 +227,26 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
   const toggleShowHeadless = useCallback(() => {
     setShowHeadless(prev => {
       const next = !prev
-      saveShowHeadless(next)
+      saveShowHeadless(providerId, next)
       return next
     })
-  }, [])
+  }, [providerId])
 
   // ── Search state ────────────────────────────────────────────────────────────
   const [searchQuery,    setSearchQuery]    = useState('')
   const [searchFocused,  setSearchFocused]  = useState(false)
-  const [searchArchived, setSearchArchived] = useState(loadSearchArchived)
+  const [searchArchived, setSearchArchived] = useState(() => loadSearchArchived(providerId))
   // serverResults: null = not yet fetched / cleared; array = server response
   const [serverResults,  setServerResults]  = useState(null)
   const searchInputRef = useRef(null)
   const searchTimerRef = useRef(null)
+
+  useEffect(() => {
+    setSearchQuery('')
+    setServerResults(null)
+    setSearchArchived(loadSearchArchived(providerId))
+    setShowHeadless(loadShowHeadless(providerId))
+  }, [providerId])
 
   // Instant client-side filter — updates immediately on each 3s feed tick
   // so results stay fresh without re-hitting the server.
@@ -267,13 +272,13 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
     searchTimerRef.current = setTimeout(async () => {
       try {
         const res = await fetch(
-          `/api/sessions/search?q=${encodeURIComponent(searchQuery)}&archived=${searchArchived ? 1 : 0}`
+          `${providerApiPath(providerId, 'sessions/search')}?q=${encodeURIComponent(searchQuery)}&archived=${searchArchived ? 1 : 0}`
         )
         if (res.ok) setServerResults(await res.json())
       } catch { /* ignore — client filter still showing */ }
     }, 200)
     return () => clearTimeout(searchTimerRef.current)
-  }, [searchQuery, searchArchived]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [searchQuery, searchArchived, providerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // What to display: server results take priority; fall back to client filter while in flight
   const displayResults = searchQuery.trim()
@@ -282,7 +287,7 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
 
   const handleSearchArchivedChange = (v) => {
     setSearchArchived(v)
-    saveSearchArchived(v)
+    saveSearchArchived(providerId, v)
   }
 
   const clearSearch = () => {
@@ -462,7 +467,7 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
 
         {/* Bottom area: FAB + expand toggle, stacked vertically */}
         <div className="sidebar-bottom-collapsed">
-          <NewSessionFAB onCreateSession={onCreateSession} />
+          <NewSessionFAB providerId={providerId} providerLabel={providerLabel} onCreateSession={onCreateSession} />
           <button
             className="sidebar-collapse-btn"
             onClick={onToggleCollapse}
@@ -495,7 +500,7 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
           <div className="sidebar-empty-icon">◎</div>
           <div className="sidebar-empty-text">
             No sessions found.<br />
-            Run <code>devin</code> to start an agent.
+            Run <code>{providerCommand}</code> to start an agent.
           </div>
         </div>
         <div className="sidebar-archive-row">
@@ -506,7 +511,7 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
             title="Collapse sidebar"
           >‹</button>
         </div>
-        <NewSessionFAB onCreateSession={onCreateSession} />
+        <NewSessionFAB providerId={providerId} providerLabel={providerLabel} onCreateSession={onCreateSession} />
       </aside>
     )
   }
@@ -801,11 +806,11 @@ export default function Sidebar({ sessions, selectedId, previewId, collapsed, on
           onClick={onToggleCollapse}
           title="Collapse sidebar"
         >‹</button>
-        <ArchiveDrawer onRestore={onRestore} />
+        <ArchiveDrawer providerId={providerId} onRestore={onRestore} />
       </div>
 
       {/* ── Floating new session button ──────────────────────────── */}
-      <NewSessionFAB onCreateSession={onCreateSession} />
+      <NewSessionFAB providerId={providerId} providerLabel={providerLabel} onCreateSession={onCreateSession} />
     </aside>
   )
 }

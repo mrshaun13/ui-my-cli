@@ -18,7 +18,7 @@
  *      have this shape, so this is a reliable signal.
  *
  * The DB's `title` column is the single source of truth shared with
- * `devin list` and `/ls` inside a session.  We never mutate it; we
+ * `codex list` and `/ls` inside a session.  We never mutate it; we
  * just derive a clean display title and a boolean flag at render time.
  *
  * Detection runs against EITHER the title OR the project (working-dir

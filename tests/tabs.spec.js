@@ -16,6 +16,12 @@ import { ensureServerRunning, waitForSessions, SELECTORS } from './helpers.js';
 
 test.beforeAll(ensureServerRunning);
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('agent-dash:codex:cold-days', '3650');
+  });
+});
+
 // Screenshot directory
 const SCREENSHOT_DIR = '/tmp/tab-test-screenshots';
 

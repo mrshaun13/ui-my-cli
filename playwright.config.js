@@ -2,13 +2,13 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Playwright configuration for the Devin Dashboard.
+ * Playwright configuration for the Codex Dashboard.
  *
  * IMPORTANT: Tests run against the live PM2-managed server.
  * The dashboard must be running before you run tests.
  *
  * Quick start:
- *   pm2 list                     # confirm devin-dashboard is "online"
+ *   pm2 list                     # confirm codex-dashboard is "online"
  *   npm test                     # run all tests
  *   npx playwright test <file>   # run a single test file
  *

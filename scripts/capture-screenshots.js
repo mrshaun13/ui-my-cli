@@ -3,7 +3,7 @@
 // Usage: node scripts/capture-screenshots.js
 //
 // Requires: Playwright + Chromium installed globally (npm i -g playwright && npx playwright install chromium)
-// Expects:  Devin Dashboard running at http://localhost:7575
+// Expects:  Codex Dashboard running at http://localhost:7575
 
 // Playwright may be installed globally — try local first, fall back to global node_modules
 let pw;

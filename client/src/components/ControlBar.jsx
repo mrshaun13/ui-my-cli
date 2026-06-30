@@ -2,7 +2,7 @@
  * ControlBar — always-visible context strip at the bottom of the UI.
  *
  * Shows:
- *   - Plain-English status explanation ("Devin finished and is waiting for your reply")
+ *   - Plain-English status explanation ("Codex finished and is waiting for your reply")
  *   - Last message snippet — so you immediately know WHAT it needs without scrolling
  *   - Working directory
  *   - Rename button
@@ -13,11 +13,13 @@ import { useState, useEffect } from 'react'
 import ContextPieChart from './ContextPieChart.jsx'
 import { isHeadless, displayTitle, HEADLESS_ICON } from '../lib/headless.js'
 
-const STATUS_EXPLANATION = {
-  question: 'Devin finished and is waiting for your reply',
-  active:   'Devin is actively working',
-  finished: 'Devin has finished — no reply needed',
-  idle:     'No recent activity',
+function statusExplanation(providerLabel) {
+  return {
+    question: `${providerLabel} finished and is waiting for your reply`,
+    active:   `${providerLabel} is actively working`,
+    finished: `${providerLabel} has finished — no reply needed`,
+    idle:     'No recent activity',
+  }
 }
 
 const STATUS_COLOR = {
@@ -27,7 +29,7 @@ const STATUS_COLOR = {
   idle:     'var(--text-muted)',
 }
 
-export default function ControlBar({ session, sessionId, onRename, onRemove }) {
+export default function ControlBar({ providerId, providerLabel = 'Agent', session, sessionId, onRename, onRemove }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState('')
   const [confirming, setConfirming] = useState(false)
@@ -78,7 +80,7 @@ export default function ControlBar({ session, sessionId, onRename, onRemove }) {
   const statusColor = headless ? 'var(--purple)' : (STATUS_COLOR[session.status] || 'var(--text-muted)')
   const explanation = headless
     ? 'Headless run — no live terminal'
-    : (STATUS_EXPLANATION[session.status] || session.status)
+    : (statusExplanation(providerLabel)[session.status] || session.status)
 
   return (
     <div className="controlbar">
@@ -124,7 +126,7 @@ export default function ControlBar({ session, sessionId, onRename, onRemove }) {
               <div className="controlbar-divider" />
             </>
           )}
-          <ContextPieChart sessionId={sessionId} tooltipPosition="above" />
+          <ContextPieChart providerId={providerId} sessionId={sessionId} tooltipPosition="above" />
           <div className="controlbar-divider" />
           {renaming ? (
             <>
@@ -159,4 +161,3 @@ export default function ControlBar({ session, sessionId, onRename, onRemove }) {
     </div>
   )
 }
-

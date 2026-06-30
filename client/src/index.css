@@ -164,6 +164,55 @@ html, body, #root {
   background: var(--border);
 }
 
+.provider-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+}
+
+.provider-switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.provider-switch-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.provider-switch-btn.active {
+  color: var(--text-primary);
+  border-color: var(--border-bright);
+  background: var(--bg-active);
+}
+
+.provider-switch-btn.unavailable {
+  opacity: 0.55;
+}
+
+.provider-switch-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  box-shadow: 0 0 8px currentColor;
+}
+
 .topbar-meta {
   font-size: 11px;
   color: var(--text-muted);
@@ -1259,6 +1308,38 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+.stats-cohort-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 26px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.stats-cohort-toggle-btn {
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: 10px var(--font-mono);
+  cursor: pointer;
+}
+
+.stats-cohort-toggle-btn:hover,
+.stats-cohort-toggle-btn.active {
+  border-color: var(--purple);
+  color: var(--text-primary);
+}
+
+.stats-cohort-toggle-btn.active {
+  background: color-mix(in srgb, var(--purple) 12%, var(--bg-surface));
+}
+
 /* ── Heatmap HTML tooltip ───────────────────────────────────────── */
 .heatmap-tooltip {
   position: absolute;
@@ -1396,6 +1477,28 @@ html, body, #root {
   text-overflow: ellipsis;
 }
 
+.model-usage-model {
+  color: inherit;
+}
+
+.model-usage-name-reasoning {
+  color: #ff8a4c;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.model-usage-reasoning {
+  border: 1px solid color-mix(in srgb, #ff8a4c 45%, transparent);
+  border-radius: 999px;
+  color: #ff8a4c;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .model-usage-out {
   font-size: 11px;
   font-family: var(--font-mono);
@@ -1429,6 +1532,8 @@ html, body, #root {
 .model-bar-input  { background: var(--blue); opacity: 0.7; }
 .model-bar-cwrite { background: var(--yellow); opacity: 0.6; }
 .model-bar-cread  { background: var(--purple); opacity: 0.5; }
+.model-bar-reasoning { background: #ff8a4c; opacity: 0.75; }
+.model-bar-unknown { background: var(--text-muted); opacity: 0.45; }
 
 .model-usage-detail {
   display: flex;
@@ -2300,8 +2405,8 @@ html, body, #root {
 }
 
 .preview-turn-latest .preview-bubble-assistant {
-  border-color: var(--accent-dim);
-  background: color-mix(in srgb, var(--accent) 4%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--border-bright));
+  background: color-mix(in srgb, var(--blue) 8%, var(--bg-elevated));
 }
 
 .preview-turn-sep {
@@ -2330,9 +2435,11 @@ html, body, #root {
 }
 
 .preview-bubble-assistant {
-  background: var(--bg-surface);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, var(--blue) 12%);
   align-self: flex-start;
-  max-width: 92%;
+  max-width: 96%;
+  border-color: color-mix(in srgb, var(--blue) 28%, var(--border));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--blue) 55%, transparent);
 }
 
 .preview-bubble-dim { opacity: 0.5; }
@@ -2343,6 +2450,10 @@ html, body, #root {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.preview-bubble-assistant .preview-bubble-label {
+  color: var(--blue);
 }
 
 .preview-bubble-user .preview-bubble-label {
@@ -2361,7 +2472,7 @@ html, body, #root {
 
 .preview-bubble-text {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   line-height: 1.55;
   margin: 0;
   white-space: pre-wrap;
@@ -2369,26 +2480,6 @@ html, body, #root {
 }
 
 .preview-bubble-user .preview-bubble-text { color: var(--text-primary); }
-
-.preview-expand-btn {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  color: var(--accent-dim);
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 2px 0;
-  text-align: left;
-  letter-spacing: 0.06em;
-  transition: color 0.1s;
-}
-.preview-expand-btn:hover { color: var(--accent); }
-
-/* ── Per-bubble click-to-expand ────────────────────────────────────
-   Cursor changes only when the bubble is truncated AND not yet expanded.
-   Once expanded, click is a no-op and cursor stays default — clicking
-   inside text should feel like normal selection, not a button. */
-.preview-bubble.clickable { cursor: pointer; }
 
 /* ── Per-bubble hover-revealed copy button ─────────────────────────
    Top-right by default (works for assistant bubbles where the label is
@@ -2612,6 +2703,13 @@ html, body, #root {
   font-size: 10px;
   color: var(--text-muted);
   font-style: italic;
+}
+
+.preview-model-reasoning {
+  color: #ff8a4c;
+  font-family: var(--font-mono);
+  font-style: normal;
+  text-transform: uppercase;
 }
 
 .preview-model-switches {

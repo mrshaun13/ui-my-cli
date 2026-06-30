@@ -17,17 +17,42 @@ const BASE_URL = `http://localhost:${PORT}`;
 export async function ensureServerRunning() {
   const ctx = await request.newContext();
   try {
-    const res = await ctx.get(`${BASE_URL}/api/status`, { timeout: 3000 });
+    let res;
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        res = await ctx.get(`${BASE_URL}/api/status`, { timeout: 5000 });
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+    }
+    if (lastErr) throw lastErr;
     if (!res.ok()) {
       throw new Error(`Server returned ${res.status()}`);
     }
-    // Also verify there are sessions to test against
-    const sessRes = await ctx.get(`${BASE_URL}/api/sessions`, { timeout: 3000 });
+    // Also verify there are sessions to test against. Retry because full-suite
+    // parallel startup can briefly contend with synchronous SQLite analytics.
+    let sessRes;
+    lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        sessRes = await ctx.get(`${BASE_URL}/api/sessions`, { timeout: 5000 });
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+    }
+    if (lastErr) throw lastErr;
     const sessions = await sessRes.json();
     if (!Array.isArray(sessions) || sessions.length === 0) {
       console.warn(
         'WARNING: No active sessions found. Tests that interact with ' +
-        'session cards will be skipped. Run `devin` to create a session.'
+        'session cards will be skipped. Run `codex` to create a session.'
       );
     }
   } catch (err) {
@@ -74,4 +99,6 @@ export const SELECTORS = {
   tabInsightsBtn: '.tab-insights-btn',
   tabCloseBtn: '.tab-close-btn',
   previewWrap: '.preview-wrap',
+  providerSwitch: '.provider-switch',
+  providerButton: '.provider-switch-btn',
 };

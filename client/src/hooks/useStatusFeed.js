@@ -1,5 +1,5 @@
 /**
- * useStatusFeed — subscribes to the server's /ws/status WebSocket
+ * useStatusFeed — subscribes to the selected provider's status WebSocket
  * and returns a live-updating list of sessions.
  *
  * Reconnects automatically on disconnect (exponential back-off up to 10s).
@@ -9,12 +9,13 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { providerWsPath } from '../lib/providers.js'
 
 const WS_BASE = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
 const INITIAL_BACKOFF = 500
 const MAX_BACKOFF = 10_000
 
-export function useStatusFeed() {
+export function useStatusFeed(providerId) {
   const [sessions, setSessions] = useState([])
   const [latestPrompt, setLatestPrompt] = useState(null)
   const [connected, setConnected] = useState(false)
@@ -26,22 +27,23 @@ export function useStatusFeed() {
   const wsRef = useRef(null)
   const backoffRef = useRef(INITIAL_BACKOFF)
   const retryRef = useRef(null)
-  const unmountedRef = useRef(false)
+  const feedTokenRef = useRef(0)
 
   const connect = useCallback(() => {
-    if (unmountedRef.current) return
+    const token = feedTokenRef.current
 
-    const ws = new WebSocket(`${WS_BASE}/ws/status`)
+    const ws = new WebSocket(`${WS_BASE}${providerWsPath(providerId, 'status')}`)
     wsRef.current = ws
 
     ws.onopen = () => {
-      if (unmountedRef.current) { ws.close(); return }
+      if (feedTokenRef.current !== token) { ws.close(); return }
       setConnected(true)
       setError(null)
       backoffRef.current = INITIAL_BACKOFF
     }
 
     ws.onmessage = (evt) => {
+      if (feedTokenRef.current !== token) return
       try {
         const msg = JSON.parse(evt.data)
         if (msg.type === 'sessions') {
@@ -86,21 +88,27 @@ export function useStatusFeed() {
     }
 
     ws.onclose = () => {
-      if (unmountedRef.current) return
+      if (feedTokenRef.current !== token) return
       setConnected(false)
 
       retryRef.current = setTimeout(() => {
+        if (feedTokenRef.current !== token) return
         backoffRef.current = Math.min(backoffRef.current * 1.5, MAX_BACKOFF)
         connect()
       }, backoffRef.current)
     }
-  }, [])
+  }, [providerId])
 
   useEffect(() => {
-    unmountedRef.current = false
+    feedTokenRef.current += 1
+    setSessions([])
+    setLatestPrompt(null)
+    setError(null)
+    setRekeyMap({})
+    setExpiredPending(new Set())
     connect()
     return () => {
-      unmountedRef.current = true
+      feedTokenRef.current += 1
       clearTimeout(retryRef.current)
       wsRef.current?.close()
     }

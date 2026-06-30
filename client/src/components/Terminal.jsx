@@ -27,6 +27,7 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
+import { providerWsPath } from '../lib/providers.js'
 
 const WS_BASE = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
 
@@ -117,7 +118,7 @@ const XTERM_RESPONSE_RE = new RegExp(
 // contain cursor-home sequences that clobber the viewport position.
 const RESIZE_ANCHOR_MS = 500
 
-export default function Terminal({ sessionId, active }) {
+export default function Terminal({ providerId, sessionId, active }) {
   const containerRef  = useRef(null)
   const xtermRef      = useRef(null)
   const fitAddonRef   = useRef(null)
@@ -195,7 +196,7 @@ export default function Terminal({ sessionId, active }) {
 
       // Ctrl+Enter → newline.
       // xterm.js doesn't support the kitty keyboard protocol, so it sends
-      // \r for both Enter and Ctrl+Enter (indistinguishable). The Devin CLI
+      // \r for both Enter and Ctrl+Enter (indistinguishable). The Codex CLI
       // expects \n (same as Ctrl+J) to insert a newline in its input editor.
       // We intercept Ctrl+Enter here and inject \n directly into the PTY.
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'Enter') {
@@ -293,7 +294,7 @@ export default function Terminal({ sessionId, active }) {
       cols: String(xterm.cols),
       rows: String(xterm.rows),
     })
-    const ws = new WebSocket(`${WS_BASE}/ws/terminal/${currentId}?${params}`)
+    const ws = new WebSocket(`${WS_BASE}${providerWsPath(providerId, `terminal/${encodeURIComponent(currentId)}`)}?${params}`)
     wsRef.current = ws  // point the ref at the new socket immediately
 
     ws.onopen = () => {
@@ -351,7 +352,7 @@ export default function Terminal({ sessionId, active }) {
     }
 
     ws.onerror = () => { /* onclose always follows — handled there */ }
-  }, []) // no sessionId dep — reads from sessionIdRef
+  }, [providerId]) // no sessionId dep — reads from sessionIdRef
 
   // Start connection after xterm is mounted (next tick)
   useEffect(() => {
