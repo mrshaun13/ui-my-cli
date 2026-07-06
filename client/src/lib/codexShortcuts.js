@@ -55,6 +55,15 @@ export function shortcutHintsForProvider(providerId) {
   return providerId === 'codex' ? CODEX_SHORTCUT_HINTS : LEGACY_SHORTCUT_HINTS
 }
 
+export function isTerminalPasteKeyEvent(e) {
+  if (e.type !== 'keydown' || e.altKey) return false
+
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
+  if ((e.ctrlKey || e.metaKey) && key === 'v') return true
+
+  return e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'Insert'
+}
+
 /**
  * Browser terminals do not reliably forward some modified keys that Codex
  * handles in a native terminal. Convert those KeyboardEvents into the same

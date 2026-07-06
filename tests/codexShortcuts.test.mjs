@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   codexInputForKeyEvent,
   CODEX_SHORTCUT_HINTS,
+  isTerminalPasteKeyEvent,
   shortcutHintsForProvider,
 } from '../client/src/lib/codexShortcuts.js'
 
@@ -32,6 +33,15 @@ test('normalizes browser-reserved Codex control shortcuts', () => {
   assert.equal(codexInputForKeyEvent(keydown({ key: 'e', ctrlKey: true })), '\x05')
   assert.equal(codexInputForKeyEvent(keydown({ key: 'f', ctrlKey: true })), '\x06')
   assert.equal(codexInputForKeyEvent(keydown({ key: 'w', ctrlKey: true })), '\x17')
+})
+
+test('identifies browser paste gestures that must not reach Codex as raw control bytes', () => {
+  assert.equal(isTerminalPasteKeyEvent(keydown({ key: 'v', ctrlKey: true })), true)
+  assert.equal(isTerminalPasteKeyEvent(keydown({ key: 'V', ctrlKey: true, shiftKey: true })), true)
+  assert.equal(isTerminalPasteKeyEvent(keydown({ key: 'v', metaKey: true })), true)
+  assert.equal(isTerminalPasteKeyEvent(keydown({ key: 'Insert', shiftKey: true })), true)
+  assert.equal(isTerminalPasteKeyEvent(keydown({ key: 'v' })), false)
+  assert.equal(isTerminalPasteKeyEvent(keydown({ key: 'v', ctrlKey: true, altKey: true })), false)
 })
 
 test('keeps visible helper hints aligned with required Codex commands', () => {

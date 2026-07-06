@@ -27,7 +27,7 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
-import { codexInputForKeyEvent } from '../lib/codexShortcuts.js'
+import { codexInputForKeyEvent, isTerminalPasteKeyEvent } from '../lib/codexShortcuts.js'
 import { providerWsPath } from '../lib/providers.js'
 
 const WS_BASE = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
@@ -130,6 +130,8 @@ export default function Terminal({ providerId, sessionId, active }) {
   const retryCountRef = useRef(0)
   const mountedRef    = useRef(true)  // false after unmount
   const resizeTimerRef = useRef(null) // debounce timer for ResizeObserver
+  const pasteFallbackTimerRef = useRef(null)
+  const pasteFallbackTokenRef = useRef(0)
   // Timestamp of last resize sent to PTY — used to auto-anchor viewport
   // when async SIGWINCH output arrives shortly after a resize.
   const lastResizeAtRef = useRef(0)
@@ -187,13 +189,41 @@ export default function Terminal({ providerId, sessionId, active }) {
     xtermRef.current    = xterm
     fitAddonRef.current = fitAddon
 
+    const pasteText = (text) => {
+      if (!text) return false
+      xterm.paste(text)
+      return true
+    }
+
+    const onPaste = (e) => {
+      const text = e.clipboardData?.getData('text/plain')
+      if (!text) return
+      e.preventDefault()
+      e.stopPropagation()
+      clearTimeout(pasteFallbackTimerRef.current)
+      pasteFallbackTokenRef.current++
+      pasteText(text)
+    }
+    containerRef.current.addEventListener('paste', onPaste, true)
+
     // Smart Ctrl+C — mirrors WSL terminal behaviour:
     //   Ctrl+C with selection → copy to clipboard, swallow the keypress
     //   Ctrl+C without selection → pass \x03 (SIGINT) through to PTY
-    // Paste (Ctrl+V) is handled natively by xterm's hidden textarea —
-    // pasted text flows through onData like normal keyboard input.
     xterm.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
+
+      if (isTerminalPasteKeyEvent(e)) {
+        clearTimeout(pasteFallbackTimerRef.current)
+        const token = pasteFallbackTokenRef.current + 1
+        pasteFallbackTokenRef.current = token
+        const clipboardText = Promise.resolve(navigator.clipboard?.readText?.() ?? '').catch(() => '')
+        pasteFallbackTimerRef.current = setTimeout(() => {
+          clipboardText.then((text) => {
+            if (mountedRef.current && pasteFallbackTokenRef.current === token) pasteText(text)
+          })
+        }, 250)
+        return false
+      }
 
       if (e.ctrlKey && e.key === 'c') {
         const sel = xterm.getSelection()
@@ -266,7 +296,9 @@ export default function Terminal({ providerId, sessionId, active }) {
       mountedRef.current = false
       clearTimeout(retryRef.current)
       clearTimeout(resizeTimerRef.current)
+      clearTimeout(pasteFallbackTimerRef.current)
       observer.disconnect()
+      containerRef.current?.removeEventListener('paste', onPaste, true)
       // Close socket cleanly — onclose will fire but mountedRef guards the retry
       wsRef.current?.close()
       wsRef.current = null
