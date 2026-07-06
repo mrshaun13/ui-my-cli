@@ -101,4 +101,7 @@ export const SELECTORS = {
   previewWrap: '.preview-wrap',
   providerSwitch: '.provider-switch',
   providerButton: '.provider-switch-btn',
+  styleSelect: '.style-select',
+  textSizeControl: '.text-size-control',
+  textSizeButton: '.text-size-btn',
 };

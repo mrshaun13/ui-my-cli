@@ -78,6 +78,42 @@ test.describe('Dashboard smoke tests', () => {
     await expect(page.locator(SELECTORS.topbarLogo)).toContainText('Codex');
   });
 
+  test('style selector offers ten themes and persists the selection', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => localStorage.removeItem('agent-dash:style'));
+    await page.reload();
+
+    const styleSelect = page.locator(SELECTORS.styleSelect);
+    await expect(styleSelect).toBeVisible();
+    await expect(styleSelect.locator('option')).toHaveCount(10);
+    await expect(styleSelect).toHaveValue('signal');
+
+    await styleSelect.selectOption('paper');
+    await expect(page.locator('html')).toHaveAttribute('data-dashboard-style', 'paper');
+    await expect.poll(() => page.evaluate(() => document.documentElement.style.colorScheme)).toBe('light');
+
+    await page.reload();
+    await expect(page.locator(SELECTORS.styleSelect)).toHaveValue('paper');
+  });
+
+  test('text size control offers four persistent sizes', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => localStorage.removeItem('agent-dash:text-size'));
+    await page.reload();
+
+    const control = page.locator(SELECTORS.textSizeControl);
+    await expect(control).toBeVisible();
+    await expect(control.locator(SELECTORS.textSizeButton)).toHaveCount(4);
+    await expect(control.getByRole('button', { name: 'Standard' })).toHaveAttribute('aria-pressed', 'true');
+
+    await control.getByRole('button', { name: 'XXL' }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-text-size', 'xxl');
+    await expect.poll(() => page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize))).toBeGreaterThan(18);
+
+    await page.reload();
+    await expect(page.locator(SELECTORS.textSizeControl).getByRole('button', { name: 'XXL' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   test('Codex model usage table visibly labels reasoning effort', async ({ page, request }) => {
     const res = await request.get('/api/codex/stats');
     expect(res.ok()).toBeTruthy();
