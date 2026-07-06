@@ -2,7 +2,8 @@
  * Codex session adapter.
  *
  * Reads Codex's local thread state and rollout JSONL history, then exposes the
- * dashboard's existing session-oriented API shape.
+ * dashboard's existing session-oriented API shape. Native thread titles are
+ * kept in Codex's own state database so CLI, VS Code, and this dashboard agree.
  */
 
 const fs = require('fs');
@@ -41,6 +42,12 @@ function projectName(cwd) {
 
 function getReadDb() {
   return new Database(resolveStateDbPath(), { readonly: true, fileMustExist: true });
+}
+
+function getWriteDb() {
+  const db = new Database(resolveStateDbPath(), { fileMustExist: true });
+  db.pragma('busy_timeout = 5000');
+  return db;
 }
 
 function hasColumn(db, table, column) {
@@ -304,12 +311,12 @@ function isNativeHeadlessThread(thread) {
     || HEADLESS_STAMP_RE.test(haystack);
 }
 
-function normalizeThread(thread, overrides = dashboardStore.titleOverrides(), rollout = null) {
+function normalizeThread(thread, _overrides = null, rollout = null) {
   const parsed = rollout || readRollout(thread);
   const firstUser = thread.first_user_message || parsed.messages.find(m => m.role === 'user')?.text || null;
   const lastUser = [...parsed.messages].reverse().find(m => m.role === 'user')?.text || firstUser;
   const lastAssistant = [...parsed.messages].reverse().find(m => m.role === 'assistant')?.text || null;
-  const title = overrides.get(thread.id) || thread.title || firstUser || thread.id.slice(0, 8);
+  const title = thread.title || firstUser || thread.id.slice(0, 8);
   const access = accessProfile(thread, parsed);
 
   return {
@@ -341,20 +348,18 @@ function normalizeThread(thread, overrides = dashboardStore.titleOverrides(), ro
 }
 
 function listSessions() {
-  const overrides = dashboardStore.titleOverrides();
   return [
     ...listThreads({ includeArchived: false, includeSystem: false })
-      .map(thread => normalizeThread(thread, overrides)),
+      .map(thread => normalizeThread(thread)),
     ...transcriptHeadless.listSessions(),
   ].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
 
 function listArchivedSessions() {
-  const overrides = dashboardStore.titleOverrides();
   return [
     ...listThreads({ includeArchived: true, includeSystem: false })
       .filter(thread => !!thread.archived)
-      .map(thread => normalizeThread(thread, overrides)),
+      .map(thread => normalizeThread(thread)),
     ...transcriptHeadless.listArchivedSessions(),
   ].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
@@ -506,7 +511,7 @@ function getSessionPreview(id) {
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) return null;
   const rollout = readRollout(thread);
-  const session = normalizeThread(thread, dashboardStore.titleOverrides(), rollout);
+  const session = normalizeThread(thread, null, rollout);
   const durationSec = Math.max(0, (thread.updated_at || 0) - (thread.created_at || 0));
   const tokens = tokenTelemetry(rollout, thread);
   const access = accessProfile(thread, rollout);
@@ -632,8 +637,42 @@ function safeJson(raw) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
+function normalizeNativeTitle(title) {
+  if (typeof title !== 'string') return null;
+  const trimmed = title.trim();
+  if (!trimmed || trimmed.length > 200 || /[\u0000-\u001f\u007f]/.test(trimmed)) {
+    throw new Error('title must be 1-200 characters without control characters');
+  }
+  return trimmed;
+}
+
 function renameSession(id, title) {
-  return dashboardStore.setTitle(id, title);
+  if (transcriptHeadless.isTranscriptHeadlessId(id)) return dashboardStore.setTitle(id, title);
+
+  const db = getWriteDb();
+  try {
+    const rename = db.transaction(() => {
+      const thread = db.prepare(`
+        SELECT id, title, first_user_message, preview
+        FROM threads
+        WHERE id = ? AND source IN ('cli', 'vscode')
+      `).get(id);
+      if (!thread) throw new Error('Codex session not found');
+
+      const nextTitle = title === null
+        ? (thread.first_user_message || thread.preview || thread.title || thread.id.slice(0, 8))
+        : normalizeNativeTitle(title);
+      db.prepare('UPDATE threads SET title = ? WHERE id = ?').run(nextTitle, id);
+      return { id, title: nextTitle };
+    });
+    const result = rename();
+    // Remove any title written by older dashboard versions so stale metadata
+    // cannot be mistaken for the native Codex title later.
+    dashboardStore.setTitle(id, null);
+    return result;
+  } finally {
+    db.close();
+  }
 }
 
 function runCodexCommand(args) {
@@ -688,12 +727,11 @@ function findNewSessionInDir(workingDir, excludeIds) {
 
 function searchSessions(query, includeArchived) {
   const q = (query || '').toLowerCase();
-  const overrides = dashboardStore.titleOverrides();
   const native = listThreads({ includeArchived: true, includeSystem: false })
     .filter(thread => includeArchived || !thread.archived)
     .map(thread => {
       const rollout = readRollout(thread);
-      return { thread, rollout, session: normalizeThread(thread, overrides, rollout) };
+      return { thread, rollout, session: normalizeThread(thread, null, rollout) };
     })
     .filter(({ thread, rollout, session }) => {
       const haystack = [
@@ -716,7 +754,7 @@ function latestPrompt() {
   const thread = threads.find(t => t.first_user_message || t.preview);
   const native = thread ? {
     sessionId: thread.id,
-    title: dashboardStore.getTitle(thread.id) || thread.title || thread.id.slice(0, 8),
+    title: thread.title || thread.id.slice(0, 8),
     project: projectName(thread.cwd),
     prompt: thread.first_user_message || thread.preview,
     timestamp: thread.updated_at,
@@ -770,7 +808,7 @@ function stats(options = {}) {
     bucket.durationSec += durationSec;
     bucket.sessions_detail.push({
       id: thread.id,
-      title: dashboardStore.getTitle(thread.id) || thread.title || thread.id.slice(0, 8),
+      title: thread.title || thread.id.slice(0, 8),
       durationSec,
       durationStr: formatDuration(durationSec),
       messages: rollout.messages.length,
@@ -851,7 +889,7 @@ function stats(options = {}) {
     if (thread.first_user_message) {
       recentPrompts.push({
         sessionId: thread.id,
-        title: dashboardStore.getTitle(thread.id) || thread.title || thread.id.slice(0, 8),
+        title: thread.title || thread.id.slice(0, 8),
         project: projectName(thread.cwd),
         prompt: thread.first_user_message,
         timestamp: thread.updated_at,
@@ -911,7 +949,7 @@ function stats(options = {}) {
     const tokens = tokenTelemetry(rollout, thread);
     return [thread.id, {
       id: thread.id,
-      title: dashboardStore.getTitle(thread.id) || thread.title || thread.id.slice(0, 8),
+      title: thread.title || thread.id.slice(0, 8),
       project: projectName(thread.cwd),
       model: thread.model || 'codex',
       reasoningEffort: thread.reasoning_effort || rollout.metadata.reasoning_effort || null,

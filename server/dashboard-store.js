@@ -1,8 +1,9 @@
 /**
- * Dashboard-owned metadata for local Codex sessions.
+ * Dashboard-owned metadata for external/headless sessions and other UI state.
  *
- * Codex internal SQLite tables are read-only to this app. Titles and other
- * UI-only data live here instead.
+ * Native Codex thread titles live in Codex's own state database. This store
+ * remains the title source for transcript-pipeline sessions, which have no
+ * native Codex thread row.
  */
 
 const Database = require('better-sqlite3');

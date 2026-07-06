@@ -29,7 +29,7 @@ module.exports = {
     '**Session preview** — click the status badge to open a read-only view of any session\'s ' +
       'chat history without spawning a PTY',
     '**Inline rename** — double-click any session title to rename it ' +
-      '(stored in provider-appropriate local metadata; owned CLI state stays read-only except approved archive/restore paths)',
+      '(native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)',
     '**Needs-your-input filter** — one click to show only agents waiting for a reply',
     '**Repo filter pills** — filter sessions by project; selection persists across reloads',
     '**Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider',
@@ -111,7 +111,7 @@ module.exports = {
     'All server modules use CommonJS (`require` / `module.exports`).',
     'The client uses ES modules with React 19 + Vite.',
     'Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).',
-    'Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Dashboard-only Codex title overrides and external transcript-pipeline headless hide/restore state are stored in `~/.codex/ui-my-cli-dashboard.db`.',
+    'Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Native Codex titles are stored in Codex `state_*.sqlite`; external transcript-pipeline headless title and hide/restore metadata is stored in `~/.codex/ui-my-cli-dashboard.db`.',
     'Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.',
     'Production: `npm start` — must run `npm run build` first.',
     'Development: `node --watch server/index.js` + `cd client && npm run dev`.',

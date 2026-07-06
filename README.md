@@ -10,7 +10,7 @@ A browser-based dashboard for managing multiple local headless-agent sessions ac
 - **Click to switch** — click any agent in the sidebar to attach its live terminal; switching is instant with scrollback preserved
 - **New session** — floating "+" button in the sidebar lets you start a new Codex or Devin session in any previously-used repo; the terminal opens automatically
 - **Session preview** — click the status badge to open a read-only view of any session's chat history without spawning a PTY
-- **Inline rename** — double-click any session title to rename it (stored in provider-appropriate local metadata; owned CLI state stays read-only except approved archive/restore paths)
+- **Inline rename** — double-click any session title to rename it (native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)
 - **Needs-your-input filter** — one click to show only agents waiting for a reply
 - **Repo filter pills** — filter sessions by project; selection persists across reloads
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
@@ -135,7 +135,7 @@ server/
   server/db-path.js            Compatibility exports for legacy db-path imports.
   server/codex-paths.js        Resolves local Codex state paths.
   server/codex-store.js        Codex session adapter.
-  server/dashboard-store.js    Dashboard-owned metadata for local Codex sessions.
+  server/dashboard-store.js    Dashboard-owned metadata for external/headless sessions and other UI state.
   server/transcript-headless-store.js Read-only adapter for transcript-pipeline headless session ledgers.
   server/providers/index.js    Provider registry for local headless-agent adapters.
   server/providers/codex/index.js Codex provider adapter wiring local Codex state into the dashboard contract.

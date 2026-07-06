@@ -24,7 +24,7 @@ Browser  →  xterm.js keystrokes  →  provider-scoped WebSocket  →  node-pty
 | `server/db-path.js` | Compatibility exports for legacy db-path imports. |
 | `server/codex-paths.js` | Resolves local Codex state paths. |
 | `server/codex-store.js` | Codex session adapter. |
-| `server/dashboard-store.js` | Dashboard-owned metadata for local Codex sessions. |
+| `server/dashboard-store.js` | Dashboard-owned metadata for external/headless sessions and other UI state. |
 | `server/transcript-headless-store.js` | Read-only adapter for transcript-pipeline headless session ledgers. |
 | `server/providers/index.js` | Provider registry for local headless-agent adapters. |
 | `server/providers/codex/index.js` | Codex provider adapter wiring local Codex state into the dashboard contract. |
