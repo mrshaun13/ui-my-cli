@@ -113,6 +113,29 @@ function ptyKey(providerId, sessionId) {
   return `${providerId || DEFAULT_PROVIDER_ID}:${sessionId}`;
 }
 
+/**
+ * Build an interactive terminal environment independent of how the dashboard
+ * process was launched. PM2/CI runners commonly export NO_COLOR or CODEX_CI;
+ * passing those flags into a real PTY makes Codex deliberately render menus
+ * without ANSI colors.
+ */
+function interactivePtyEnv(providerId) {
+  const env = { ...process.env };
+  delete env.NO_COLOR;
+  delete env.CODEX_CI;
+  return {
+    ...env,
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+    UI_MY_CLI_DASHBOARD: '1',
+    UI_MY_CLI_PROVIDER: providerId,
+    // Strip Homebrew's npm_config_prefix so NVM loads cleanly in the PTY.
+    // On macOS, Homebrew sets this to /opt/homebrew which makes NVM refuse
+    // to start. Empty string effectively unsets it; harmless on Linux/WSL.
+    npm_config_prefix: '',
+  };
+}
+
 // ── Scrollback buffer ────────────────────────────────────────────────────────
 
 /**
@@ -201,18 +224,7 @@ function doSpawn(providerId, command, args, cwd, cols, rows, ws) {
       cols,
       rows,
       cwd,
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor',
-        // Let child Codex sessions know they were launched from this dashboard.
-        UI_MY_CLI_DASHBOARD: '1',
-        UI_MY_CLI_PROVIDER: providerId,
-        // Strip Homebrew's npm_config_prefix so NVM loads cleanly in the PTY.
-        // On macOS, Homebrew sets this to /opt/homebrew which makes NVM refuse
-        // to start. Empty string effectively unsets it; harmless on Linux/WSL.
-        npm_config_prefix: '',
-      },
+      env: interactivePtyEnv(providerId),
     });
 
     return {
@@ -444,7 +456,7 @@ function validatePty() {
       cols: 80,
       rows: 24,
       cwd: os.homedir(),
-      env: { ...process.env, TERM: 'xterm-256color' },
+      env: interactivePtyEnv(DEFAULT_PROVIDER_ID),
     });
     p.kill();
     return true;
@@ -462,4 +474,13 @@ function validatePty() {
   }
 }
 
-module.exports = { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty, validatePty };
+module.exports = {
+  attachClient,
+  killPty,
+  isPtyActive,
+  activePtySessions,
+  spawnNewSession,
+  rekeyPty,
+  validatePty,
+  interactivePtyEnv,
+};
