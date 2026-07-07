@@ -1059,6 +1059,11 @@ public sealed partial class MainWindow : Window
             Background = ResourceBrush("TerminalBrush"),
             Foreground = ResourceBrush("PrimaryBrush"),
         };
+        terminal.AddHandler(
+            InputElement.KeyDownEvent,
+            OnTerminalPasteKeyDown,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         var reconnectText = new TextBlock
         {
             Text = "Terminal connection lost · reconnecting…",
@@ -1237,6 +1242,33 @@ public sealed partial class MainWindow : Window
         reconnectButton.Click += (_, _) => state.ReconnectNow?.TrySetResult(true);
         terminal.ProcessExited += (_, args) => OnTerminalProcessExited(state, args);
         return state;
+    }
+
+    private async void OnTerminalPasteKeyDown(object? sender, KeyEventArgs args)
+    {
+        var control = (args.KeyModifiers & KeyModifiers.Control) != 0;
+        var shift = (args.KeyModifiers & KeyModifiers.Shift) != 0;
+        var alt = (args.KeyModifiers & KeyModifiers.Alt) != 0;
+        var standardPaste = args.Key == Key.V && control && !alt;
+        var terminalPaste = args.Key == Key.Insert && shift && !control && !alt;
+        if (!standardPaste && !terminalPaste) return;
+
+        args.Handled = true;
+        if (sender is not TerminalControl terminal) return;
+        var terminalView = args.Source as TerminalView
+            ?? terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault();
+        if (terminalView is null) return;
+
+        try
+        {
+            terminalView.Focus();
+            await terminalView.PasteAsync();
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Terminal paste failed: {ex}");
+            SetStatus($"Paste failed: {ex.Message}", ErrorBrush);
+        }
     }
 
     private StackPanel DetailColumn(string heading, Control? leading, TextBlock body, int column)
