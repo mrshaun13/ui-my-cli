@@ -1056,9 +1056,32 @@ public sealed partial class MainWindow : Window
             BufferSize = 10000,
             FontFamily = new FontFamily("Cascadia Mono, Consolas"),
             FontSize = textSize.TerminalFontSize,
-            Background = ResourceBrush("TerminalBrush"),
+            Background = Brushes.Transparent,
             Foreground = ResourceBrush("PrimaryBrush"),
         };
+        var promptBandLabel = new TextBlock
+        {
+            Text = "PROMPT · TYPE HERE",
+            FontSize = PromptBandLabelFontSize(textSize),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 4, 8, 0),
+            IsHitTestVisible = false,
+        };
+        var promptBand = new Border
+        {
+            Height = PromptBandHeight(textSize),
+            Margin = new Thickness(10, 0, 20, 8),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            IsHitTestVisible = false,
+            IsVisible = !isUbuntu,
+            Child = promptBandLabel,
+        };
+        Grid.SetRow(promptBand, 0);
+        promptBand.ZIndex = 5;
         var reconnectText = new TextBlock
         {
             Text = "Terminal connection lost · reconnecting…",
@@ -1090,6 +1113,7 @@ public sealed partial class MainWindow : Window
         };
         AutomationProperties.SetName(reconnectBanner, "Terminal connection status");
         AutomationProperties.SetLiveSetting(reconnectBanner, AutomationLiveSetting.Polite);
+        reconnectBanner.ZIndex = 10;
 
         var contextText = MakeDetailText(isUbuntu
             ? $"Interactive login shell in {_settings.Distribution}."
@@ -1176,6 +1200,7 @@ public sealed partial class MainWindow : Window
             Background = ResourceBrush("TerminalBrush"),
         };
         content.Children.Add(terminal);
+        content.Children.Add(promptBand);
         content.Children.Add(reconnectBanner);
         content.Children.Add(inspector);
         Grid.SetRow(inspector, 1);
@@ -1205,11 +1230,15 @@ public sealed partial class MainWindow : Window
         var tab = new TabItem { Header = header, Content = content };
         AutomationProperties.SetName(tab, title);
         var state = new SessionTabState(
-            key, tab, terminal, content, inspector, reconnectBanner, reconnectText, reconnectButton,
+            key, tab, terminal, content, promptBand, promptBandLabel,
+            inspector, reconnectBanner, reconnectText, reconnectButton,
             titleBlock, statusGlyph, contextText, contextBar, contextDonut,
             detailHeadings, configText,
             promptText, renameBox, renameButton, archiveButton, summaryButton, stopButton,
             workingDirectory, session, kind);
+
+        ApplyThemeToSessionState(state, DashboardTheme.Find(_settings.StyleId));
+        terminal.Loaded += (_, _) => AttachTerminalVisualStyling(state);
 
         closeButton.Click += async (_, _) => await DetachTabAsync(state);
         stopButton.Click += async (_, _) => await StopAndRemoveTabAsync(state);
@@ -2173,9 +2202,13 @@ public sealed partial class MainWindow : Window
         var primary = Brush.Parse(theme.Primary);
         var secondary = Brush.Parse(theme.Secondary);
         var accent = Brush.Parse(theme.Accent);
-        state.Terminal.Background = terminal;
+        state.Terminal.Background = Brushes.Transparent;
         state.Terminal.Foreground = primary;
         state.TerminalViewport.Background = terminal;
+        state.PromptBand.Background = ThemeBrush(theme.Hover, theme.IsLight ? (byte)100 : (byte)90);
+        state.PromptBand.BorderBrush = ThemeBrush(theme.Accent, theme.IsLight ? (byte)170 : (byte)140);
+        state.PromptBandLabel.Foreground = ThemeBrush(theme.Accent, theme.IsLight ? (byte)220 : (byte)205);
+        state.DimTextColor = Color.Parse(theme.Muted);
 
         // TerminalControl's template owns the actual drawing surface. Updating the
         // wrapper alone does not reliably push a new background into an already
@@ -2186,7 +2219,7 @@ public sealed partial class MainWindow : Window
             .FirstOrDefault();
         if (terminalView is not null)
         {
-            terminalView.Background = terminal;
+            terminalView.Background = Brushes.Transparent;
             terminalView.Foreground = primary;
             terminalView.CursorColor = Color.Parse(theme.Accent);
             var lines = state.Terminal.Terminal.Buffer.Lines;
@@ -2195,6 +2228,7 @@ public sealed partial class MainWindow : Window
                 if (lines[index] is { } line) line.Cache = null;
             }
         }
+        RestyleDimTerminalText(state);
         state.Inspector.Background = surface;
         state.Inspector.BorderBrush = border;
         state.ReconnectBanner.Background = Brush.Parse(theme.Elevated);
@@ -2223,6 +2257,8 @@ public sealed partial class MainWindow : Window
         foreach (var state in _openTabs.Values)
         {
             state.Terminal.FontSize = size.TerminalFontSize;
+            state.PromptBand.Height = PromptBandHeight(size);
+            state.PromptBandLabel.FontSize = PromptBandLabelFontSize(size);
         }
         foreach (var tab in WorkspaceTabs.Items.OfType<TabItem>()) ApplyTabHeaderTextSize(tab, size);
     }
@@ -2251,6 +2287,68 @@ public sealed partial class MainWindow : Window
 
     private static double TabIconFontSize(DashboardTextSize size) => TabHeaderFontSize(size) - 2;
     private static double TabCloseFontSize(DashboardTextSize size) => Math.Max(11, TabHeaderFontSize(size) - 2);
+
+    private static double PromptBandHeight(DashboardTextSize size) =>
+        Math.Ceiling(size.TerminalFontSize * 4.8 + 16);
+
+    private static double PromptBandLabelFontSize(DashboardTextSize size) =>
+        Math.Max(9, Math.Round(size.TerminalFontSize * 0.72));
+
+    private static IBrush ThemeBrush(string value, byte alpha)
+    {
+        var color = Color.Parse(value);
+        return new SolidColorBrush(Color.FromArgb(alpha, color.R, color.G, color.B));
+    }
+
+    private static void AttachTerminalVisualStyling(SessionTabState state)
+    {
+        if (state.TerminalView is not null) return;
+        var terminalView = state.Terminal
+            .GetVisualDescendants()
+            .OfType<TerminalView>()
+            .FirstOrDefault();
+        if (terminalView is null) return;
+
+        state.TerminalView = terminalView;
+        terminalView.Background = Brushes.Transparent;
+        terminalView.Terminal.BufferChanged += (_, _) =>
+            Dispatcher.UIThread.Post(() => RestyleDimTerminalText(state));
+        RestyleDimTerminalText(state);
+    }
+
+    private static void RestyleDimTerminalText(SessionTabState state)
+    {
+        var terminalView = state.TerminalView;
+        if (terminalView is null) return;
+
+        var color = state.DimTextColor;
+        var packedRgb = color.R << 16 | color.G << 8 | color.B;
+        var buffer = terminalView.Terminal.Buffer;
+        var lines = buffer.Lines;
+        var firstLine = Math.Max(0, buffer.ViewportY);
+        var lastLine = Math.Min(lines.Length, firstLine + buffer.Rows);
+        for (var lineIndex = firstLine; lineIndex < lastLine; lineIndex++)
+        {
+            if (lines[lineIndex] is not { } line) continue;
+            var changed = false;
+            for (var cellIndex = 0; cellIndex < line.Length; cellIndex++)
+            {
+                var cell = line[cellIndex];
+                if (!cell.Attributes.IsDim()) continue;
+                var attributes = cell.Attributes;
+                if (attributes.GetFgColorMode() == (int)XTerm.Common.ColorMode.RGB
+                    && attributes.GetFgColor() == packedRgb
+                    && !attributes.IsBold()) continue;
+                attributes.SetFgColor((int)XTerm.Common.ColorMode.RGB, packedRgb);
+                attributes.SetBold(false);
+                cell.Attributes = attributes;
+                line[cellIndex] = cell;
+                changed = true;
+            }
+            if (changed) line.Cache = null;
+        }
+        terminalView.InvalidateVisual();
+    }
 
     private IBrush ResourceBrush(string name) => Resources.TryGetResource(name, ActualThemeVariant, out var value)
         && value is IBrush brush
@@ -2358,6 +2456,8 @@ public sealed partial class MainWindow : Window
         TabItem tab,
         TerminalControl terminal,
         Grid terminalViewport,
+        Border promptBand,
+        TextBlock promptBandLabel,
         Border inspector,
         Border reconnectBanner,
         TextBlock reconnectText,
@@ -2383,6 +2483,10 @@ public sealed partial class MainWindow : Window
         public TabItem Tab { get; } = tab;
         public TerminalControl Terminal { get; } = terminal;
         public Grid TerminalViewport { get; } = terminalViewport;
+        public Border PromptBand { get; } = promptBand;
+        public TextBlock PromptBandLabel { get; } = promptBandLabel;
+        public TerminalView? TerminalView { get; set; }
+        public Color DimTextColor { get; set; } = Colors.Gray;
         public Border Inspector { get; } = inspector;
         public Border ReconnectBanner { get; } = reconnectBanner;
         public TextBlock ReconnectText { get; } = reconnectText;
