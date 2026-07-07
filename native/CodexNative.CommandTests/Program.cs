@@ -194,6 +194,14 @@ Check("Codex composer readiness requires the bottom cursor and model status", ()
     Equal(false, CodexTerminalReadiness.HasComposer(true, 33, 36, new[] { "transcript still rendering" }));
 });
 
+Check("suggested prompt detection excludes user-authored composer text", () =>
+{
+    Equal(true, CodexTerminalReadiness.HasSuggestedPromptAtCursor("› ", "Find and fix a bug in @filename"));
+    Equal(true, CodexTerminalReadiness.HasSuggestedPromptAtCursor("  ", "Run /review on my current changes"));
+    Equal(false, CodexTerminalReadiness.HasSuggestedPromptAtCursor("› my draft", " continues here"));
+    Equal(false, CodexTerminalReadiness.HasSuggestedPromptAtCursor("› ", "   "));
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine($"{failures.Count} native command test(s) failed:");

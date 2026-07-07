@@ -11,12 +11,22 @@ public static class CodexTerminalReadiness
         if (!cursorVisible || cursorRow < Math.Max(0, terminalRows - 8)) return false;
 
         return bottomLines.Any(line =>
-        {
-            var text = line.TrimStart(' ', '•', '›', '>', '●', '○');
-            return text.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase)
-                || text.StartsWith("codex-", StringComparison.OrdinalIgnoreCase)
-                || StartsWithOpenAiReasoningModel(text);
-        });
+            IsModelStatusLine(line));
+    }
+
+    public static bool HasSuggestedPromptAtCursor(string textBeforeCursor, string textFromCursor)
+    {
+        if (string.IsNullOrWhiteSpace(textFromCursor)) return false;
+        return textBeforeCursor.All(character =>
+            char.IsWhiteSpace(character) || character is '•' or '›' or '>' or '❯' or '●' or '○');
+    }
+
+    public static bool IsModelStatusLine(string line)
+    {
+        var text = line.TrimStart(' ', '•', '›', '>', '❯', '●', '○');
+        return text.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("codex-", StringComparison.OrdinalIgnoreCase)
+            || StartsWithOpenAiReasoningModel(text);
     }
 
     private static bool StartsWithOpenAiReasoningModel(string text) =>

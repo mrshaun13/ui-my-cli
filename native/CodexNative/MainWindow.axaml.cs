@@ -1525,7 +1525,7 @@ public sealed partial class MainWindow : Window
         state.RestoreOverlay.IsVisible = false;
         state.Terminal.Opacity = 1;
         state.Terminal.IsHitTestVisible = true;
-        RestyleDimTerminalText(state);
+        RestyleTerminalText(state);
         state.TerminalView?.InvalidateVisual();
         state.Terminal.InvalidateVisual();
         if (state.IsAttached && ReferenceEquals(WorkspaceTabs.SelectedItem, state.Tab))
@@ -2294,7 +2294,7 @@ public sealed partial class MainWindow : Window
         state.Terminal.Background = terminal;
         state.Terminal.Foreground = primary;
         state.TerminalViewport.Background = terminal;
-        state.DimTextColor = Color.Parse(theme.Muted);
+        state.MutedTextColor = Color.Parse(theme.Muted);
 
         // TerminalControl's template owns the actual drawing surface. Updating the
         // wrapper alone does not reliably push a new background into an already
@@ -2314,7 +2314,7 @@ public sealed partial class MainWindow : Window
                 if (lines[index] is { } line) line.Cache = null;
             }
         }
-        RestyleDimTerminalText(state);
+        RestyleTerminalText(state);
         state.Inspector.Background = surface;
         state.Inspector.BorderBrush = border;
         state.ReconnectBanner.Background = Brush.Parse(theme.Elevated);
@@ -2389,9 +2389,9 @@ public sealed partial class MainWindow : Window
             Dispatcher.UIThread.Post(() =>
             {
                 state.TerminalStartupGate?.ObserveOutput(DateTimeOffset.UtcNow);
-                if (state.TerminalStartupGate is null) RestyleDimTerminalText(state);
+                if (state.TerminalStartupGate is null) RestyleTerminalText(state);
             });
-        RestyleDimTerminalText(state);
+        RestyleTerminalText(state);
     }
 
     private static bool IsCodexComposerReady(SessionTabState state)
@@ -2416,12 +2416,12 @@ public sealed partial class MainWindow : Window
             bottomLines);
     }
 
-    private static void RestyleDimTerminalText(SessionTabState state)
+    private static void RestyleTerminalText(SessionTabState state)
     {
         var terminalView = state.TerminalView;
         if (terminalView is null) return;
 
-        var color = state.DimTextColor;
+        var color = state.MutedTextColor;
         var packedRgb = color.R << 16 | color.G << 8 | color.B;
         var buffer = terminalView.Terminal.Buffer;
         var lines = buffer.Lines;
@@ -2447,7 +2447,54 @@ public sealed partial class MainWindow : Window
             }
             if (changed) line.Cache = null;
         }
+        RestyleSuggestedPrompt(terminalView, packedRgb, firstLine, lastLine);
         terminalView.InvalidateVisual();
+    }
+
+    private static void RestyleSuggestedPrompt(
+        TerminalView terminalView,
+        int packedRgb,
+        int firstLine,
+        int lastLine)
+    {
+        var terminal = terminalView.Terminal;
+        if (!terminal.CursorVisible) return;
+
+        var buffer = terminal.Buffer;
+        var lines = buffer.Lines;
+        var cursorLineIndex = buffer.YBase + buffer.Y;
+        if (cursorLineIndex < firstLine || cursorLineIndex >= lastLine
+            || lines[cursorLineIndex] is not { } cursorLine) return;
+
+        var cursorColumn = Math.Clamp(buffer.X, 0, cursorLine.Length);
+        var beforeCursor = string.Concat(cursorLine.Take(cursorColumn).Select(cell => cell.Content));
+        var fromCursor = string.Concat(cursorLine.Skip(cursorColumn).Select(cell => cell.Content));
+        if (!CodexTerminalReadiness.HasSuggestedPromptAtCursor(beforeCursor, fromCursor)) return;
+
+        for (var lineIndex = cursorLineIndex; lineIndex < lastLine; lineIndex++)
+        {
+            if (lines[lineIndex] is not { } line) continue;
+            if (lineIndex > cursorLineIndex
+                && CodexTerminalReadiness.IsModelStatusLine(line.TranslateToString(trimRight: true))) break;
+
+            var changed = false;
+            var firstCell = lineIndex == cursorLineIndex ? cursorColumn : 0;
+            for (var cellIndex = firstCell; cellIndex < line.Length; cellIndex++)
+            {
+                var cell = line[cellIndex];
+                if (string.IsNullOrWhiteSpace(cell.Content)) continue;
+                var attributes = cell.Attributes;
+                if (attributes.GetFgColorMode() == (int)XTerm.Common.ColorMode.RGB
+                    && attributes.GetFgColor() == packedRgb
+                    && !attributes.IsBold()) continue;
+                attributes.SetFgColor((int)XTerm.Common.ColorMode.RGB, packedRgb);
+                attributes.SetBold(false);
+                cell.Attributes = attributes;
+                line[cellIndex] = cell;
+                changed = true;
+            }
+            if (changed) line.Cache = null;
+        }
     }
 
     private IBrush ResourceBrush(string name) => Resources.TryGetResource(name, ActualThemeVariant, out var value)
@@ -2585,7 +2632,7 @@ public sealed partial class MainWindow : Window
         public TerminalControl Terminal { get; } = terminal;
         public Grid TerminalViewport { get; } = terminalViewport;
         public TerminalView? TerminalView { get; set; }
-        public Color DimTextColor { get; set; } = Colors.Gray;
+        public Color MutedTextColor { get; set; } = Colors.Gray;
         public Border Inspector { get; } = inspector;
         public Border ReconnectBanner { get; } = reconnectBanner;
         public TextBlock ReconnectText { get; } = reconnectText;
