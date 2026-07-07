@@ -1096,6 +1096,38 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(reconnectBanner, "Terminal connection status");
         AutomationProperties.SetLiveSetting(reconnectBanner, AutomationLiveSetting.Polite);
 
+        var restoreText = new TextBlock
+        {
+            Text = "Restoring conversation…",
+            Foreground = ResourceBrush("PrimaryBrush"),
+            FontSize = 13,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        var restoreOverlay = new Border
+        {
+            IsVisible = false,
+            Background = ResourceBrush("TerminalBrush"),
+            BorderBrush = ResourceBrush("BorderBrightBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(20, 16),
+            Margin = new Thickness(18),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new StackPanel
+            {
+                Width = 250,
+                Spacing = 10,
+                Children =
+                {
+                    restoreText,
+                    new ProgressBar { IsIndeterminate = true, Height = 5 },
+                },
+            },
+        };
+        AutomationProperties.SetName(restoreOverlay, "Restoring Codex conversation");
+        AutomationProperties.SetLiveSetting(restoreOverlay, AutomationLiveSetting.Polite);
+
         var contextText = MakeDetailText(isUbuntu
             ? $"Interactive login shell in {_settings.Distribution}."
             : "Context data will load after the terminal opens.");
@@ -1182,6 +1214,7 @@ public sealed partial class MainWindow : Window
         };
         content.Children.Add(terminal);
         content.Children.Add(reconnectBanner);
+        content.Children.Add(restoreOverlay);
         content.Children.Add(inspector);
         Grid.SetRow(inspector, 1);
 
@@ -1211,6 +1244,7 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(tab, title);
         var state = new SessionTabState(
             key, tab, terminal, content, inspector, reconnectBanner, reconnectText, reconnectButton,
+            restoreOverlay, restoreText,
             titleBlock, statusGlyph, contextText, contextBar, contextDonut,
             detailHeadings, configText,
             promptText, renameBox, renameButton, archiveButton, summaryButton, stopButton,
@@ -1324,6 +1358,10 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> LaunchTerminalAsync(SessionTabState state, bool reconnecting = false)
     {
+        if (state.Kind == TerminalSessionKind.Codex && state.Session is not null)
+        {
+            BeginTerminalStartupReveal(state, reconnecting);
+        }
         try
         {
             var hostExecutable = Path.Combine(AppContext.BaseDirectory, "CodexNative.WslHost.exe");
@@ -1363,6 +1401,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            EndTerminalStartupReveal(state);
             state.IsLaunched = false;
             state.IsRunning = false;
             state.StatusGlyph.Foreground = ErrorBrush;
@@ -1410,6 +1449,7 @@ public sealed partial class MainWindow : Window
             return;
         }
         CancelTerminalReconnect(state, suppress: true);
+        EndTerminalStartupReveal(state);
         WorkspaceTabs.Items.Remove(state.Tab);
         state.IsAttached = false;
         WorkspaceTabs.SelectedItem = DashboardTab;
@@ -1420,6 +1460,7 @@ public sealed partial class MainWindow : Window
     private async Task StopAndRemoveTabAsync(SessionTabState state)
     {
         CancelTerminalReconnect(state, suppress: true);
+        EndTerminalStartupReveal(state);
         if (state.Kind == TerminalSessionKind.Codex)
         {
             try { await _api.KillTerminalAsync(state.Key); }
@@ -1449,6 +1490,48 @@ public sealed partial class MainWindow : Window
         state.ReconnectCancellation?.Cancel();
         state.ReconnectNow?.TrySetCanceled();
         state.ReconnectBanner.IsVisible = false;
+    }
+
+    private void BeginTerminalStartupReveal(SessionTabState state, bool reconnecting)
+    {
+        EndTerminalStartupReveal(state);
+        state.TerminalStartupGate = new TerminalStartupGate(DateTimeOffset.UtcNow);
+        state.TerminalStartupAllowsQuietReveal = reconnecting
+            || state.Session?.Status is "active" or "question";
+        state.Terminal.Opacity = 0;
+        state.Terminal.IsHitTestVisible = false;
+        state.RestoreText.Text = reconnecting ? "Restoring terminal view…" : "Restoring conversation…";
+        state.RestoreOverlay.IsVisible = true;
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(75) };
+        timer.Tick += (_, _) =>
+        {
+            var terminalReady = state.TerminalStartupAllowsQuietReveal || IsCodexComposerReady(state);
+            if (state.TerminalStartupGate?.ShouldReveal(DateTimeOffset.UtcNow, terminalReady) == true)
+            {
+                EndTerminalStartupReveal(state);
+            }
+        };
+        state.TerminalStartupTimer = timer;
+        timer.Start();
+    }
+
+    private void EndTerminalStartupReveal(SessionTabState state)
+    {
+        state.TerminalStartupTimer?.Stop();
+        state.TerminalStartupTimer = null;
+        state.TerminalStartupGate = null;
+        state.TerminalStartupAllowsQuietReveal = false;
+        state.RestoreOverlay.IsVisible = false;
+        state.Terminal.Opacity = 1;
+        state.Terminal.IsHitTestVisible = true;
+        RestyleDimTerminalText(state);
+        state.TerminalView?.InvalidateVisual();
+        state.Terminal.InvalidateVisual();
+        if (state.IsAttached && ReferenceEquals(WorkspaceTabs.SelectedItem, state.Tab))
+        {
+            state.Terminal.Focus();
+        }
     }
 
     private void BeginTerminalReconnect(SessionTabState state, int exitCode)
@@ -2237,6 +2320,9 @@ public sealed partial class MainWindow : Window
         state.ReconnectBanner.Background = Brush.Parse(theme.Elevated);
         state.ReconnectBanner.BorderBrush = Brush.Parse(theme.BorderBright);
         state.ReconnectText.Foreground = primary;
+        state.RestoreOverlay.Background = terminal;
+        state.RestoreOverlay.BorderBrush = Brush.Parse(theme.BorderBright);
+        state.RestoreText.Foreground = primary;
         state.TitleBlock.Foreground = primary;
         state.ContextText.Foreground = secondary;
         state.ConfigText.Foreground = secondary;
@@ -2300,8 +2386,34 @@ public sealed partial class MainWindow : Window
 
         state.TerminalView = terminalView;
         terminalView.Terminal.BufferChanged += (_, _) =>
-            Dispatcher.UIThread.Post(() => RestyleDimTerminalText(state));
+            Dispatcher.UIThread.Post(() =>
+            {
+                state.TerminalStartupGate?.ObserveOutput(DateTimeOffset.UtcNow);
+                if (state.TerminalStartupGate is null) RestyleDimTerminalText(state);
+            });
         RestyleDimTerminalText(state);
+    }
+
+    private static bool IsCodexComposerReady(SessionTabState state)
+    {
+        var terminal = state.TerminalView?.Terminal;
+        if (terminal is null) return false;
+
+        var buffer = terminal.Buffer;
+        var lines = buffer.Lines;
+        var firstLine = Math.Max(0, buffer.ViewportY);
+        var lastLine = Math.Min(lines.Length, firstLine + buffer.Rows);
+        var bottomLines = new List<string>(10);
+        for (var index = Math.Max(firstLine, lastLine - 10); index < lastLine; index++)
+        {
+            if (lines[index] is { } line) bottomLines.Add(line.TranslateToString(trimRight: true));
+        }
+
+        return CodexTerminalReadiness.HasComposer(
+            terminal.CursorVisible,
+            buffer.Y,
+            buffer.Rows,
+            bottomLines);
     }
 
     private static void RestyleDimTerminalText(SessionTabState state)
@@ -2411,6 +2523,7 @@ public sealed partial class MainWindow : Window
         foreach (var state in _openTabs.Values.ToList())
         {
             CancelTerminalReconnect(state, suppress: true);
+            EndTerminalStartupReveal(state);
             state.Terminal.Kill();
         }
         _serviceManager.Dispose();
@@ -2448,6 +2561,8 @@ public sealed partial class MainWindow : Window
         Border reconnectBanner,
         TextBlock reconnectText,
         Button reconnectButton,
+        Border restoreOverlay,
+        TextBlock restoreText,
         TextBlock titleBlock,
         TextBlock statusGlyph,
         TextBlock contextText,
@@ -2475,6 +2590,8 @@ public sealed partial class MainWindow : Window
         public Border ReconnectBanner { get; } = reconnectBanner;
         public TextBlock ReconnectText { get; } = reconnectText;
         public Button ReconnectButton { get; } = reconnectButton;
+        public Border RestoreOverlay { get; } = restoreOverlay;
+        public TextBlock RestoreText { get; } = restoreText;
         public TextBlock TitleBlock { get; } = titleBlock;
         public TextBlock StatusGlyph { get; } = statusGlyph;
         public TextBlock ContextText { get; } = contextText;
@@ -2502,6 +2619,9 @@ public sealed partial class MainWindow : Window
         public int ReconnectAttempt { get; set; }
         public CancellationTokenSource? ReconnectCancellation { get; set; }
         public TaskCompletionSource<bool>? ReconnectNow { get; set; }
+        public TerminalStartupGate? TerminalStartupGate { get; set; }
+        public DispatcherTimer? TerminalStartupTimer { get; set; }
+        public bool TerminalStartupAllowsQuietReveal { get; set; }
         public bool ArchiveConfirmationPending { get; set; }
     }
 }

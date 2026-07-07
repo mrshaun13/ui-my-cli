@@ -131,6 +131,69 @@ Check("terminal bridge disables local line editing and enables VT input", () =>
     Equal(TerminalInputMode.EnableVirtualTerminalInput, bridgeMode & TerminalInputMode.EnableVirtualTerminalInput);
 });
 
+Check("terminal startup waits for output to settle", () =>
+{
+    var started = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+    var gate = new TerminalStartupGate(
+        started,
+        TimeSpan.FromMilliseconds(250),
+        TimeSpan.FromMilliseconds(450),
+        TimeSpan.FromSeconds(10),
+        TimeSpan.FromSeconds(10));
+
+    gate.ObserveOutput(started.AddMilliseconds(100));
+    Equal(false, gate.ShouldReveal(started.AddMilliseconds(500), terminalReady: true));
+    Equal(true, gate.ShouldReveal(started.AddMilliseconds(550), terminalReady: true));
+});
+
+Check("new startup output resets the reveal quiet period", () =>
+{
+    var started = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+    var gate = new TerminalStartupGate(started);
+
+    gate.ObserveOutput(started.AddMilliseconds(100));
+    gate.ObserveOutput(started.AddMilliseconds(500));
+    Equal(false, gate.ShouldReveal(started.AddMilliseconds(900), terminalReady: true));
+    Equal(true, gate.ShouldReveal(started.AddMilliseconds(950), terminalReady: true));
+});
+
+Check("terminal startup cannot remain hidden indefinitely", () =>
+{
+    var started = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+    var gate = new TerminalStartupGate(started);
+
+    Equal(false, gate.ShouldReveal(started.AddSeconds(9)));
+    Equal(true, gate.ShouldReveal(started.AddSeconds(10)));
+});
+
+Check("continuous terminal startup output has a longer safety ceiling", () =>
+{
+    var started = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+    var gate = new TerminalStartupGate(started);
+
+    gate.ObserveOutput(started.AddSeconds(29));
+    Equal(false, gate.ShouldReveal(started.AddSeconds(29)));
+    Equal(true, gate.ShouldReveal(started.AddSeconds(30)));
+});
+
+Check("terminal startup does not reveal on a quiet transcript frame", () =>
+{
+    var started = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+    var gate = new TerminalStartupGate(started);
+
+    gate.ObserveOutput(started.AddMilliseconds(100));
+    Equal(false, gate.ShouldReveal(started.AddSeconds(5), terminalReady: false));
+});
+
+Check("Codex composer readiness requires the bottom cursor and model status", () =>
+{
+    var lines = new[] { "Run /review on my current changes", "gpt-5.6-sol xhigh  ·  ~" };
+    Equal(true, CodexTerminalReadiness.HasComposer(true, 33, 36, lines));
+    Equal(false, CodexTerminalReadiness.HasComposer(false, 33, 36, lines));
+    Equal(false, CodexTerminalReadiness.HasComposer(true, 12, 36, lines));
+    Equal(false, CodexTerminalReadiness.HasComposer(true, 33, 36, new[] { "transcript still rendering" }));
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine($"{failures.Count} native command test(s) failed:");
