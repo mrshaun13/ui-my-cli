@@ -2,7 +2,7 @@
 
 ## Project Summary
 
-A browser-based dashboard for managing multiple local headless-agent sessions across Codex and Devin. Replaces tab-hunting with a click-driven UI: real embedded terminals, live status badges, analytics, and a hard provider switch that keeps each agent dashboard isolated.
+A browser dashboard for managing multiple local headless-agent sessions across Codex and Devin, plus a browser-free Windows frontend for Codex in WSL2. Both surfaces share persistent server PTYs, live status, analytics, search, and session metadata; the native surface renders terminals through Windows ConPTY and can reattach after the UI exits.
 
 **Stack:** Node.js >=18.0.0 · Express · WebSocket (`ws`) ·
 `better-sqlite3` · `node-pty` · React 19 · Vite · xterm.js
@@ -20,6 +20,9 @@ A browser-based dashboard for managing multiple local headless-agent sessions ac
 - `npm run docs:check` — `node scripts/generate-docs.js --check`
 - `npm run test` — `npx playwright test`
 - `npm run test:smoke` — `npx playwright test tests/smoke.spec.js`
+- `npm run native:build` — `dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.WslHost/CodexNative.WslHost.csproj`
+- `npm run native:test` — `dotnet run --project native/CodexNative.CommandTests/CodexNative.CommandTests.csproj`
+- `npm run native:publish` — `dotnet publish native/CodexNative/CodexNative.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o native/artifacts/win-x64 && dotnet publish native/CodexNative.WslHost/CodexNative.WslHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o native/artifacts/win-x64`
 - `npm run prepare` — `husky`
 
 ## Dev Workflow
@@ -85,6 +88,7 @@ list". Archive behavior is provider-owned: Codex uses `codex archive` /
 - Session status values are lowercase strings: `active`, `question`, `finished`, `idle`. The value `archived` is used by the API but not stored in the database.
 - All server modules use CommonJS (`require` / `module.exports`).
 - The client uses ES modules with React 19 + Vite.
+- The native Windows frontend uses .NET 10, Avalonia, an XTerm-compatible terminal control, and ConPTY; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback.
 - Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).
 - Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Native Codex titles are stored in Codex `state_*.sqlite`; external transcript-pipeline headless title and hide/restore metadata is stored in `~/.codex/ui-my-cli-dashboard.db`.
 - Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.

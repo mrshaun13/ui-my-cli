@@ -14,3 +14,8 @@ playwright/.cache/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Native Windows frontend build output
+native/**/bin/
+native/**/obj/
+native/artifacts/

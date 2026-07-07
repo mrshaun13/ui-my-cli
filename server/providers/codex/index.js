@@ -3,6 +3,9 @@
  */
 
 const { execFileSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const codex = require('../../codex-store');
 const { resolveCodexHome, resolveStateDbPath, resolveSessionsDir } = require('../../codex-paths');
 
@@ -16,9 +19,16 @@ const metadata = {
   storagePrefix: 'codex-dash',
 };
 
+function codexExecutable() {
+  if (process.env.CODEX_BIN) return process.env.CODEX_BIN;
+  const userInstall = path.join(os.homedir(), '.local', 'bin', 'codex');
+  return fs.existsSync(userInstall) ? userInstall : 'codex';
+}
+
 function buildCommand(sessionId) {
-  if (sessionId) return { command: 'codex', args: ['resume', sessionId] };
-  return { command: 'codex', args: [] };
+  const command = codexExecutable();
+  if (sessionId) return { command, args: ['resume', sessionId] };
+  return { command, args: [] };
 }
 
 let cachedVersion;
@@ -26,7 +36,7 @@ let cachedVersion;
 function cliVersion() {
   if (cachedVersion !== undefined) return cachedVersion;
   try {
-    cachedVersion = execFileSync('codex', ['--version'], { encoding: 'utf8', timeout: 5000 }).trim();
+    cachedVersion = execFileSync(codexExecutable(), ['--version'], { encoding: 'utf8', timeout: 5000 }).trim();
   } catch {
     cachedVersion = null;
   }

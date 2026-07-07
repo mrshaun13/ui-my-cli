@@ -9,6 +9,8 @@ with an appropriate HTTP status code.
 | --- | --- | --- |
 | `GET` | `/api/status` | Server health check — returns `ok`, default provider, provider availability, active PTY count, uptime seconds |
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
+| `GET` | `/api/:providerId/terminals` |  |
+| `GET` | `/api/terminals` |  |
 | `GET` | `/api/:providerId/stats` | Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex supports `statsMode=combined|triage|codex` to switch chart cohorts while leaving tool-call columns stable. |
 | `GET` | `/api/stats` | Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default; accepts the same stats query params |
 | `GET` | `/api/:providerId/latest-prompt` | Most recent user prompt from the selected provider local state |
@@ -27,7 +29,7 @@ with an appropriate HTTP status code.
 | `GET` | `/api/sessions/:id/preview` | Rich read-only session detail — chat history, stats, top tools |
 | `GET` | `/api/:providerId/sessions/:id/conversation` | Provider-scoped paginated user↔assistant conversation turns for a session. |
 | `GET` | `/api/sessions/:id/conversation` | Paginated user↔assistant conversation turns for a session. Query params: `offset` (number of turns to skip from end, default 0), `limit` (max turns to return, 0 = all, default 50). Returns `{ turns, totalTurns, hasMore }`. |
-| `GET` | `/api/:providerId/sessions/:id/subagents` | Provider-scoped subagent timeline. Devin reads legacy run_subagent lifecycle data; Codex currently returns `[]`. |
+| `GET` | `/api/:providerId/sessions/:id/subagents` | Provider-scoped subagent timeline. Codex joins parent `sub_agent_activity` events with child-thread metadata and result previews; Devin reads legacy run_subagent lifecycle data. |
 | `GET` | `/api/sessions/:id/subagents` | Compatibility alias for default provider subagents. |
 | `GET` | `/api/:providerId/sessions/:id/context` | Estimated context breakdown for one provider session. Returns `{ categories, totalUsed, maxContext, freeTokens, compactionCount, model }`. |
 | `GET` | `/api/sessions/:id/context` | Compatibility alias for default provider context. |
@@ -99,6 +101,7 @@ Compatibility alias: `/ws/status` uses the default provider.
 | `TRANSCRIPT_PIPELINE_HEADLESS_SESSIONS_DIR` | `—` | Override the exact transcript-pipeline `data/headless-sessions` ledger directory |
 | `TRANSCRIPT_PIPELINE_DIR` | `—` | Override the transcript-pipeline checkout used to discover Codex headless run ledgers |
 | `UI_MY_CLI_DEFAULT_PROVIDER` | `codex` | Override the compatibility/default provider for legacy `/api/...` and `/ws/...` aliases (default: `codex`) |
+| `CODEX_BIN` | `—` |  |
 | `DEVIN_DB_PATH` | `—` | Override the auto-detected Devin `sessions.db` path |
 | `DEVIN_DASHBOARD_DB_PATH` | `—` | Override the Devin dashboard metadata database path |
 | `XDG_DATA_HOME` | `—` | Override the XDG data directory (default: `~/.local/share`); affects DB path on all platforms |
