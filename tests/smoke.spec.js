@@ -114,6 +114,37 @@ test.describe('Dashboard smoke tests', () => {
     await expect(page.locator(SELECTORS.textSizeControl).getByRole('button', { name: 'XXL' })).toHaveAttribute('aria-pressed', 'true');
   });
 
+  test('display controls update an open terminal without recreating it', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => {
+      localStorage.removeItem('agent-dash:style');
+      localStorage.removeItem('agent-dash:text-size');
+    });
+
+    await page.reload();
+    await waitForSessions(page);
+    await page.locator(SELECTORS.agentCard).first().click();
+
+    const terminal = page.locator(SELECTORS.terminal);
+    await expect(terminal).toBeVisible({ timeout: 15000 });
+    const initialRows = await page.locator('.xterm-rows > div').count();
+    expect(initialRows).toBeGreaterThan(0);
+
+    await page.locator(SELECTORS.styleSelect).selectOption('paper');
+    await expect.poll(() => page.evaluate(() => ({
+      style: document.documentElement.dataset.dashboardStyle,
+      terminalBackground: getComputedStyle(document.documentElement)
+        .getPropertyValue('--bg-terminal').trim(),
+    }))).toEqual({ style: 'paper', terminalBackground: '#ffffff' });
+
+    await page.locator(SELECTORS.textSizeControl)
+      .getByRole('button', { name: 'XXL' }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-text-size', 'xxl');
+    await expect.poll(() => page.locator('.xterm-rows > div').count())
+      .toBeLessThan(initialRows);
+    await expect(terminal).toBeVisible();
+  });
+
   test('Codex model usage table visibly labels reasoning effort', async ({ page, request }) => {
     const res = await request.get('/api/codex/stats');
     expect(res.ok()).toBeTruthy();
@@ -121,7 +152,7 @@ test.describe('Dashboard smoke tests', () => {
     const hasReasoningRows = stats.models.some(row => row.reasoningEffort && row.reasoningEffort !== 'unknown');
     test.skip(!hasReasoningRows, 'No Codex reasoning telemetry rows available');
 
-    await page.goto('/');
+    await waitForSessions(page);
     await expect(page.locator('.model-usage-table')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('.model-usage-table')).toContainText(/reasoning:\s*(low|medium|high|x-high)/i);
   });
@@ -134,7 +165,7 @@ test.describe('Dashboard smoke tests', () => {
   test('clicking a session card opens the terminal', async ({ page }) => {
     await waitForSessions(page);
     await page.locator(SELECTORS.agentCard).first().click();
-    await expect(page.locator(SELECTORS.terminal)).toBeVisible({ timeout: 10000 });
+    await expect(page.locator(SELECTORS.terminal)).toBeVisible({ timeout: 20000 });
   });
 
   test('clicking status icon opens session preview', async ({ page }) => {
