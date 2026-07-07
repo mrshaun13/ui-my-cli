@@ -1064,6 +1064,11 @@ public sealed partial class MainWindow : Window
             OnTerminalPasteKeyDown,
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
+        terminal.AddHandler(
+            InputElement.PointerWheelChangedEvent,
+            OnTerminalPointerWheelChanged,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         var reconnectText = new TextBlock
         {
             Text = "Terminal connection lost · reconnecting…",
@@ -1303,6 +1308,21 @@ public sealed partial class MainWindow : Window
             NativeLog.Write($"Terminal paste failed: {ex}");
             SetStatus($"Paste failed: {ex.Message}", ErrorBrush);
         }
+    }
+
+    private void OnTerminalPointerWheelChanged(object? sender, PointerWheelEventArgs args)
+    {
+        if (sender is not TerminalControl terminal || args.Delta.Y == 0) return;
+        var terminalView = args.Source as TerminalView
+            ?? terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault();
+        if (terminalView is null) return;
+
+        terminalView.Focus();
+        terminalView.ViewportY = TerminalViewportScroll.Next(
+            terminalView.ViewportY,
+            terminalView.MaxScrollback,
+            args.Delta.Y);
+        args.Handled = true;
     }
 
     private StackPanel DetailColumn(string heading, Control? leading, TextBlock body, int column)
@@ -2439,7 +2459,7 @@ public sealed partial class MainWindow : Window
                 if (attributes.GetFgColorMode() == (int)XTerm.Common.ColorMode.RGB
                     && attributes.GetFgColor() == packedRgb
                     && !attributes.IsBold()) continue;
-                attributes.SetFgColor((int)XTerm.Common.ColorMode.RGB, packedRgb);
+                attributes.SetFgColor(packedRgb, (int)XTerm.Common.ColorMode.RGB);
                 attributes.SetBold(false);
                 cell.Attributes = attributes;
                 line[cellIndex] = cell;
@@ -2447,54 +2467,7 @@ public sealed partial class MainWindow : Window
             }
             if (changed) line.Cache = null;
         }
-        RestyleSuggestedPrompt(terminalView, packedRgb, firstLine, lastLine);
         terminalView.InvalidateVisual();
-    }
-
-    private static void RestyleSuggestedPrompt(
-        TerminalView terminalView,
-        int packedRgb,
-        int firstLine,
-        int lastLine)
-    {
-        var terminal = terminalView.Terminal;
-        if (!terminal.CursorVisible) return;
-
-        var buffer = terminal.Buffer;
-        var lines = buffer.Lines;
-        var cursorLineIndex = buffer.YBase + buffer.Y;
-        if (cursorLineIndex < firstLine || cursorLineIndex >= lastLine
-            || lines[cursorLineIndex] is not { } cursorLine) return;
-
-        var cursorColumn = Math.Clamp(buffer.X, 0, cursorLine.Length);
-        var beforeCursor = string.Concat(cursorLine.Take(cursorColumn).Select(cell => cell.Content));
-        var fromCursor = string.Concat(cursorLine.Skip(cursorColumn).Select(cell => cell.Content));
-        if (!CodexTerminalReadiness.HasSuggestedPromptAtCursor(beforeCursor, fromCursor)) return;
-
-        for (var lineIndex = cursorLineIndex; lineIndex < lastLine; lineIndex++)
-        {
-            if (lines[lineIndex] is not { } line) continue;
-            if (lineIndex > cursorLineIndex
-                && CodexTerminalReadiness.IsModelStatusLine(line.TranslateToString(trimRight: true))) break;
-
-            var changed = false;
-            var firstCell = lineIndex == cursorLineIndex ? cursorColumn : 0;
-            for (var cellIndex = firstCell; cellIndex < line.Length; cellIndex++)
-            {
-                var cell = line[cellIndex];
-                if (string.IsNullOrWhiteSpace(cell.Content)) continue;
-                var attributes = cell.Attributes;
-                if (attributes.GetFgColorMode() == (int)XTerm.Common.ColorMode.RGB
-                    && attributes.GetFgColor() == packedRgb
-                    && !attributes.IsBold()) continue;
-                attributes.SetFgColor((int)XTerm.Common.ColorMode.RGB, packedRgb);
-                attributes.SetBold(false);
-                cell.Attributes = attributes;
-                line[cellIndex] = cell;
-                changed = true;
-            }
-            if (changed) line.Cache = null;
-        }
     }
 
     private IBrush ResourceBrush(string name) => Resources.TryGetResource(name, ActualThemeVariant, out var value)

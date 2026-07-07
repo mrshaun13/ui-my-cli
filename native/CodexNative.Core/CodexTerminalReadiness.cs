@@ -14,13 +14,6 @@ public static class CodexTerminalReadiness
             IsModelStatusLine(line));
     }
 
-    public static bool HasSuggestedPromptAtCursor(string textBeforeCursor, string textFromCursor)
-    {
-        if (string.IsNullOrWhiteSpace(textFromCursor)) return false;
-        return textBeforeCursor.All(character =>
-            char.IsWhiteSpace(character) || character is '•' or '›' or '>' or '❯' or '●' or '○');
-    }
-
     public static bool IsModelStatusLine(string line)
     {
         var text = line.TrimStart(' ', '•', '›', '>', '❯', '●', '○');

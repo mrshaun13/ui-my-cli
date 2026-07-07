@@ -194,12 +194,13 @@ Check("Codex composer readiness requires the bottom cursor and model status", ()
     Equal(false, CodexTerminalReadiness.HasComposer(true, 33, 36, new[] { "transcript still rendering" }));
 });
 
-Check("suggested prompt detection excludes user-authored composer text", () =>
+Check("terminal wheel scrolling moves and clamps the viewport", () =>
 {
-    Equal(true, CodexTerminalReadiness.HasSuggestedPromptAtCursor("› ", "Find and fix a bug in @filename"));
-    Equal(true, CodexTerminalReadiness.HasSuggestedPromptAtCursor("  ", "Run /review on my current changes"));
-    Equal(false, CodexTerminalReadiness.HasSuggestedPromptAtCursor("› my draft", " continues here"));
-    Equal(false, CodexTerminalReadiness.HasSuggestedPromptAtCursor("› ", "   "));
+    Equal(47, TerminalViewportScroll.Next(50, 100, 1));
+    Equal(53, TerminalViewportScroll.Next(50, 100, -1));
+    Equal(0, TerminalViewportScroll.Next(1, 100, 1));
+    Equal(100, TerminalViewportScroll.Next(99, 100, -1));
+    Equal(0, TerminalViewportScroll.Next(0, -1, -1));
 });
 
 if (failures.Count > 0)
