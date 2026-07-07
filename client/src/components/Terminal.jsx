@@ -29,23 +29,29 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { codexInputForKeyEvent, isTerminalPasteKeyEvent } from '../lib/codexShortcuts.js'
 import { providerWsPath } from '../lib/providers.js'
+import { terminalFontSizeFor } from '../lib/textSizes.js'
 
 const WS_BASE = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
 
-const XTERM_THEME = {
-  background:    '#020507',
-  foreground:    '#b0c8e0',
-  cursor:        '#00ffa3',
-  cursorAccent:  '#020507',
-  selectionBackground: 'rgba(0,255,163,0.15)',
-  black:         '#0d1117',  brightBlack:   '#3d5470',
-  red:           '#ff4d6a',  brightRed:     '#ff7088',
-  green:         '#00ffa3',  brightGreen:   '#4dffc4',
-  yellow:        '#f5c542',  brightYellow:  '#ffd766',
-  blue:          '#4d9fff',  brightBlue:    '#80baff',
-  magenta:       '#9d6fff',  brightMagenta: '#bf9fff',
-  cyan:          '#00d4e8',  brightCyan:    '#40e8f8',
-  white:         '#b0c8e0',  brightWhite:   '#e2e8f0',
+function xtermThemeFromDashboard() {
+  const styles = getComputedStyle(document.documentElement)
+  const token = name => styles.getPropertyValue(name).trim()
+
+  return {
+    background: token('--bg-terminal'),
+    foreground: token('--text-mono'),
+    cursor: token('--accent'),
+    cursorAccent: token('--bg-terminal'),
+    selectionBackground: token('--accent-glow'),
+    black: token('--bg-surface'), brightBlack: token('--text-muted'),
+    red: token('--red'), brightRed: token('--red'),
+    green: token('--accent'), brightGreen: token('--accent-hover'),
+    yellow: token('--yellow'), brightYellow: token('--yellow'),
+    blue: token('--blue'), brightBlue: token('--blue'),
+    magenta: token('--purple'), brightMagenta: token('--purple'),
+    cyan: token('--cyan'), brightCyan: token('--cyan'),
+    white: token('--text-mono'), brightWhite: token('--text-primary'),
+  }
 }
 
 const RECONNECT_DELAYS = [500, 1000, 2000, 4000, 8000]
@@ -119,7 +125,7 @@ const XTERM_RESPONSE_RE = new RegExp(
 // contain cursor-home sequences that clobber the viewport position.
 const RESIZE_ANCHOR_MS = 500
 
-export default function Terminal({ providerId, sessionId, active }) {
+export default function Terminal({ providerId, sessionId, active, styleId, textSizeId }) {
   const containerRef  = useRef(null)
   const xtermRef      = useRef(null)
   const fitAddonRef   = useRef(null)
@@ -157,6 +163,25 @@ export default function Terminal({ providerId, sessionId, active }) {
     if (active && xtermRef.current) xtermRef.current.focus()
   }, [active])
 
+  // xterm paints to a canvas, so CSS variables alone cannot recolor it.
+  // Update the live instance without recreating it or losing scrollback.
+  useEffect(() => {
+    if (xtermRef.current) xtermRef.current.options.theme = xtermThemeFromDashboard()
+  }, [styleId])
+
+  useEffect(() => {
+    const xterm = xtermRef.current
+    const fitAddon = fitAddonRef.current
+    if (!xterm || !fitAddon) return
+
+    xterm.options.fontSize = terminalFontSizeFor(textSizeId)
+    safeFit(xterm, fitAddon)
+    const ws = wsRef.current
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resize', cols: xterm.cols, rows: xterm.rows }))
+    }
+  }, [textSizeId])
+
   // ── Create xterm once per sessionId ──────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current) return
@@ -164,9 +189,9 @@ export default function Terminal({ providerId, sessionId, active }) {
     retryCountRef.current = 0
 
     const xterm    = new XTerm({
-      theme: XTERM_THEME,
+      theme: xtermThemeFromDashboard(),
       fontFamily: '"Berkeley Mono", "Cascadia Code", "Fira Code", monospace',
-      fontSize: 13,
+      fontSize: terminalFontSizeFor(textSizeId),
       lineHeight: 1.4,
       cursorBlink: true,
       cursorStyle: 'bar',

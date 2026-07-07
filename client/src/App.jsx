@@ -9,6 +9,8 @@ import SessionPreview from './components/SessionPreview.jsx'
 import HeadlessPlaceholder from './components/HeadlessPlaceholder.jsx'
 import { isHeadless } from './lib/headless.js'
 import { DEFAULT_PROVIDER_ID, providerApiPath, providerStorageKey } from './lib/providers.js'
+import { DASHBOARD_STYLES, applyDashboardStyle, loadDashboardStyle, saveDashboardStyle } from './lib/dashboardStyles.js'
+import { TEXT_SIZES, applyTextSize, loadTextSize, saveTextSize } from './lib/textSizes.js'
 // ContextPieChart is rendered inside ControlBar (not imported here)
 
 /**
@@ -233,6 +235,52 @@ function ProviderSwitch({ providers, selectedProviderId, onSelect }) {
   )
 }
 
+function StyleSelect({ selectedStyleId, onSelect }) {
+  const selectedStyle = DASHBOARD_STYLES.find(style => style.id === selectedStyleId) || DASHBOARD_STYLES[0]
+
+  return (
+    <label className="style-select-wrap" title={`${selectedStyle.label} ${selectedStyle.mode} style`}>
+      <span className="style-select-label">Style</span>
+      <span className="style-select-swatch" style={{ background: selectedStyle.swatch }} aria-hidden="true" />
+      <select
+        className="style-select"
+        value={selectedStyleId}
+        onChange={event => onSelect(event.target.value)}
+        aria-label="Dashboard style"
+      >
+        {DASHBOARD_STYLES.map(style => (
+          <option key={style.id} value={style.id}>
+            {style.label}{style.isDefault ? ' (Default)' : ''} · {style.mode === 'light' ? 'Light' : 'Dark'}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function TextSizeControl({ selectedTextSizeId, onSelect }) {
+  return (
+    <div className="text-size-control" role="group" aria-label="Text size">
+      <span className="text-size-label">Text</span>
+      <div className="text-size-options">
+        {TEXT_SIZES.map(size => (
+          <button
+            key={size.id}
+            type="button"
+            className={`text-size-btn${size.id === selectedTextSizeId ? ' active' : ''}`}
+            aria-pressed={size.id === selectedTextSizeId}
+            onClick={() => onSelect(size.id)}
+            title={`${size.label} text size`}
+          >
+            <span className="text-size-full-label">{size.label}</span>
+            <span className="text-size-short-label" aria-hidden="true">{size.shortLabel}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function EnvChips({ mcpServers, skills, plugins }) {
   return (
     <div className="topbar-env">
@@ -309,6 +357,16 @@ function PromptStrip({ prompt }) {
 
 export default function App() {
   const providers = useProviders()
+  const [styleId, setStyleIdState] = useState(() => {
+    const savedStyle = loadDashboardStyle()
+    applyDashboardStyle(savedStyle)
+    return savedStyle
+  })
+  const [textSizeId, setTextSizeIdState] = useState(() => {
+    const savedTextSize = loadTextSize()
+    applyTextSize(savedTextSize)
+    return savedTextSize
+  })
   const [selectedProviderId, setSelectedProviderIdState] = useState(loadSelectedProvider)
   const selectedProvider = providers.find(p => p.id === selectedProviderId) || providers[0] || FALLBACK_PROVIDERS[0]
   const providerId = selectedProvider?.id || DEFAULT_PROVIDER_ID
@@ -325,6 +383,18 @@ export default function App() {
   const setSelectedProviderId = useCallback((nextProviderId) => {
     setSelectedProviderIdState(nextProviderId)
     saveSelectedProvider(nextProviderId)
+  }, [])
+
+  const setStyleId = useCallback((nextStyleId) => {
+    setStyleIdState(nextStyleId)
+    applyDashboardStyle(nextStyleId)
+    saveDashboardStyle(nextStyleId)
+  }, [])
+
+  const setTextSizeId = useCallback((nextTextSizeId) => {
+    setTextSizeIdState(nextTextSizeId)
+    applyTextSize(nextTextSizeId)
+    saveTextSize(nextTextSizeId)
   }, [])
 
   const setColdDays = useCallback((n) => {
@@ -661,6 +731,14 @@ export default function App() {
 
         <div className="topbar-divider" />
 
+        <StyleSelect selectedStyleId={styleId} onSelect={setStyleId} />
+
+        <div className="topbar-divider topbar-divider-after-style" />
+
+        <TextSizeControl selectedTextSizeId={textSizeId} onSelect={setTextSizeId} />
+
+        <div className="topbar-divider topbar-divider-after-text-size" />
+
         {env && (env.mcpServers.length > 0 || env.skills.length > 0 || env.plugins.length > 0) && (
           <EnvChips mcpServers={env.mcpServers} skills={env.skills} plugins={env.plugins} />
         )}
@@ -740,7 +818,13 @@ export default function App() {
                 {headless ? (
                   <HeadlessPlaceholder session={tabSession} onPreview={handlePreview} />
                 ) : (
-                  <Terminal providerId={providerId} sessionId={tab.id} active={paneActive} />
+                  <Terminal
+                    providerId={providerId}
+                    sessionId={tab.id}
+                    active={paneActive}
+                    styleId={styleId}
+                    textSizeId={textSizeId}
+                  />
                 )}
               </div>
             )
