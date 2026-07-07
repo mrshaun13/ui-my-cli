@@ -27,6 +27,7 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, SessionTabState> _openTabs = [];
     private readonly Dictionary<string, TabItem> _previewTabs = [];
     private readonly DispatcherTimer _refreshTimer;
+    private readonly DispatcherTimer _connectionPulseTimer;
     private DashboardStatusFeed? _statusFeed;
     private CancellationTokenSource? _searchCancellation;
     private Flyout? _newSessionFlyout;
@@ -49,7 +50,9 @@ public sealed partial class MainWindow : Window
     private bool _closePromptOpen;
     private bool _uiReady;
     private bool _workspaceReady;
+    private bool _isDashboardConnected;
     private int _refreshTick;
+    private readonly DateTimeOffset _connectionPulseStartedAt = DateTimeOffset.UtcNow;
 
     public MainWindow()
     {
@@ -66,6 +69,12 @@ public sealed partial class MainWindow : Window
             ApplyResponsiveDashboardLayout(args.NewSize.Width);
         };
         _refreshTimer = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, OnRefreshTimerTick);
+        _connectionPulseTimer = new DispatcherTimer(
+            TimeSpan.FromMilliseconds(40),
+            DispatcherPriority.Background,
+            OnConnectionPulseTick);
+        UpdateHeaderConnectionIndicator();
+        _connectionPulseTimer.Start();
     }
 
     private async void OnWindowKeyDown(object? sender, KeyEventArgs e)
@@ -215,6 +224,7 @@ public sealed partial class MainWindow : Window
             Dispatcher.UIThread.Post(() => RemoveExpiredPendingSession(temporaryKey));
         _statusFeed.ConnectionChanged += connected => Dispatcher.UIThread.Post(() =>
         {
+            SetDashboardConnectionState(connected);
             if (connected) SetStatus($"Live push connected · {_sessions.Count:N0} sessions", RunningBrush);
         });
         _statusFeed.Start();
@@ -2255,6 +2265,7 @@ public sealed partial class MainWindow : Window
         Resources["MutedBrush"] = Brush.Parse(theme.Muted);
         Resources["AccentBrush"] = Brush.Parse(theme.Accent);
         Resources["TerminalBrush"] = Brush.Parse(theme.Terminal);
+        UpdateHeaderConnectionIndicator();
         Resources["ScrollBarBackground"] = Brush.Parse(theme.Elevated);
         Resources["ScrollBarForeground"] = Brush.Parse(theme.Secondary);
         Resources["ScrollBarBorderBrush"] = Brush.Parse(theme.Border);
@@ -2538,6 +2549,7 @@ public sealed partial class MainWindow : Window
     private void ShutdownNativeResources()
     {
         _refreshTimer.Stop();
+        _connectionPulseTimer.Stop();
         if (_statusFeed is not null) _ = _statusFeed.DisposeAsync();
         _searchCancellation?.Cancel();
         foreach (var state in _openTabs.Values.ToList())
@@ -2559,6 +2571,37 @@ public sealed partial class MainWindow : Window
         }
         StatusText.Text = message;
         StatusDot.Fill = brush;
+    }
+
+    private void SetDashboardConnectionState(bool connected)
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(() => SetDashboardConnectionState(connected));
+            return;
+        }
+        _isDashboardConnected = connected;
+        UpdateHeaderConnectionIndicator();
+    }
+
+    private void UpdateHeaderConnectionIndicator()
+    {
+        var brush = _isDashboardConnected ? ResourceBrush("AccentBrush") : ErrorBrush;
+        HeaderStatusDot.Fill = brush;
+        HeaderStatusHalo.Fill = brush;
+        var label = _isDashboardConnected ? "Dashboard connected" : "Dashboard disconnected";
+        ToolTip.SetTip(HeaderConnectionIndicator, label);
+        AutomationProperties.SetName(HeaderConnectionIndicator, label);
+        AutomationProperties.SetName(HomeButton, "CODEX NATIVE DASHBOARD");
+        AutomationProperties.SetHelpText(HomeButton, $"{label}. Go to dashboard.");
+    }
+
+    private void OnConnectionPulseTick(object? sender, EventArgs e)
+    {
+        var elapsedSeconds = (DateTimeOffset.UtcNow - _connectionPulseStartedAt).TotalSeconds;
+        var intensity = (Math.Cos(elapsedSeconds / 2.4 * Math.PI * 2) + 1) / 2;
+        HeaderStatusDot.Opacity = 0.42 + intensity * 0.58;
+        HeaderStatusHalo.Opacity = 0.08 + intensity * 0.2;
     }
 
     private sealed record RepoFilter(string Label, string? WorkingDir)
