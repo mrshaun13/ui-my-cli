@@ -110,6 +110,27 @@ Check("server terminal bridge accepts only loopback WebSocket endpoints", () =>
     Throws<ArgumentException>(() => NativeLaunchBuilder.ServerTerminal(host, "ws://example.com/terminal"));
 });
 
+Check("terminal bridge disables local line editing and enables VT input", () =>
+{
+    const uint unrelatedFlag = 0x0008;
+    var defaultMode = TerminalInputMode.EnableProcessedInput
+        | TerminalInputMode.EnableLineInput
+        | TerminalInputMode.EnableEchoInput
+        | TerminalInputMode.EnableInsertMode
+        | TerminalInputMode.EnableQuickEditMode
+        | unrelatedFlag;
+
+    var bridgeMode = TerminalInputMode.ForInteractiveBridge(defaultMode);
+    Equal(0u, bridgeMode & TerminalInputMode.EnableProcessedInput);
+    Equal(0u, bridgeMode & TerminalInputMode.EnableLineInput);
+    Equal(0u, bridgeMode & TerminalInputMode.EnableEchoInput);
+    Equal(0u, bridgeMode & TerminalInputMode.EnableInsertMode);
+    Equal(0u, bridgeMode & TerminalInputMode.EnableQuickEditMode);
+    Equal(unrelatedFlag, bridgeMode & unrelatedFlag);
+    Equal(TerminalInputMode.EnableExtendedFlags, bridgeMode & TerminalInputMode.EnableExtendedFlags);
+    Equal(TerminalInputMode.EnableVirtualTerminalInput, bridgeMode & TerminalInputMode.EnableVirtualTerminalInput);
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine($"{failures.Count} native command test(s) failed:");

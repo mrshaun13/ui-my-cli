@@ -18,6 +18,7 @@ internal static class TerminalBridge
     {
         Console.InputEncoding = Encoding.UTF8;
         Console.OutputEncoding = Encoding.UTF8;
+        using var consoleInputMode = WindowsConsoleInputMode.Enter();
         using var lifetime = new CancellationTokenSource();
         using var socket = new ClientWebSocket();
         _socket = socket;
