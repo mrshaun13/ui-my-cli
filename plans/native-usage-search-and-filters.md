@@ -37,7 +37,7 @@ Windows and macOS builds receive the same fixes and usage reporting.
 - [x] Add prominent per-session usage/credit cards and window-aware dashboard
       rollups.
 - [x] Bump the native minor version and regenerate documentation.
-- [ ] Build/test/package Windows x64, macOS Intel, and macOS ARM; push to PR #21
+- [x] Build/test/package Windows x64, macOS Intel, and macOS ARM; push to PR #21
       and wait for CI.
 
 ## Peer review of the plan
