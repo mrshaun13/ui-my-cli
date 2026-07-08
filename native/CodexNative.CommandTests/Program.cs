@@ -29,6 +29,18 @@ Check("platform profiles select the correct terminal host and release runtime", 
     Equal("osx-arm64", macArm.ReleaseRuntimeIdentifier);
 });
 
+Check("conversation search safely handles every prefix of a multi-character query", () =>
+{
+    const string user = "Review the project scope before implementation.";
+    const string assistant = "The unrelated response.";
+    foreach (var prefix in new[] { "s", "sc", "sco", "scop", "scope" })
+        Equal(true, ConversationSearch.Matches(prefix, user, assistant));
+    Equal(false, ConversationSearch.Matches("missing", user, assistant));
+    Equal(
+        ConversationSearch.MaximumQueryLength,
+        ConversationSearch.Normalize(new string('x', ConversationSearch.MaximumQueryLength + 20)).Length);
+});
+
 Check("macOS local shell uses a structured env launch without shell interpolation", () =>
 {
     var spec = NativeLaunchBuilder.LocalShell(

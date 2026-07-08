@@ -50,13 +50,11 @@ public sealed partial class MainWindow : Window
     private Color _sessionDividerAccent = Color.Parse(DashboardTheme.All[0].Accent);
     private Color _sessionDividerSecondary = Color.Parse(DashboardTheme.All[0].Secondary);
     private List<DashboardSession>? _searchResults;
-    private readonly HashSet<string> _activeRepoPaths = new(StringComparer.Ordinal);
     private readonly HashSet<string> _hiddenTokenCategories = new(StringComparer.Ordinal);
     private bool _refreshing;
     private bool _initializingSelectors;
     private bool _initializingNavigation;
     private bool _initializingAnalytics;
-    private bool _renderingRepoChips;
     private bool _shutdownConfirmed;
     private bool _closePromptOpen;
     private bool _uiReady;
@@ -464,66 +462,25 @@ public sealed partial class MainWindow : Window
 
     private void UpdateRepoFilter()
     {
-        var selectedPath = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir ?? _settings.SelectedRepo;
+        var selectedPath = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir
+            ?? _settings.SelectedRepo
+            ?? _settings.SelectedRepos?.FirstOrDefault();
         var filters = new List<RepoFilter> { new("All projects", null) };
-        filters.AddRange(_repos.Select(repo => new RepoFilter(repo.Project, repo.WorkingDir)));
-        RepoComboBox.ItemsSource = filters;
-        RepoComboBox.SelectedItem = filters.FirstOrDefault(filter => filter.WorkingDir == selectedPath) ?? filters[0];
-        if (_activeRepoPaths.Count == 0 && _settings.SavedRepoPaths.Count > 0)
+        filters.AddRange(_repos.Select(repo => new RepoFilter(
+            $"{repo.Project} ({_sessions.Count(session => session.WorkingDir == repo.WorkingDir):N0})",
+            repo.WorkingDir)));
+        var wasInitializing = _initializingNavigation;
+        _initializingNavigation = true;
+        try
         {
-            foreach (var path in _settings.SavedRepoPaths.Where(path => _repos.Any(repo => repo.WorkingDir == path)))
-                _activeRepoPaths.Add(path);
+            RepoComboBox.ItemsSource = filters;
+            RepoComboBox.SelectedItem = filters.FirstOrDefault(filter => filter.WorkingDir == selectedPath) ?? filters[0];
         }
-        RenderRepoChips();
-    }
-
-    private void RenderRepoChips()
-    {
-        _renderingRepoChips = true;
-        RepoChipsPanel.Children.Clear();
-        if (_repos.Count > 1)
+        finally
         {
-            var all = new ToggleButton
-            {
-                Content = "All",
-                IsChecked = _activeRepoPaths.Count == 0,
-                Padding = new Thickness(8, 3),
-                Margin = new Thickness(0, 0, 5, 5),
-            };
-            all.Click += async (_, _) =>
-            {
-                if (_renderingRepoChips) return;
-                _activeRepoPaths.Clear();
-                RenderRepoChips();
-                ApplySessionFilter();
-                await SaveWorkspaceAsync();
-            };
-            RepoChipsPanel.Children.Add(all);
+            _initializingNavigation = wasInitializing;
         }
-        foreach (var repo in _repos)
-        {
-            var count = _sessions.Count(session => session.WorkingDir == repo.WorkingDir);
-            var chip = new ToggleButton
-            {
-                Content = $"{repo.Project} ({count})",
-                IsChecked = _activeRepoPaths.Contains(repo.WorkingDir),
-                Tag = repo.WorkingDir,
-                Padding = new Thickness(8, 3),
-                Margin = new Thickness(0, 0, 5, 5),
-                MaxWidth = 190,
-            };
-            chip.Click += async (_, _) =>
-            {
-                if (_renderingRepoChips || chip.Tag is not string path) return;
-                if (chip.IsChecked == true) _activeRepoPaths.Add(path);
-                else _activeRepoPaths.Remove(path);
-                RenderRepoChips();
-                ApplySessionFilter();
-                await SaveWorkspaceAsync();
-            };
-            RepoChipsPanel.Children.Add(chip);
-        }
-        _renderingRepoChips = false;
+        UpdateSessionFilterSummary();
     }
 
     private void ApplySessionFilter()
@@ -538,10 +495,9 @@ public sealed partial class MainWindow : Window
         {
             filtered = filtered.Where(session => !session.IsHeadless);
         }
-        if (_activeRepoPaths.Count > 0 && _searchResults is null)
-        {
-            filtered = filtered.Where(session => _activeRepoPaths.Contains(session.WorkingDir));
-        }
+        var selectedRepo = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir;
+        if (!string.IsNullOrWhiteSpace(selectedRepo))
+            filtered = filtered.Where(session => session.WorkingDir == selectedRepo);
         if (NeedsInputCheckBox.IsChecked == true)
         {
             filtered = filtered.Where(session => session.Status == "question");
@@ -568,6 +524,20 @@ public sealed partial class MainWindow : Window
         var olderCount = visible.Count(session => SessionAgeGrouping.IsCold(
             session.Status, session.LastActivityAt, now, _settings.ColdDays));
         SessionCountText.Text = $"{visible.Count} of {sourceCount} · {olderCount} older than {_settings.ColdDays}d";
+        UpdateSessionFilterSummary();
+    }
+
+    private void UpdateSessionFilterSummary()
+    {
+        var parts = new List<string>
+        {
+            (RepoComboBox.SelectedItem as RepoFilter)?.Label ?? "All projects",
+            $"> {_settings.ColdDays}d grouped",
+        };
+        if (ShowHeadlessCheckBox.IsChecked == true) parts.Add("headless");
+        if (ArchivedCheckBox.IsChecked == true) parts.Add("archive");
+        if (NeedsInputCheckBox.IsChecked == true) parts.Add("waiting");
+        SessionFiltersSummaryText.Text = string.Join(" · ", parts);
     }
 
     private static bool Contains(string? value, string query) =>
@@ -638,7 +608,9 @@ public sealed partial class MainWindow : Window
             ActiveSessionId = active?.Session?.Id,
             SidebarCollapsed = !SidebarBorder.IsVisible,
             SelectedRepo = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir,
-            SelectedRepos = _activeRepoPaths.Order(StringComparer.Ordinal).ToList(),
+            SelectedRepos = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir is string selectedRepo
+                ? [selectedRepo]
+                : [],
             ShowHeadless = ShowHeadlessCheckBox.IsChecked == true,
             IncludeArchived = ArchivedCheckBox.IsChecked == true,
             SearchQuery = SearchTextBox.Text ?? string.Empty,
@@ -706,24 +678,27 @@ public sealed partial class MainWindow : Window
 
     private void RenderStats(DashboardStats stats)
     {
-        var totalTokens = stats.Models.Sum(model => model.TotalTokens);
-        var totalCalls = stats.Models.Sum(model => model.Calls);
+        var rollup = SelectedUsageRollup(stats);
+        var totals = rollup?.Totals ?? new UsageTotals();
         StatsSummaryText.Text =
-            $"{stats.Activity.H24:N0} active in 24h   ·   {stats.Activity.Total:N0} sessions   ·   " +
-            $"{FormatNumber(totalTokens)} tokens   ·   {FormatNumber(totalCalls)} model calls   ·   " +
+            $"{rollup?.Label ?? "Selected window"}: {FormatNumber(totals.TotalTokens)} tokens   ·   " +
+            $"{CreditEstimate(totals)}   ·   {stats.Activity.H24:N0} active in 24h   ·   " +
             $"{stats.TotalSubagents:N0} subagents   ·   {CohortLabel(stats.StatsFilters.StatsMode)} cohort";
         StatsCohortPanel.IsVisible = stats.StatsFilters.TranscriptHeadlessCount > 0;
 
+        RenderUsageSummary(rollup, stats.Pricing);
+
         PopulateMetricRows(
             ProjectsPanel,
-            stats.Projects.OrderByDescending(project => project.Messages).Take(5)
-                .Select(project => (project.Name, (long)project.Messages, $"{project.Sessions:N0} sessions · {FormatDuration(project.DurationSec)}")));
+            (rollup?.Projects ?? []).Take(8)
+                .Select(project => (project.Name, project.TotalTokens,
+                    $"{FormatNumber(project.TotalTokens)} tokens · {CreditEstimate(project)}")));
         ProjectComboGraph.MessagesBrush = Brush.Parse("#38BDF8");
         ProjectComboGraph.DurationBrush = StartingBrush;
         ProjectComboGraph.SessionsBrush = ResourceBrush("AccentBrush");
         ProjectComboGraph.GridBrush = ResourceBrush("BorderBrush");
         ProjectComboGraph.SetData(stats.Projects.OrderByDescending(project => project.Messages).Take(10).ToList());
-        PopulateModelRows(stats.Models.OrderByDescending(model => model.TotalTokens).Take(10));
+        PopulateModelRows((rollup?.Models ?? []).Take(10));
         PopulateMetricRows(
             ToolsPanel,
             stats.Tools.Interactive.OrderByDescending(tool => tool.Calls).Take(12)
@@ -767,7 +742,63 @@ public sealed partial class MainWindow : Window
 
         PopulateLeaderboard(DurationLeadersPanel, stats.TopSessionsByDuration, entry => entry.DurationSec, entry => entry.DurationStr);
         PopulateLeaderboard(MessageLeadersPanel, stats.TopSessionsByUserMsgs, entry => entry.UserMsgCount, entry => $"{entry.UserMsgCount:N0} messages");
-        PopulateTokenLeaderboard(stats.TopSessionsByTokens);
+        PopulateTokenLeaderboard((rollup?.Sessions ?? []).Take(10));
+    }
+
+    private UsageRollup? SelectedUsageRollup(DashboardStats stats)
+    {
+        if (stats.UsageRollups.TryGetValue(_settings.AnalyticsWindow, out var selected)) return selected;
+        if (stats.UsageRollups.TryGetValue("7d", out var sevenDays)) return sevenDays;
+        return stats.UsageRollups.Values.FirstOrDefault();
+    }
+
+    private void RenderUsageSummary(UsageRollup? rollup, PricingMetadata pricing)
+    {
+        var totals = rollup?.Totals ?? new UsageTotals();
+        UsageWindowDescriptionText.Text =
+            $"{rollup?.Label ?? "Selected window"} · exact local telemetry where Codex reports token_count events";
+        UsageSummaryPanel.Children.Clear();
+        AddUsageSummaryMetric("FRESH INPUT", FormatNumber(totals.InputTokens), "full input rate");
+        AddUsageSummaryMetric("CACHED INPUT", FormatNumber(totals.CachedInputTokens), "discounted input rate");
+        AddUsageSummaryMetric("TOTAL INPUT", FormatNumber(totals.TotalInputTokens), "fresh + cached");
+        AddUsageSummaryMetric("TOTAL OUTPUT", FormatNumber(totals.OutputTokens), "includes reasoning");
+        AddUsageSummaryMetric("REASONING", FormatNumber(totals.ReasoningOutputTokens), "part of output; no multiplier");
+        AddUsageSummaryMetric("TOTAL TOKENS", FormatNumber(totals.TotalTokens), $"{totals.Calls:N0} model calls");
+        AddUsageSummaryMetric("EST. CREDITS", CreditValue(totals), PricingCoverageLabel(totals));
+
+        var sourceVersion = string.IsNullOrWhiteSpace(pricing.Version) ? "published rate card" : $"rate card {pricing.Version}";
+        UsagePricingNoteText.Text = totals.UnpricedTokens > 0
+            ? $"Credit estimate is partial: {FormatNumber(totals.UnpricedTokens)} tokens use models absent from the public {sourceVersion}. " +
+              "Reasoning tokens are already included in output tokens and use the output rate; reasoning effort has no separate published multiplier. " +
+              "Estimate assumes Standard mode because stored telemetry does not identify Fast mode."
+            : $"Credit estimate uses the Codex {sourceVersion}. Reasoning tokens are already included in output tokens and use the output rate; " +
+              "reasoning effort has no separate published multiplier. Estimate assumes Standard mode because stored telemetry does not identify Fast mode.";
+        ToolTip.SetTip(UsagePricingNoteText, pricing.Source);
+    }
+
+    private void AddUsageSummaryMetric(string label, string value, string detail)
+    {
+        UsageSummaryPanel.Children.Add(new Border
+        {
+            Width = 155,
+            MinHeight = 76,
+            Margin = new Thickness(0, 0, 8, 8),
+            Padding = new Thickness(10, 8),
+            Background = ResourceBrush("SurfaceBrush"),
+            BorderBrush = ResourceBrush("BorderBrightBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Child = new StackPanel
+            {
+                Spacing = 2,
+                Children =
+                {
+                    new TextBlock { Text = value, FontSize = 19, FontWeight = FontWeight.Bold, Foreground = ResourceBrush("PrimaryBrush") },
+                    new TextBlock { Text = label, FontSize = 9, FontWeight = FontWeight.Bold, Foreground = ResourceBrush("AccentBrush") },
+                    new TextBlock { Text = detail, FontSize = 9, Foreground = ResourceBrush("MutedBrush"), TextWrapping = TextWrapping.Wrap },
+                },
+            },
+        });
     }
 
     private void RenderLatestPrompt()
@@ -820,7 +851,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void PopulateModelRows(IEnumerable<ModelStats> models)
+    private void PopulateModelRows(IEnumerable<UsageBreakdown> models)
     {
         ModelsPanel.Children.Clear();
         foreach (var model in models)
@@ -833,7 +864,7 @@ public sealed partial class MainWindow : Window
                 model.ReasoningOutputTokens,
                 model.InputTokens,
                 model.CachedInputTokens,
-                model.CacheWriteTokens,
+                0,
                 model.UnclassifiedTokens);
             bar.SetData(values);
             var visibleTotal = values.Sum();
@@ -851,7 +882,7 @@ public sealed partial class MainWindow : Window
                     bar,
                     new TextBlock
                     {
-                        Text = $"{FormatNumber(visibleTotal)} visible · {FormatNumber(model.TotalTokens)} total · {model.Calls:N0} calls · {model.Sessions:N0} sessions",
+                        Text = $"{FormatNumber(visibleTotal)} visible · {FormatNumber(model.TotalTokens)} total · {CreditEstimate(model)} · {model.Calls:N0} calls",
                         Foreground = ResourceBrush("SecondaryBrush"),
                         FontSize = 10,
                     },
@@ -882,7 +913,7 @@ public sealed partial class MainWindow : Window
         Brush.Parse("#8B5CF6"), Brush.Parse("#EAB308"), ResourceBrush("MutedBrush"),
     ];
 
-    private void PopulateTokenLeaderboard(IEnumerable<SessionRanking> entries)
+    private void PopulateTokenLeaderboard(IEnumerable<UsageBreakdown> entries)
     {
         TokenLeadersPanel.Children.Clear();
         var rows = entries.Take(10).ToList();
@@ -893,7 +924,7 @@ public sealed partial class MainWindow : Window
                 entry.ReasoningOutputTokens,
                 entry.InputTokens,
                 entry.CachedInputTokens,
-                entry.CacheWriteTokens,
+                0,
                 entry.UnclassifiedTokens);
             var bar = new StackedTokenBar { Height = 7 };
             bar.SegmentBrushes = TokenCategoryBrushes();
@@ -917,7 +948,7 @@ public sealed partial class MainWindow : Window
                             Children =
                             {
                                 new TextBlock { Text = entry.Title, Foreground = ResourceBrush("PrimaryBrush"), TextTrimming = TextTrimming.CharacterEllipsis },
-                                LeaderValue($"{FormatNumber(visibleTotal)} tokens"),
+                                LeaderValue($"{FormatNumber(visibleTotal)} · {CreditEstimate(entry)}"),
                             },
                         },
                         bar,
@@ -953,8 +984,9 @@ public sealed partial class MainWindow : Window
         if (toggle.IsChecked == true) _hiddenTokenCategories.Remove(category);
         else _hiddenTokenCategories.Add(category);
         if (_stats is null) return;
-        PopulateModelRows(_stats.Models.OrderByDescending(model => model.TotalTokens).Take(10));
-        PopulateTokenLeaderboard(_stats.TopSessionsByTokens);
+        var rollup = SelectedUsageRollup(_stats);
+        PopulateModelRows((rollup?.Models ?? []).Take(10));
+        PopulateTokenLeaderboard((rollup?.Sessions ?? []).Take(10));
     }
 
     private void PopulateLeaderboard(
@@ -2379,6 +2411,9 @@ public sealed partial class MainWindow : Window
     private async void OnRepoFilterChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_initializingNavigation) return;
+        _searchResults = null;
+        if (!string.IsNullOrWhiteSpace(SearchTextBox.Text)) await RefreshSearchAsync();
+        else ApplySessionFilter();
         await SaveWorkspaceAsync();
     }
 
@@ -2408,6 +2443,23 @@ public sealed partial class MainWindow : Window
         var values = new[] { 1, 3, 7, 14, 30 };
         _settings = _settings with { ColdDays = values[ColdDaysComboBox.SelectedIndex] };
         ApplySessionFilter();
+        await SaveWorkspaceAsync();
+    }
+
+    private async void OnResetFiltersClicked(object? sender, RoutedEventArgs e)
+    {
+        _initializingNavigation = true;
+        RepoComboBox.SelectedIndex = 0;
+        ColdDaysComboBox.SelectedIndex = 1;
+        ShowHeadlessCheckBox.IsChecked = false;
+        ArchivedCheckBox.IsChecked = false;
+        NeedsInputCheckBox.IsChecked = false;
+        _initializingNavigation = false;
+        _settings = _settings with { ColdDays = 3 };
+        _archivedSessions = [];
+        _searchResults = null;
+        if (!string.IsNullOrWhiteSpace(SearchTextBox.Text)) await RefreshSearchAsync();
+        else ApplySessionFilter();
         await SaveWorkspaceAsync();
     }
 
@@ -2902,6 +2954,31 @@ public sealed partial class MainWindow : Window
         >= 1_000 => $"{value / 1_000d:0.##}K",
         _ => value.ToString("N0"),
     };
+
+    private static string CreditValue(UsageTotals usage)
+    {
+        if (usage.TotalTokens <= 0) return "0";
+        if (usage.PricedTokens <= 0) return "—";
+        return $"~{usage.EstimatedCredits:0.###}";
+    }
+
+    private static string CreditEstimate(UsageTotals usage)
+    {
+        if (usage.TotalTokens <= 0) return "0 credits";
+        if (usage.PricedTokens <= 0) return "credit rate unavailable";
+        var estimate = $"~{usage.EstimatedCredits:0.###} credits";
+        return usage.PricingCoverage >= 0.9995
+            ? estimate
+            : $"{estimate} partial";
+    }
+
+    private static string PricingCoverageLabel(UsageTotals usage)
+    {
+        if (usage.TotalTokens <= 0) return "no token usage";
+        return usage.PricedTokens <= 0
+            ? "0% priced · model rate unpublished"
+            : $"{usage.PricingCoverage:P0} pricing coverage";
+    }
 
     private static string FormatDuration(long seconds)
     {
