@@ -67,6 +67,10 @@ app.get('/api/providers', (_req, res) => {
   res.json(safeListProviders());
 });
 
+app.get(['/api/:providerId/terminals', '/api/terminals'], providerRoute((provider, _req, res) => {
+  res.json(activePtySessions(provider.id));
+}));
+
 function providerFromReq(req) {
   return getProvider(req.params.providerId || DEFAULT_PROVIDER_ID);
 }

@@ -15,6 +15,9 @@
     "docs:check": "node scripts/generate-docs.js --check",
     "test": "npx playwright test",
     "test:smoke": "npx playwright test tests/smoke.spec.js",
+    "native:build": "dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.WslHost/CodexNative.WslHost.csproj",
+    "native:test": "dotnet run --project native/CodexNative.CommandTests/CodexNative.CommandTests.csproj",
+    "native:publish": "dotnet publish native/CodexNative/CodexNative.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o native/artifacts/win-x64 && dotnet publish native/CodexNative.WslHost/CodexNative.WslHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o native/artifacts/win-x64",
     "prepare": "husky"
   },
   "dependencies": {

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions.
+The browser dashboard server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. The Windows native frontend uses Avalonia for the dashboard and Windows ConPTY for terminal rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so Codex and project files remain in WSL2 and sessions can outlive either UI. It can also launch direct Ubuntu login-shell tabs in validated WSL project paths; those shells end when their tab or the application closes.
 
 ## Data Flow
 
@@ -11,6 +11,9 @@ Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  Codex provider
 transcript-pipeline Codex headless ledger  →  data/headless-sessions status/events files  →  Codex provider external-read adapter  →  React client
 Devin CLI  →  Devin sessions.db + dashboard.db  →  Devin provider adapter  →  WebSocket push  →  React client
 Browser  →  xterm.js keystrokes  →  provider-scoped WebSocket  →  node-pty  →  selected provider resume command
+Windows native app  →  Avalonia terminal control  →  ConPTY  →  console bridge  →  WebSocket  →  persistent WSL2 PTY  →  Codex CLI
+Windows native app  →  Avalonia terminal control  →  ConPTY  →  validated WSL2 launch  →  Ubuntu login shell
+Windows native dashboard controls  →  localhost provider API  →  session/context/stats readers  →  Codex state in WSL2
 ```
 
 ## Server Files
@@ -43,6 +46,25 @@ Browser  →  xterm.js keystrokes  →  provider-scoped WebSocket  →  node-pty
 | `client/src/components/DashboardSplash.jsx` | DashboardSplash — shown when no session is selected. |
 | `client/src/components/SessionPreview.jsx` | SessionPreview — read-only session detail panel. |
 | `client/src/hooks/useStatusFeed.js` | useStatusFeed — subscribes to the selected provider's status WebSocket |
+
+## Native Windows Frontend Files
+
+| File | Description |
+| --- | --- |
+| `native/CodexNative/MainWindow.axaml.cs` | Native Windows dashboard shell, persistent Codex tabs, direct Ubuntu shell tabs, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences. |
+| `native/CodexNative/MainWindow.axaml` | Native dashboard layout with theme-aware control chrome and the in-app pixel C identity. |
+| `native/CodexNative/Assets/codex-native-icon.png` | Transparent generated pixel-art C used by the native dashboard header. |
+| `native/CodexNative/Assets/codex-native-icon.ico` | Multi-resolution Windows executable and title-bar icon bundle. |
+| `native/CodexNative/DashboardApiClient.cs` | Typed localhost client for sessions, repos, stats, context, configuration, rename, and archive metadata. |
+| `native/CodexNative/DashboardTheme.cs` | Native equivalents of the browser dashboard themes and text-size choices. |
+| `native/CodexNative/DashboardServiceManager.cs` | Starts the local ui-my-cli metadata service inside WSL2 when port 7575 is unavailable. |
+| `native/CodexNative.Core/NativeLaunchBuilder.cs` | Validated launch specifications for the loopback terminal bridge, direct Ubuntu shells, and private WSL2 service. |
+| `native/CodexNative.WslHost/Program.cs` | Console-subsystem ConPTY companion for persistent server-terminal bridging, direct Ubuntu shells, and private-service startup. |
+| `native/CodexNative.WslHost/TerminalBridge.cs` | Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent WSL2 PTYs. |
+| `native/CodexNative/DashboardStatusFeed.cs` | Reconnecting Codex status-feed client for push-driven native session updates and rekey events. |
+| `native/CodexNative/AnalyticsControls.cs` | Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition. |
+| `native/CodexNative/SessionPreviewControl.cs` | Rich native session summary with conversation history, context composition, model changes, and Codex subagent timelines. |
+| `native/CodexNative/DashboardModels.cs` | Typed Codex dashboard, context, analytics, conversation, rate-limit, and subagent payload models. |
 
 ## Server Dependencies
 

@@ -1,0 +1,659 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="using:CodexNative"
+        mc:Ignorable="d"
+        d:DesignWidth="1500"
+        d:DesignHeight="920"
+        x:Class="CodexNative.MainWindow"
+        Title="Codex Native Dashboard"
+        Width="1200"
+        Height="760"
+        MinWidth="900"
+        MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        Icon="/Assets/codex-native-icon.ico"
+        Background="{DynamicResource BaseBrush}">
+  <Window.Resources>
+    <SolidColorBrush x:Key="BaseBrush" Color="#080C10" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#0D1117" />
+    <SolidColorBrush x:Key="ElevatedBrush" Color="#131A22" />
+    <SolidColorBrush x:Key="HoverBrush" Color="#1A2535" />
+    <SolidColorBrush x:Key="BorderBrush" Color="#1E2D3D" />
+    <SolidColorBrush x:Key="BorderBrightBrush" Color="#2A3F56" />
+    <SolidColorBrush x:Key="PrimaryBrush" Color="#E2E8F0" />
+    <SolidColorBrush x:Key="SecondaryBrush" Color="#7A94AE" />
+    <SolidColorBrush x:Key="MutedBrush" Color="#3D5470" />
+    <SolidColorBrush x:Key="AccentBrush" Color="#00FFA3" />
+    <SolidColorBrush x:Key="ErrorBrush" Color="#EF4444" />
+    <SolidColorBrush x:Key="TerminalBrush" Color="#020507" />
+    <SolidColorBrush x:Key="SessionDividerBrush" Color="#2A3F56" Opacity="0.3" />
+    <!-- Override the Fluent scrollbar resources that otherwise reappear when
+         its IsExpanded state activates. ApplyTheme updates these with every
+         dashboard palette change. -->
+    <SolidColorBrush x:Key="ScrollBarBackground" Color="#131A22" />
+    <SolidColorBrush x:Key="ScrollBarForeground" Color="#7A94AE" />
+    <SolidColorBrush x:Key="ScrollBarBorderBrush" Color="#1E2D3D" />
+    <SolidColorBrush x:Key="ScrollBarPanningThumbBackground" Color="#2A3F56" />
+    <SolidColorBrush x:Key="ScrollBarThumbBackgroundColor" Color="#2A3F56" />
+    <SolidColorBrush x:Key="ScrollBarThumbFillPointerOver" Color="#00FFA3" />
+    <SolidColorBrush x:Key="ScrollBarThumbFillPressed" Color="#00FFA3" />
+    <SolidColorBrush x:Key="ScrollBarThumbFillDisabled" Color="#3D5470" />
+    <SolidColorBrush x:Key="ScrollBarTrackFill" Color="#131A22" />
+    <SolidColorBrush x:Key="ScrollBarTrackStroke" Color="#1E2D3D" />
+    <SolidColorBrush x:Key="ScrollBarBackgroundPointerOver" Color="#1A2535" />
+    <SolidColorBrush x:Key="ScrollBarTrackFillPointerOver" Color="#131A22" />
+    <SolidColorBrush x:Key="ScrollBarTrackStrokePointerOver" Color="#2A3F56" />
+    <SolidColorBrush x:Key="ScrollBarButtonArrowForeground" Color="#7A94AE" />
+    <SolidColorBrush x:Key="ScrollBarButtonArrowForegroundPointerOver" Color="#00FFA3" />
+    <SolidColorBrush x:Key="ScrollBarButtonArrowForegroundPressed" Color="#E2E8F0" />
+    <SolidColorBrush x:Key="ScrollBarButtonArrowForegroundDisabled" Color="#3D5470" />
+    <SolidColorBrush x:Key="ScrollBarButtonBackground" Color="Transparent" />
+    <SolidColorBrush x:Key="ScrollBarButtonBackgroundPointerOver" Color="#1A2535" />
+    <SolidColorBrush x:Key="ScrollBarButtonBackgroundPressed" Color="#2A3F56" />
+    <SolidColorBrush x:Key="ScrollBarButtonBackgroundDisabled" Color="Transparent" />
+    <SolidColorBrush x:Key="ScrollBarButtonBorderBrush" Color="Transparent" />
+    <SolidColorBrush x:Key="ScrollBarButtonBorderBrushPointerOver" Color="#00FFA3" />
+    <SolidColorBrush x:Key="ScrollBarButtonBorderBrushPressed" Color="#E2E8F0" />
+    <SolidColorBrush x:Key="ScrollBarButtonBorderBrushDisabled" Color="Transparent" />
+  </Window.Resources>
+
+  <Window.Styles>
+    <!-- Theme-owned control chrome. These resources are replaced whenever the
+         style selector changes, so inputs never fall back to Fluent's white
+         outlines on dark themes. -->
+    <Style Selector="Button">
+      <Setter Property="Background" Value="{DynamicResource ElevatedBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderBrightBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}" />
+    </Style>
+    <Style Selector="Button:pointerover">
+      <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Button:focus">
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <Style Selector="Button:pressed">
+      <Setter Property="Background" Value="{DynamicResource BorderBrightBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="{DynamicResource ElevatedBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderBrightBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}" />
+    </Style>
+    <Style Selector="TextBox:pointerover">
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="TextBox:focus">
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="BorderThickness" Value="2" />
+    </Style>
+
+    <Style Selector="ComboBox">
+      <Setter Property="Background" Value="{DynamicResource ElevatedBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderBrightBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}" />
+    </Style>
+    <Style Selector="ComboBox:pointerover">
+      <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ComboBox:focus, ComboBox:dropdownopen">
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <Style Selector="ComboBoxItem">
+      <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Margin" Value="3,1" />
+    </Style>
+    <Style Selector="ComboBoxItem:pointerover">
+      <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ComboBoxItem:selected">
+      <Setter Property="Background" Value="{DynamicResource ElevatedBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <Style Selector="ToggleButton">
+      <Setter Property="Background" Value="{DynamicResource ElevatedBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderBrightBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="5" />
+    </Style>
+    <Style Selector="ToggleButton:pointerover">
+      <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ToggleButton:checked">
+      <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <Style Selector="ToggleButton:focus">
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="BorderThickness" Value="2" />
+    </Style>
+
+    <Style Selector="CheckBox">
+      <Setter Property="Background" Value="{DynamicResource ElevatedBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderBrightBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}" />
+      <Setter Property="Padding" Value="6,3,10,3" />
+      <Setter Property="MinHeight" Value="32" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="CheckBox:pointerover">
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="CheckBox:checked, CheckBox:indeterminate, CheckBox:focus">
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+
+    <Style Selector="ScrollViewer">
+      <Setter Property="AllowAutoHide" Value="False" />
+    </Style>
+    <Style Selector="ScrollBar">
+      <Setter Property="AllowAutoHide" Value="False" />
+      <Setter Property="Background" Value="{DynamicResource ElevatedBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource SecondaryBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="ScrollBar:pointerover">
+      <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+    </Style>
+    <Style Selector="ScrollBar:vertical">
+      <Setter Property="Width" Value="10" />
+      <Setter Property="MinWidth" Value="10" />
+    </Style>
+    <Style Selector="ScrollBar:horizontal">
+      <Setter Property="Height" Value="10" />
+      <Setter Property="MinHeight" Value="10" />
+    </Style>
+    <Style Selector="ScrollBar /template/ Thumb">
+      <Setter Property="Background" Value="{DynamicResource BorderBrightBrush}" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="RenderTransform" Value="none" />
+    </Style>
+    <Style Selector="ScrollBar /template/ Thumb /template/ Border">
+      <Setter Property="Background" Value="{DynamicResource BorderBrightBrush}" />
+      <Setter Property="CornerRadius" Value="5" />
+    </Style>
+    <Style Selector="ScrollBar[IsExpanded=true] /template/ Grid#Root">
+      <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+    </Style>
+    <Style Selector="ScrollBar[IsExpanded=true] /template/ Rectangle#TrackRect">
+      <Setter Property="Fill" Value="{DynamicResource ElevatedBrush}" />
+      <Setter Property="Stroke" Value="{DynamicResource BorderBrightBrush}" />
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="ScrollBar[IsExpanded=true] /template/ Thumb">
+      <Setter Property="Background" Value="{DynamicResource BorderBrightBrush}" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="RenderTransform" Value="none" />
+    </Style>
+    <Style Selector="ScrollBar /template/ Thumb:pointerover">
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ScrollBar /template/ Thumb:pointerover /template/ Border">
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ScrollBar /template/ Thumb:pressed">
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ScrollBar /template/ Thumb:pressed /template/ Border">
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ScrollBar /template/ RepeatButton">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Foreground" Value="{DynamicResource SecondaryBrush}" />
+    </Style>
+    <Style Selector="ScrollBar /template/ RepeatButton:pointerover">
+      <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto">
+    <Border Grid.Row="0" x:Name="AppHeader" Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto">
+        <Button Grid.Column="0" x:Name="HomeButton" Click="OnHomeClicked" Margin="0,0,12,0"
+                Background="Transparent" BorderThickness="0" Padding="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Grid x:Name="HeaderConnectionIndicator" Width="16" Height="16"
+                  VerticalAlignment="Center" ToolTip.Tip="Dashboard disconnected">
+              <Ellipse x:Name="HeaderStatusHalo" Width="15" Height="15"
+                       Fill="{DynamicResource ErrorBrush}" Opacity="0.2" />
+              <Ellipse x:Name="HeaderStatusDot" Width="7" Height="7"
+                       Fill="{DynamicResource ErrorBrush}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+            <TextBlock Text="CODEX NATIVE DASHBOARD" Foreground="{DynamicResource PrimaryBrush}"
+                       FontWeight="Bold" FontSize="15" VerticalAlignment="Center" />
+          </StackPanel>
+        </Button>
+
+        <TextBlock Grid.Column="1" Text="Style" Foreground="{DynamicResource SecondaryBrush}"
+                   VerticalAlignment="Center" Margin="0,0,6,0" />
+        <ComboBox Grid.Column="2" x:Name="ThemeComboBox" Width="150" SelectionChanged="OnThemeChanged"
+                  Margin="0,0,14,0" />
+
+        <TextBlock Grid.Column="3" Text="Text" Foreground="{DynamicResource SecondaryBrush}"
+                   VerticalAlignment="Center" Margin="0,0,6,0" />
+        <ComboBox Grid.Column="4" x:Name="TextSizeComboBox" Width="105" SelectionChanged="OnTextSizeChanged"
+                  Margin="0,0,14,0" />
+
+        <TextBlock Grid.Column="5" x:Name="EnvSummaryText" Foreground="{DynamicResource SecondaryBrush}"
+                   VerticalAlignment="Center" Text="Loading MCP · skills · plugins…" />
+
+        <Button Grid.Column="7" x:Name="SidebarToggleButton" Content="☰" Click="OnSidebarToggleClicked"
+                ToolTip.Tip="Show or hide session sidebar" Padding="10,5" Margin="0,0,8,0" />
+        <Button Grid.Column="8" x:Name="RefreshButton" Content="Refresh" Click="OnRefreshClicked"
+                ToolTip.Tip="Refresh dashboard (Ctrl+R)"
+                Padding="12,5" />
+      </Grid>
+    </Border>
+
+    <Grid Grid.Row="1" x:Name="MainContentGrid" ColumnDefinitions="310,5,*">
+      <Border Grid.Column="0" x:Name="SidebarBorder" Background="{DynamicResource SurfaceBrush}"
+              BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,*">
+          <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="12,12,12,8">
+            <StackPanel>
+              <TextBlock Text="SESSIONS" FontWeight="Bold" Foreground="{DynamicResource PrimaryBrush}" />
+              <TextBlock x:Name="SessionCountText" Text="Connecting…" FontSize="11"
+                         Foreground="{DynamicResource SecondaryBrush}" />
+            </StackPanel>
+            <Button Grid.Column="1" x:Name="NewSessionButton" Content="＋" ToolTip.Tip="New Codex or Ubuntu session (Ctrl+Shift+N)" Click="OnNewSessionClicked"
+                    FontSize="18" Padding="8,2" />
+          </Grid>
+
+          <TextBox Grid.Row="1" x:Name="SearchTextBox" Margin="12,0,12,8" ToolTip.Tip="Search sessions (Ctrl+K)"
+                   PlaceholderText="Search title, prompt, project…" TextChanged="OnSearchChanged" />
+
+          <Border Grid.Row="2" Margin="12,0,12,8" Background="{DynamicResource ElevatedBrush}"
+                  BorderBrush="{DynamicResource BorderBrightBrush}" BorderThickness="1"
+                  CornerRadius="6">
+            <StackPanel>
+              <ToggleButton x:Name="SessionFiltersToggle" IsChecked="False"
+                            Click="OnSessionFiltersToggleClicked"
+                            AutomationProperties.Name="Session filters"
+                            Background="Transparent" BorderThickness="0" CornerRadius="6"
+                            Padding="8,5" HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch">
+                <Grid x:Name="SessionFiltersHeaderGrid" ColumnDefinitions="Auto,*,Auto">
+                  <TextBlock Text="FILTERS" FontSize="11" FontWeight="Bold"
+                             Foreground="{DynamicResource PrimaryBrush}" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Text="project · age · visibility" FontSize="10"
+                             Foreground="{DynamicResource MutedBrush}" Margin="8,0"
+                             TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="2" x:Name="SessionFiltersChevron" Text="⌄" FontSize="13"
+                             Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
+                </Grid>
+              </ToggleButton>
+
+              <Border x:Name="SessionFiltersPanel" IsVisible="False"
+                      BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
+                      Padding="0,6,0,8">
+                <StackPanel Spacing="4">
+                  <Grid ColumnDefinitions="Auto,Auto,*">
+                    <ComboBox Grid.Column="0" x:Name="RepoComboBox" Width="128"
+                              SelectionChanged="OnRepoFilterChanged" />
+                    <ComboBox Grid.Column="1" x:Name="ColdDaysComboBox" Width="82" Margin="2,0,0,0"
+                              SelectionChanged="OnColdDaysChanged"
+                              AutomationProperties.Name="Older-session threshold"
+                              ToolTip.Tip="Group idle sessions older than this threshold at the bottom" />
+                  </Grid>
+
+                  <Grid ColumnDefinitions="Auto,Auto,Auto,*">
+                    <CheckBox Grid.Column="0" x:Name="ShowHeadlessCheckBox" MinWidth="0" Margin="0"
+                              Padding="3,2" MinHeight="30" FontSize="11"
+                              AutomationProperties.Name="Headless"
+                              IsCheckedChanged="OnNavigationFilterChanged">
+                      <TextBlock Text="Headless" TextWrapping="NoWrap" />
+                    </CheckBox>
+                    <CheckBox Grid.Column="1" x:Name="ArchivedCheckBox" MinWidth="0" Margin="2,0,0,0"
+                              Padding="3,2" MinHeight="30" FontSize="11"
+                              AutomationProperties.Name="Archive"
+                              IsCheckedChanged="OnNavigationFilterChanged">
+                      <TextBlock Text="Archive" TextWrapping="NoWrap" />
+                    </CheckBox>
+                    <CheckBox Grid.Column="2" x:Name="NeedsInputCheckBox" MinWidth="0" Margin="2,0,0,0"
+                              Padding="3,2" MinHeight="30" FontSize="11"
+                              AutomationProperties.Name="Waiting"
+                              IsCheckedChanged="OnFilterChanged">
+                      <TextBlock Text="Waiting" TextWrapping="NoWrap" />
+                    </CheckBox>
+                  </Grid>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </Border>
+
+          <ScrollViewer Grid.Row="3" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Disabled"
+                        Margin="12,0,12,7" MaxHeight="68">
+            <WrapPanel x:Name="RepoChipsPanel" Orientation="Horizontal" />
+          </ScrollViewer>
+
+          <Grid Grid.Row="4" x:Name="SessionsListHost" ClipToBounds="True">
+            <ListBox x:Name="SessionsList" SelectionChanged="OnSessionSelected"
+                     Background="Transparent" BorderThickness="0" Padding="0,0,0,10">
+              <ListBox.Styles>
+                <Style Selector="ListBoxItem">
+                  <Setter Property="Padding" Value="0" />
+                  <Setter Property="Margin" Value="0" />
+                  <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                </Style>
+              </ListBox.Styles>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="local:DashboardSession">
+                  <Grid Background="Transparent"
+                        PointerEntered="OnSessionRowPointerEntered"
+                        PointerExited="OnSessionRowPointerExited">
+                    <Border Height="1" VerticalAlignment="Bottom"
+                            Background="{DynamicResource SessionDividerBrush}"
+                            IsHitTestVisible="False" />
+                    <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="22,*,Auto" Margin="12,8,12,9">
+                      <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StatusGlyph}"
+                                 Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding DisplayTitle}"
+                                 Foreground="{DynamicResource PrimaryBrush}" FontWeight="SemiBold"
+                                 TextTrimming="CharacterEllipsis" />
+                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DisplayMeta}"
+                                 Foreground="{DynamicResource SecondaryBrush}" FontSize="11"
+                                 TextTrimming="CharacterEllipsis" />
+                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding LastUserPrompt}"
+                                 Foreground="{DynamicResource MutedBrush}" FontSize="11"
+                                 MaxLines="2" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+                      <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" Orientation="Horizontal" Spacing="3">
+                        <Button Content="ⓘ" Padding="5,1" ToolTip.Tip="Open session summary"
+                                Tag="{Binding}" Click="OnPreviewSessionClicked" />
+                        <Button Content="↩" Padding="5,1" ToolTip.Tip="Restore archived session"
+                                IsVisible="{Binding Archived}" Tag="{Binding}" Click="OnRestoreSessionClicked" />
+                      </StackPanel>
+                    </Grid>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+
+            <Canvas x:Name="SessionHoverOverlay" Opacity="0" IsHitTestVisible="False"
+                    ClipToBounds="True" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+              <Border x:Name="SessionHoverTopBaseLine" Height="1" />
+              <Border x:Name="SessionHoverBottomBaseLine" Height="1" />
+              <Border x:Name="SessionHoverTopBand" Height="1" />
+              <Border x:Name="SessionHoverBottomBand" Height="1" />
+            </Canvas>
+          </Grid>
+        </Grid>
+      </Border>
+
+      <Border Grid.Column="0" x:Name="CompactSidebarBorder" IsVisible="False"
+              Background="{DynamicResource SurfaceBrush}"
+              BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
+        <Grid RowDefinitions="Auto,*,Auto">
+          <Button Grid.Row="0" x:Name="CompactNewSessionButton" Content="＋" FontSize="18" Padding="5,3" Margin="6,8,6,6"
+                  ToolTip.Tip="New Codex or Ubuntu session (Ctrl+Shift+N)" Click="OnNewSessionClicked" />
+          <ListBox Grid.Row="1" x:Name="CompactSessionsList" SelectionChanged="OnCompactSessionSelected"
+                   Background="Transparent" BorderThickness="0" Padding="3,0">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="local:DashboardSession">
+                <Border AutomationProperties.Name="{Binding DisplayTitle}" Padding="5,8">
+                  <TextBlock Text="{Binding StatusGlyph}" Foreground="{DynamicResource AccentBrush}"
+                             FontSize="15" HorizontalAlignment="Center" />
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <Button Grid.Row="2" Content="›" FontSize="18" Padding="5,3" Margin="6"
+                  ToolTip.Tip="Expand session sidebar" Click="OnSidebarToggleClicked" />
+        </Grid>
+      </Border>
+
+      <GridSplitter Grid.Column="1" x:Name="SidebarSplitter" Width="5" Background="{DynamicResource BorderBrush}"
+                    ResizeDirection="Columns" DragCompleted="OnSidebarResizeCompleted" />
+
+      <TabControl Grid.Column="2" x:Name="WorkspaceTabs" Background="{DynamicResource BaseBrush}"
+                  HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                  SelectionChanged="OnWorkspaceTabChanged">
+        <TabItem x:Name="DashboardTab">
+          <TabItem.Header>
+            <TextBlock Text="Dashboard overview" FontSize="12" VerticalAlignment="Center" />
+          </TabItem.Header>
+          <ScrollViewer x:Name="DashboardScroll" Background="{DynamicResource BaseBrush}"
+                        HorizontalScrollBarVisibility="Disabled"
+                        VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="DashboardPanel" Margin="22" Spacing="16">
+              <StackPanel>
+                <TextBlock Text="Workspace overview" FontSize="26" FontWeight="Bold"
+                           Foreground="{DynamicResource PrimaryBrush}" />
+                <TextBlock Text="Native session control with dashboard telemetry from ui-my-cli"
+                           Foreground="{DynamicResource SecondaryBrush}" />
+              </StackPanel>
+
+              <Button x:Name="LatestPromptButton" IsVisible="False" Click="OnLatestPromptClicked"
+                      HorizontalContentAlignment="Stretch" Padding="14"
+                      Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                  <TextBlock Text="LATEST PROMPT" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}"
+                             VerticalAlignment="Center" />
+                  <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock x:Name="LatestPromptText" Foreground="{DynamicResource PrimaryBrush}"
+                               TextTrimming="CharacterEllipsis" MaxLines="1" />
+                    <TextBlock x:Name="LatestPromptMetaText" Foreground="{DynamicResource SecondaryBrush}"
+                               FontSize="10" />
+                  </StackPanel>
+                  <TextBlock Grid.Column="2" Text="Open summary  →" Foreground="{DynamicResource AccentBrush}"
+                             VerticalAlignment="Center" />
+                </Grid>
+              </Button>
+
+              <Grid x:Name="HealthGrid" ColumnDefinitions="1.2*,1*" ColumnSpacing="12" RowSpacing="12">
+                <Border Grid.Column="0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="6" Padding="14">
+                  <StackPanel Spacing="7">
+                    <TextBlock Text="CODEX SERVICE" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <TextBlock x:Name="ProviderStatusText" Text="Checking Codex provider…"
+                               Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
+                    <ProgressBar x:Name="ProviderHealthBar" Minimum="0" Maximum="100" Value="0" Height="7" />
+                  </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="6" Padding="14">
+                  <StackPanel Spacing="7">
+                    <TextBlock Text="RATE LIMITS &amp; CREDITS" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <TextBlock x:Name="RateLimitText" Text="Loading current Codex quota…"
+                               Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
+                    <ProgressBar x:Name="RateLimitBar" Minimum="0" Maximum="100" Value="0" Height="7" />
+                  </StackPanel>
+                </Border>
+              </Grid>
+
+              <Border Background="{DynamicResource ElevatedBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                      BorderThickness="1" CornerRadius="6" Padding="16">
+                <Grid x:Name="StatsSummaryGrid" ColumnDefinitions="*,Auto" ColumnSpacing="12" RowSpacing="8">
+                  <TextBlock x:Name="StatsSummaryText" Text="Loading usage…"
+                             Foreground="{DynamicResource PrimaryBrush}" FontSize="16" TextWrapping="Wrap"
+                             VerticalAlignment="Center" />
+                  <StackPanel Grid.Column="1" x:Name="StatsCohortPanel" Orientation="Horizontal" Spacing="7"
+                              VerticalAlignment="Center" IsVisible="False">
+                    <TextBlock Text="Stats cohort" Foreground="{DynamicResource SecondaryBrush}"
+                               VerticalAlignment="Center" />
+                    <ComboBox x:Name="StatsCohortComboBox" Width="145"
+                              SelectionChanged="OnStatsCohortChanged" />
+                  </StackPanel>
+                </Grid>
+              </Border>
+
+              <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                      BorderThickness="1" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="9">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel>
+                      <TextBlock Text="TOKEN ACTIVITY" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                      <TextBlock Text="Input and output by hour · weekday/hour intensity below · hover for exact values"
+                                 Foreground="{DynamicResource SecondaryBrush}" FontSize="11" />
+                    </StackPanel>
+                    <ComboBox Grid.Column="1" x:Name="AnalyticsWindowComboBox" Width="110"
+                              SelectionChanged="OnAnalyticsWindowChanged" />
+                  </Grid>
+                  <local:TokenActivityChart x:Name="TokenActivityGraph" Height="180" />
+                  <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="14">
+                    <TextBlock Text="■ input" Foreground="#38BDF8" FontSize="11" />
+                    <TextBlock Grid.Column="1" Text="■ output" Foreground="{DynamicResource AccentBrush}" FontSize="11" />
+                    <Grid Grid.Column="2" ColumnDefinitions="*,*,*,*,*">
+                      <TextBlock Grid.Column="0" Text="00:00" Foreground="{DynamicResource MutedBrush}" FontSize="10" />
+                      <TextBlock Grid.Column="1" Text="06:00" Foreground="{DynamicResource MutedBrush}" FontSize="10" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="2" Text="12:00" Foreground="{DynamicResource MutedBrush}" FontSize="10" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="3" Text="18:00" Foreground="{DynamicResource MutedBrush}" FontSize="10" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="4" Text="23:00" Foreground="{DynamicResource MutedBrush}" FontSize="10" HorizontalAlignment="Right" />
+                    </Grid>
+                  </Grid>
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                    <Grid RowDefinitions="*,*,*,*,*,*,*" Height="112">
+                      <TextBlock Grid.Row="0" Text="Mon" Foreground="{DynamicResource MutedBrush}" FontSize="9" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="1" Text="Tue" Foreground="{DynamicResource MutedBrush}" FontSize="9" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="2" Text="Wed" Foreground="{DynamicResource MutedBrush}" FontSize="9" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="3" Text="Thu" Foreground="{DynamicResource MutedBrush}" FontSize="9" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="4" Text="Fri" Foreground="{DynamicResource MutedBrush}" FontSize="9" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="5" Text="Sat" Foreground="{DynamicResource MutedBrush}" FontSize="9" VerticalAlignment="Center" />
+                      <TextBlock Grid.Row="6" Text="Sun" Foreground="{DynamicResource MutedBrush}" FontSize="9" VerticalAlignment="Center" />
+                    </Grid>
+                    <local:TokenHeatmapControl Grid.Column="1" x:Name="TokenHeatmapGraph" Height="112" />
+                  </Grid>
+                </StackPanel>
+              </Border>
+
+              <Grid x:Name="UsageGrid" ColumnDefinitions="*,*,*" ColumnSpacing="12" RowSpacing="12">
+                <Border Grid.Column="0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="6" Padding="14">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="PROJECTS" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <local:ProjectComboChart x:Name="ProjectComboGraph" Height="145" />
+                    <WrapPanel Orientation="Horizontal">
+                      <ToggleButton x:Name="ProjectMessagesToggle" Content="■ messages" Foreground="#38BDF8"
+                                    FontSize="10" IsChecked="True" Padding="6,2" Margin="0,0,6,4"
+                                    IsCheckedChanged="OnProjectSeriesToggled" />
+                      <ToggleButton x:Name="ProjectDurationToggle" Content="■ duration" Foreground="#F59E0B"
+                                    FontSize="10" IsChecked="True" Padding="6,2" Margin="0,0,6,4"
+                                    IsCheckedChanged="OnProjectSeriesToggled" />
+                      <ToggleButton x:Name="ProjectSessionsToggle" Content="● sessions" Foreground="{DynamicResource AccentBrush}"
+                                    FontSize="10" IsChecked="True" Padding="6,2" Margin="0,0,6,4"
+                                    IsCheckedChanged="OnProjectSeriesToggled" />
+                    </WrapPanel>
+                    <StackPanel x:Name="ProjectsPanel" Spacing="5" />
+                  </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="6" Padding="14">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="MODELS &amp; TOKENS" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <WrapPanel x:Name="ModelTokenCategoryPanel" Orientation="Horizontal">
+                      <ToggleButton Content="output" Tag="output" Foreground="{DynamicResource AccentBrush}" IsChecked="True" Padding="6,2" Margin="0,0,5,4" IsCheckedChanged="OnModelTokenCategoryToggled" />
+                      <ToggleButton Content="reasoning" Tag="reasoning" Foreground="#FF8A4C" IsChecked="True" Padding="6,2" Margin="0,0,5,4" IsCheckedChanged="OnModelTokenCategoryToggled" />
+                      <ToggleButton Content="fresh input" Tag="input" Foreground="#38BDF8" IsChecked="True" Padding="6,2" Margin="0,0,5,4" IsCheckedChanged="OnModelTokenCategoryToggled" />
+                      <ToggleButton Content="cached input" Tag="cached" Foreground="#8B5CF6" IsChecked="True" Padding="6,2" Margin="0,0,5,4" IsCheckedChanged="OnModelTokenCategoryToggled" />
+                      <ToggleButton Content="cache write" Tag="cache-write" Foreground="#EAB308" IsChecked="True" Padding="6,2" Margin="0,0,5,4" IsCheckedChanged="OnModelTokenCategoryToggled" />
+                      <ToggleButton Content="unclassified" Tag="unclassified" Foreground="{DynamicResource MutedBrush}" IsChecked="True" Padding="6,2" Margin="0,0,5,4" IsCheckedChanged="OnModelTokenCategoryToggled" />
+                    </WrapPanel>
+                    <StackPanel x:Name="ModelsPanel" Spacing="5" />
+                  </StackPanel>
+                </Border>
+                <Border Grid.Column="2" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="6" Padding="14">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="TOOLS" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <StackPanel x:Name="ToolsPanel" Spacing="5" />
+                  </StackPanel>
+                </Border>
+              </Grid>
+
+              <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                      BorderThickness="1" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="ENVIRONMENT" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                  <WrapPanel x:Name="EnvironmentPanel" Orientation="Horizontal" />
+                </StackPanel>
+              </Border>
+
+              <Grid x:Name="ActivityToolsGrid" ColumnDefinitions="*,*" ColumnSpacing="12" RowSpacing="12">
+                <Border Grid.Column="0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="6" Padding="14">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="ACTIVITY WINDOWS" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <StackPanel x:Name="ActivityPanel" Spacing="5" />
+                  </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="6" Padding="14">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="HEADLESS TOOLS" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <StackPanel x:Name="HeadlessToolsPanel" Spacing="5" />
+                  </StackPanel>
+                </Border>
+              </Grid>
+
+              <Grid x:Name="LeaderboardsGrid" ColumnDefinitions="*,*,*" ColumnSpacing="12" RowSpacing="12">
+                <Border Grid.Column="0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="6" Padding="14">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="TOP SESSION DURATIONS" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <StackPanel x:Name="DurationLeadersPanel" Spacing="6" />
+                  </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="6" Padding="14">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="TOP USER MESSAGES" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <StackPanel x:Name="MessageLeadersPanel" Spacing="6" />
+                  </StackPanel>
+                </Border>
+                <Border Grid.Column="2" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="6" Padding="14">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="TOP TOKEN USAGE" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <StackPanel x:Name="TokenLeadersPanel" Spacing="6" />
+                  </StackPanel>
+                </Border>
+              </Grid>
+            </StackPanel>
+          </ScrollViewer>
+        </TabItem>
+      </TabControl>
+    </Grid>
+
+    <Border Grid.Row="2" x:Name="AppFooter" Background="{DynamicResource SurfaceBrush}"
+            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="12,6">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <Ellipse Grid.Column="0" x:Name="StatusDot" Width="8" Height="8" Fill="#F59E0B"
+                 VerticalAlignment="Center" Margin="0,0,8,0" />
+        <TextBlock Grid.Column="1" x:Name="StatusText" Text="Starting native dashboard…"
+                   Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="2" x:Name="TerminalPathText" Text="Terminal path: native view → persistent WSL2 PTY → Codex"
+                   Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" />
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

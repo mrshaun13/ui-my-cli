@@ -18,6 +18,9 @@ const USER_SOURCES = new Set(['cli', 'vscode']);
 const DEFAULT_CONTEXT = 200000;
 const HEADLESS_PREFIX_RE = /^headless-\d{8}-/;
 const HEADLESS_STAMP_RE = /--(?:triage|continue|workflow|research-visualizer|interview-me|generate-presentation)-\d{4}-\d{2}-\d{2}T/;
+const rolloutSummaryCache = new Map();
+const statsResultCache = new Map();
+const SUMMARY_READ_CHUNK_BYTES = 1024 * 1024;
 
 function formatDuration(sec) {
   if (!Number.isFinite(sec) || sec < 0) sec = 0;
@@ -192,6 +195,130 @@ function appendMessage(messages, msg) {
   }
 }
 
+function emptyRolloutSummary(pathname) {
+  return {
+    path: pathname,
+    metadata: {},
+    runtime: {},
+    firstUser: null,
+    lastUser: null,
+    lastAssistant: null,
+    subagentIds: new Set(),
+  };
+}
+
+function applySummaryEvent(summary, event) {
+  if (!event) return;
+  if (event.type === 'session_meta') {
+    summary.metadata = { ...summary.metadata, ...(event.payload || {}) };
+    return;
+  }
+  if (event.type === 'turn_context') {
+    const payload = event.payload || {};
+    summary.runtime = {
+      approvalMode: payload.approval_policy || summary.runtime.approvalMode || null,
+      sandboxPolicy: payload.sandbox_policy || summary.runtime.sandboxPolicy || null,
+      permissionProfile: payload.permission_profile || summary.runtime.permissionProfile || null,
+    };
+    return;
+  }
+  if (event.type === 'event_msg'
+    && event.payload?.type === 'sub_agent_activity'
+    && event.payload?.kind === 'started'
+    && event.payload?.agent_thread_id) {
+    summary.subagentIds.add(event.payload.agent_thread_id);
+  }
+
+  const msg = event.type === 'response_item'
+    ? responseMessage(event.payload || {})
+    : event.type === 'event_msg'
+      ? eventMessage(event.payload || {})
+      : null;
+  if (msg?.role === 'user') {
+    summary.firstUser ||= msg.text;
+    summary.lastUser = msg.text;
+  } else if (msg?.role === 'assistant') {
+    summary.lastAssistant = msg.text;
+  }
+}
+
+function publicRolloutSummary(entry) {
+  const messages = [];
+  if (entry.summary.firstUser) messages.push({ role: 'user', text: entry.summary.firstUser });
+  if (entry.summary.lastUser && entry.summary.lastUser !== entry.summary.firstUser) {
+    messages.push({ role: 'user', text: entry.summary.lastUser });
+  }
+  if (entry.summary.lastAssistant) messages.push({ role: 'assistant', text: entry.summary.lastAssistant });
+  return {
+    path: entry.summary.path,
+    metadata: entry.summary.metadata,
+    runtime: entry.summary.runtime,
+    messages,
+    subagentCount: entry.summary.subagentIds.size,
+  };
+}
+
+/**
+ * Session lists only need a few rollout fields. Keep an incremental summary so
+ * the status feed does not reparse every JSONL file from byte zero each tick.
+ */
+function readRolloutSummary(thread) {
+  const file = rolloutPathFor(thread);
+  if (!file) return publicRolloutSummary({ summary: emptyRolloutSummary(null) });
+
+  let stat;
+  try { stat = fs.statSync(file); } catch {
+    rolloutSummaryCache.delete(file);
+    return publicRolloutSummary({ summary: emptyRolloutSummary(file) });
+  }
+
+  let entry = rolloutSummaryCache.get(file);
+  const fileIdentity = `${stat.dev}:${stat.ino}`;
+  if (!entry || entry.fileIdentity !== fileIdentity || stat.size < entry.offset) {
+    entry = {
+      fileIdentity,
+      offset: 0,
+      carry: Buffer.alloc(0),
+      summary: emptyRolloutSummary(file),
+    };
+  }
+  if (stat.size === entry.offset) {
+    rolloutSummaryCache.set(file, entry);
+    return publicRolloutSummary(entry);
+  }
+
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    while (entry.offset < stat.size) {
+      const length = Math.min(SUMMARY_READ_CHUNK_BYTES, stat.size - entry.offset);
+      const chunk = Buffer.allocUnsafe(length);
+      const bytesRead = fs.readSync(fd, chunk, 0, length, entry.offset);
+      if (!bytesRead) break;
+      entry.offset += bytesRead;
+      const data = entry.carry.length
+        ? Buffer.concat([entry.carry, chunk.subarray(0, bytesRead)])
+        : chunk.subarray(0, bytesRead);
+      let lineStart = 0;
+      for (let index = 0; index < data.length; index++) {
+        if (data[index] !== 0x0a) continue;
+        let line = data.subarray(lineStart, index);
+        if (line.length && line[line.length - 1] === 0x0d) line = line.subarray(0, -1);
+        applySummaryEvent(entry.summary, parseJsonLine(line.toString('utf8')));
+        lineStart = index + 1;
+      }
+      entry.carry = lineStart < data.length ? Buffer.from(data.subarray(lineStart)) : Buffer.alloc(0);
+    }
+  } catch {
+    // Keep the last complete summary; a later status tick will retry the tail.
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+
+  rolloutSummaryCache.set(file, entry);
+  return publicRolloutSummary(entry);
+}
+
 function readRollout(thread) {
   const file = rolloutPathFor(thread);
   const result = {
@@ -204,6 +331,11 @@ function readRollout(thread) {
     tokenEvents: [],
     metadata: {},
     runtime: {},
+    modelSwitches: [],
+    subagentEvents: [],
+    startingModel: null,
+    currentModel: null,
+    currentReasoningEffort: null,
     totalEvents: 0,
   };
   if (!file) return result;
@@ -224,6 +356,28 @@ function readRollout(thread) {
     }
     if (event.type === 'turn_context') {
       const payload = event.payload || {};
+      const model = payload.model || null;
+      const reasoningEffort = payload.effort
+        || payload.collaboration_mode?.settings?.reasoning_effort
+        || null;
+      if (model) {
+        if (!result.startingModel) {
+          result.startingModel = model;
+          result.currentModel = model;
+          result.currentReasoningEffort = reasoningEffort;
+        } else if (model !== result.currentModel || reasoningEffort !== result.currentReasoningEffort) {
+          result.modelSwitches.push({
+            fromModel: result.currentModel,
+            fromReasoningEffort: result.currentReasoningEffort,
+            model,
+            reasoningEffort,
+            timestamp: createdAt,
+            turnId: payload.turn_id || null,
+          });
+          result.currentModel = model;
+          result.currentReasoningEffort = reasoningEffort;
+        }
+      }
       result.runtime = {
         approvalMode: payload.approval_policy || result.runtime.approvalMode || null,
         sandboxPolicy: payload.sandbox_policy || result.runtime.sandboxPolicy || null,
@@ -248,6 +402,7 @@ function readRollout(thread) {
         result.tools.push({ name: 'tool_output', createdAt, arguments: null });
       }
     } else if (event.type === 'event_msg') {
+      if (event.payload?.type === 'sub_agent_activity') result.subagentEvents.push(event.payload);
       if (event.payload?.type === 'token_count') {
         result.tokenEvents.push({
           createdAt,
@@ -312,7 +467,7 @@ function isNativeHeadlessThread(thread) {
 }
 
 function normalizeThread(thread, _overrides = null, rollout = null) {
-  const parsed = rollout || readRollout(thread);
+  const parsed = rollout || readRolloutSummary(thread);
   const firstUser = thread.first_user_message || parsed.messages.find(m => m.role === 'user')?.text || null;
   const lastUser = [...parsed.messages].reverse().find(m => m.role === 'user')?.text || firstUser;
   const lastAssistant = [...parsed.messages].reverse().find(m => m.role === 'assistant')?.text || null;
@@ -337,7 +492,7 @@ function normalizeThread(thread, _overrides = null, rollout = null) {
     snippet: thread.preview || lastAssistant || firstUser || null,
     firstUserPrompt: firstUser,
     lastUserPrompt: lastUser,
-    hasSubagents: false,
+    hasSubagents: (parsed.subagentCount || parsed.subagentEvents?.filter(event => event.kind === 'started').length || 0) > 0,
     archived: !!thread.archived,
     lastActivityAt: thread.updated_at || thread.created_at || 0,
     lastActivityAgo: relativeTime(thread.updated_at || thread.created_at || 0),
@@ -518,9 +673,10 @@ function getSessionPreview(id) {
 
   return {
     ...session,
-    startingModel: session.model,
-    currentModel: session.model,
-    modelSwitches: [],
+    startingModel: rollout.startingModel || session.model,
+    currentModel: rollout.currentModel || session.model,
+    modelSwitches: rollout.modelSwitches,
+    reasoningEffort: rollout.currentReasoningEffort || session.reasoningEffort,
     permissionMode: access?.label || null,
     accessProfile: access,
     backendType: thread.source || 'local',
@@ -536,7 +692,10 @@ function getSessionPreview(id) {
     peakContextTokens: tokens.peakContextTokens,
     modelContextWindow: tokens.modelContextWindow,
     topTools: topTools(rollout),
-    subagentCount: 0,
+    subagentCount: new Set(rollout.subagentEvents
+      .filter(event => event.kind === 'started')
+      .map(event => event.agent_thread_id)
+      .filter(Boolean)).size,
     ...tokens,
     chatThread: rollout.turns.slice(-5),
     rolloutPath: rollout.path,
@@ -776,6 +935,13 @@ function stats(options = {}) {
   const threads = statsMode === 'triage' ? [] : nativeThreadsAll;
   const externalSessionsAll = transcriptHeadless.listSessions();
   const externalSessions = statsMode === 'codex' ? [] : externalSessionsAll;
+  const fingerprint = [
+    statsMode,
+    ...nativeThreadsAll.map(thread => `${thread.id}:${thread.updated_at || 0}:${thread.tokens_used || 0}`),
+    ...externalSessionsAll.map(session => `${session.id}:${session.lastActivityAt || 0}`),
+  ].join('|');
+  const cachedStats = statsResultCache.get(statsMode);
+  if (cachedStats?.fingerprint === fingerprint) return cachedStats.value;
   const rollouts = new Map();
   const getRollout = thread => {
     if (!rollouts.has(thread.id)) rollouts.set(thread.id, readRollout(thread));
@@ -838,6 +1004,8 @@ function stats(options = {}) {
   const tokensByHour = emptyTokenWindows();
   const tokenHeatmap = emptyTokenHeatmap();
   const recentPrompts = [];
+  let latestRateLimits = null;
+  let latestRateLimitAt = 0;
 
   for (const thread of nativeThreadsAll) {
     const rollout = getRollout(thread);
@@ -851,6 +1019,10 @@ function stats(options = {}) {
     const reasoningEffort = thread.reasoning_effort || rollout.metadata.reasoning_effort || 'unknown';
     const modelKey = `${model}::${reasoningEffort}`;
     const tokens = tokenTelemetry(rollout, thread);
+    if (tokens.rateLimits && (thread.updated_at || 0) >= latestRateLimitAt) {
+      latestRateLimits = tokens.rateLimits;
+      latestRateLimitAt = thread.updated_at || 0;
+    }
     const modelEntry = modelMap[modelKey] ||= {
       key: modelKey,
       model,
@@ -974,6 +1146,10 @@ function stats(options = {}) {
       totalTokens: preview.totalTokens || 0,
       calls: preview.calls || 1,
     };
+    if (preview.rateLimits && (session.lastActivityAt || 0) >= latestRateLimitAt) {
+      latestRateLimits = preview.rateLimits;
+      latestRateLimitAt = session.lastActivityAt || 0;
+    }
     addModelUsage(session.model || 'codex', session.reasoningEffort || 'unknown', tokens);
     if (tokens.totalTokens) addTokenActivity(tokensByHour, tokenHeatmap, session.lastActivityAt || session.createdAt || 0, tokens);
     if (session.firstUserPrompt) {
@@ -997,7 +1173,7 @@ function stats(options = {}) {
     };
   }
 
-  return {
+  const result = {
     activity: {
       h24: threads.filter(t => now - t.updated_at < 86400).length + externalSessions.filter(s => now - s.lastActivityAt < 86400).length,
       h48: threads.filter(t => now - t.updated_at < 172800).length + externalSessions.filter(s => now - s.lastActivityAt < 172800).length,
@@ -1032,7 +1208,14 @@ function stats(options = {}) {
     topSessionsByTokens: Object.values(sessionMap)
       .sort((a, b) => b.totalTokens - a.totalTokens)
       .slice(0, 10),
-    totalSubagents: 0,
+    totalSubagents: threads.reduce((sum, thread) => {
+      const rollout = getRollout(thread);
+      return sum + new Set(rollout.subagentEvents
+        .filter(event => event.kind === 'started')
+        .map(event => event.agent_thread_id)
+        .filter(Boolean)).size;
+    }, 0),
+    rateLimits: latestRateLimits,
     sources: {
       ...sourceBreakdown(threads),
       ...(externalSessions.length ? { 'transcript-pipeline': externalSessions.length } : {}),
@@ -1042,6 +1225,8 @@ function stats(options = {}) {
       transcriptHeadlessCount: externalSessionsAll.length,
     },
   };
+  statsResultCache.set(statsMode, { fingerprint, value: result });
+  return result;
 }
 
 function emptyTokenWindows() {

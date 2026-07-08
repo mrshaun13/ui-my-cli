@@ -215,6 +215,34 @@ function collect() {
   ]) {
     fileDescs[rel] = moduleOneliner(tryRead(rel));
   }
+  fileDescs['native/CodexNative/MainWindow.axaml.cs'] =
+    'Native Windows dashboard shell, persistent Codex tabs, direct Ubuntu shell tabs, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.';
+  fileDescs['native/CodexNative/MainWindow.axaml'] =
+    'Native dashboard layout with theme-aware control chrome and the in-app pixel C identity.';
+  fileDescs['native/CodexNative/Assets/codex-native-icon.png'] =
+    'Transparent generated pixel-art C used by the native dashboard header.';
+  fileDescs['native/CodexNative/Assets/codex-native-icon.ico'] =
+    'Multi-resolution Windows executable and title-bar icon bundle.';
+  fileDescs['native/CodexNative/DashboardApiClient.cs'] =
+    'Typed localhost client for sessions, repos, stats, context, configuration, rename, and archive metadata.';
+  fileDescs['native/CodexNative/DashboardTheme.cs'] =
+    'Native equivalents of the browser dashboard themes and text-size choices.';
+  fileDescs['native/CodexNative/DashboardServiceManager.cs'] =
+    'Starts the local ui-my-cli metadata service inside WSL2 when port 7575 is unavailable.';
+  fileDescs['native/CodexNative.Core/NativeLaunchBuilder.cs'] =
+    'Validated launch specifications for the loopback terminal bridge, direct Ubuntu shells, and private WSL2 service.';
+  fileDescs['native/CodexNative.WslHost/Program.cs'] =
+    'Console-subsystem ConPTY companion for persistent server-terminal bridging, direct Ubuntu shells, and private-service startup.';
+  fileDescs['native/CodexNative.WslHost/TerminalBridge.cs'] =
+    'Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent WSL2 PTYs.';
+  fileDescs['native/CodexNative/DashboardStatusFeed.cs'] =
+    'Reconnecting Codex status-feed client for push-driven native session updates and rekey events.';
+  fileDescs['native/CodexNative/AnalyticsControls.cs'] =
+    'Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition.';
+  fileDescs['native/CodexNative/SessionPreviewControl.cs'] =
+    'Rich native session summary with conversation history, context composition, model changes, and Codex subagent timelines.';
+  fileDescs['native/CodexNative/DashboardModels.cs'] =
+    'Typed Codex dashboard, context, analytics, conversation, rate-limit, and subagent payload models.';
 
   const statusJsdoc  = extractStatusJsdoc(sessionsSrc);
   const statusRows   = parseStatusTable(statusJsdoc);
@@ -287,6 +315,11 @@ function buildReadme(d) {
     .map(([k, v]) => `  ${k.padEnd(48)} ${v}`)
     .join('\n');
 
+  const nativeSection = Object.entries(d.fileDescs)
+    .filter(([k]) => k.startsWith('native/'))
+    .map(([k, v]) => `  ${k.padEnd(48)} ${v}`)
+    .join('\n');
+
   const statusTable = statusRows.length
     ? mdTable(
         ['Status', 'Meaning'],
@@ -320,6 +353,27 @@ npm start          # start the dashboard server
 \`\`\`
 
 Open **http://localhost:7575** in your browser.
+
+### Native Windows frontend (WSL2)
+
+The native frontend uses a real Windows ConPTY terminal view attached through
+a small console bridge to persistent WSL2 PTYs owned by the dashboard service.
+Its Avalonia shell adds push-driven sessions, multi-project and archived search,
+rich previews, interactive cohort analytics, latest-prompt navigation, context
+composition, Codex subagent timelines, desktop shortcuts, provider/quota health,
+styles, and text resizing.
+Closing the native UI leaves Codex running; reopening it reattaches with recent
+scrollback. A private loopback service is started automatically when needed.
+
+\`\`\`bash
+npm run native:test
+npm run native:build
+npm run native:publish
+\`\`\`
+
+The self-contained Windows executable is published under
+\`native/artifacts/win-x64/\`. See \`native/README.md\` for prerequisites and
+the current milestone.
 
 ### Development Mode (hot reload)
 
@@ -392,6 +446,9 @@ ${serverSection}
 
 client/src/
 ${clientSection}
+
+native/
+${nativeSection}
 \`\`\`
 
 ### WebSocket Protocol
@@ -541,6 +598,13 @@ function buildArchitectureDoc(d) {
       .map(([k, v]) => [`\`${k}\``, v])
   );
 
+  const nativeFileTable = mdTable(
+    ['File', 'Description'],
+    Object.entries(fileDescs)
+      .filter(([k]) => k.startsWith('native/'))
+      .map(([k, v]) => [`\`${k}\``, v])
+  );
+
   const serverDepTable = mdTable(
     ['Package', 'Version'],
     Object.entries(pkg.dependencies || {}).map(([k, v]) => [`\`${k}\``, `\`${v}\``])
@@ -578,6 +642,10 @@ ${serverFileTable}
 ## Client Files
 
 ${clientFileTable}
+
+## Native Windows Frontend Files
+
+${nativeFileTable}
 
 ## Server Dependencies
 
