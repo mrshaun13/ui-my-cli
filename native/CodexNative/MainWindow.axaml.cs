@@ -24,6 +24,7 @@ public sealed partial class MainWindow : Window
     private readonly NativeSettingsStore _settingsStore = new();
     private readonly DashboardApiClient _api = new();
     private readonly DashboardServiceManager _serviceManager = new();
+    private readonly NativePlatformProfile _platform = NativePlatformProfile.Current;
     private readonly Dictionary<string, SessionTabState> _openTabs = [];
     private readonly Dictionary<string, TabItem> _previewTabs = [];
     private readonly DispatcherTimer _refreshTimer;
@@ -65,6 +66,11 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        TerminalPathText.Text = _platform.UsesWsl
+            ? "Terminal path: native view → persistent WSL2 PTY → Codex"
+            : $"Terminal path: native view → persistent {_platform.DisplayName} PTY → Codex";
+        ToolTip.SetTip(NewSessionButton, $"New Codex or {_platform.LocalShellLabel} session (Ctrl+Shift+N)");
+        ToolTip.SetTip(CompactNewSessionButton, $"New Codex or {_platform.LocalShellLabel} session (Ctrl+Shift+N)");
         AutomationProperties.SetName(DashboardTab, "Dashboard overview");
         CompactSessionsList.ContainerPrepared += OnCompactSessionContainerPrepared;
         _uiReady = true;
@@ -234,9 +240,14 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var hostExecutable = Path.Combine(AppContext.BaseDirectory, "CodexNative.WslHost.exe");
+            var hostExecutable = Path.Combine(AppContext.BaseDirectory, _platform.TerminalHostFileName);
             _api.UsePrivateService();
-            _serviceManager.EnsureStarted(hostExecutable, _settings.Distribution, _settings.DashboardWorkingDirectory);
+            _serviceManager.EnsureStarted(
+                _platform.Platform,
+                hostExecutable,
+                _settings.Distribution,
+                _settings.DashboardWorkingDirectory,
+                Environment.GetEnvironmentVariable("NODE_BIN"));
             for (var attempt = 0; attempt < 20; attempt++)
             {
                 await Task.Delay(500);
@@ -384,7 +395,7 @@ public sealed partial class MainWindow : Window
             RenderStats(_stats);
             RenderProviderStatus(_dashboardStatus);
             if (sessionsChanged) UpdateOpenTabStatuses();
-            SetStatus($"Live · {_sessions.Count} sessions · persistent WSL2 terminals", RunningBrush);
+            SetStatus($"Live · {_sessions.Count} sessions · persistent {_platform.DisplayName} terminals", RunningBrush);
         }
         catch (Exception ex)
         {
@@ -1119,15 +1130,15 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task OpenUbuntuSessionAsync(string workingDirectory)
+    private async Task OpenLocalShellSessionAsync(string workingDirectory)
     {
         try
         {
             var key = $"ubuntu:{Guid.NewGuid():N}";
             var project = workingDirectory.TrimEnd('/').Split('/').LastOrDefault() ?? workingDirectory;
-            var title = $"{_settings.Distribution} · {project}";
+            var title = $"{_platform.LocalShellLabel} · {project}";
             var state = CreateTerminalTab(
-                key, title, workingDirectory, null, TerminalSessionKind.Ubuntu);
+                key, title, workingDirectory, null, TerminalSessionKind.LocalShell);
             _openTabs.Add(key, state);
             WorkspaceTabs.Items.Add(state.Tab);
             state.IsAttached = true;
@@ -1137,7 +1148,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus($"Ubuntu session failed: {ex.Message}", ErrorBrush);
+            SetStatus($"{_platform.LocalShellLabel} session failed: {ex.Message}", ErrorBrush);
         }
     }
 
@@ -1148,7 +1159,7 @@ public sealed partial class MainWindow : Window
         DashboardSession? session,
         TerminalSessionKind kind)
     {
-        var isUbuntu = kind == TerminalSessionKind.Ubuntu;
+        var isLocalShell = kind == TerminalSessionKind.LocalShell;
         var textSize = DashboardTextSize.Find(_settings.TextSizeId);
         var tabFontSize = TabHeaderFontSize(textSize);
         var terminal = new TerminalControl
@@ -1235,8 +1246,8 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(restoreOverlay, "Restoring Codex conversation");
         AutomationProperties.SetLiveSetting(restoreOverlay, AutomationLiveSetting.Polite);
 
-        var contextText = MakeDetailText(isUbuntu
-            ? $"Interactive login shell in {_settings.Distribution}."
+        var contextText = MakeDetailText(isLocalShell
+            ? $"Interactive login shell on {_platform.DisplayName}."
             : "Context data will load after the terminal opens.");
         var contextBar = new ProgressBar { Minimum = 0, Maximum = 100, Height = 7, Margin = new Thickness(0, 5, 0, 7) };
         var contextDonut = new ContextDonutControl
@@ -1250,12 +1261,12 @@ public sealed partial class MainWindow : Window
                 StartingBrush, ErrorBrush, Brush.Parse("#334155")
             ],
         };
-        contextBar.IsVisible = !isUbuntu;
-        contextDonut.IsVisible = !isUbuntu;
-        var configText = MakeDetailText(isUbuntu
+        contextBar.IsVisible = !isLocalShell;
+        contextDonut.IsVisible = !isLocalShell;
+        var configText = MakeDetailText(isLocalShell
             ? workingDirectory
             : session is null ? "New session configuration is managed by Codex." : "Loading model, permissions, rules, and skills…");
-        var promptText = MakeDetailText(isUbuntu
+        var promptText = MakeDetailText(isLocalShell
             ? "Run Linux commands directly. Type exit or close the tab to end this shell."
             : session?.LastUserPrompt ?? "The terminal is ready for a new prompt.");
 
@@ -1272,7 +1283,7 @@ public sealed partial class MainWindow : Window
             (TextBlock)configColumn.Children[0],
             (TextBlock)promptColumn.Children[0],
         };
-        if (isUbuntu)
+        if (isLocalShell)
         {
             detailHeadings[0].Text = "SHELL";
             detailHeadings[1].Text = "WORKING DIRECTORY";
@@ -1284,8 +1295,8 @@ public sealed partial class MainWindow : Window
         var archiveButton = new Button { Content = "Archive", Padding = new Thickness(10, 4), IsVisible = session is not null };
         var summaryButton = new Button { Content = "Summary", Padding = new Thickness(10, 4), IsVisible = session is not null };
         var stopButton = new Button { Content = "Stop", Padding = new Thickness(10, 4) };
-        ToolTip.SetTip(stopButton, isUbuntu
-            ? "Stop the Ubuntu shell and remove this tab"
+        ToolTip.SetTip(stopButton, isLocalShell
+            ? $"Stop the {_platform.LocalShellLabel} and remove this tab"
             : "Stop the Codex process and remove this tab");
         var actions = new WrapPanel
         {
@@ -1577,26 +1588,28 @@ public sealed partial class MainWindow : Window
         }
         try
         {
-            var hostExecutable = Path.Combine(AppContext.BaseDirectory, "CodexNative.WslHost.exe");
+            var hostExecutable = Path.Combine(AppContext.BaseDirectory, _platform.TerminalHostFileName);
             var spec = state.Kind switch
             {
                 TerminalSessionKind.Codex => NativeLaunchBuilder.ServerTerminal(
                     hostExecutable,
                     _api.TerminalWebSocketUri(state.Key).AbsoluteUri),
-                TerminalSessionKind.Ubuntu => NativeLaunchBuilder.UbuntuShell(
+                TerminalSessionKind.LocalShell => NativeLaunchBuilder.LocalShell(
+                    _platform.Platform,
                     hostExecutable,
                     _settings.Distribution,
-                    state.WorkingDirectory),
+                    state.WorkingDirectory,
+                    Environment.GetEnvironmentVariable("SHELL")),
                 _ => throw new ArgumentOutOfRangeException(nameof(state)),
             };
             state.StatusGlyph.Foreground = StartingBrush;
             state.StopButton.Content = "Stop";
             SetStatus(
-                state.Kind == TerminalSessionKind.Ubuntu
-                    ? $"Starting {_settings.Distribution} login shell in {state.WorkingDirectory}…"
-                    : $"Attaching {state.TitleBlock.Text} to persistent WSL2 terminal…",
+                state.Kind == TerminalSessionKind.LocalShell
+                    ? $"Starting {_platform.LocalShellLabel} in {state.WorkingDirectory}…"
+                    : $"Attaching {state.TitleBlock.Text} to persistent {_platform.DisplayName} terminal…",
                 StartingBrush);
-            await state.Terminal.LaunchProcess(null, spec.Process, spec.Arguments.ToArray());
+            await state.Terminal.LaunchProcess(spec.WorkingDirectory, spec.Process, spec.Arguments.ToArray());
             state.IsLaunched = true;
             state.IsRunning = true;
             state.ReconnectAttempt = 0;
@@ -1604,8 +1617,8 @@ public sealed partial class MainWindow : Window
             state.StatusGlyph.Foreground = RunningBrush;
             state.Terminal.Focus();
             SetStatus(
-                state.Kind == TerminalSessionKind.Ubuntu
-                    ? $"{_settings.Distribution} shell ready · host PID {state.Terminal.Pid} · {state.WorkingDirectory}"
+                state.Kind == TerminalSessionKind.LocalShell
+                    ? $"{_platform.LocalShellLabel} ready · host PID {state.Terminal.Pid} · {state.WorkingDirectory}"
                     : reconnecting
                         ? $"Reconnected {state.TitleBlock.Text} · bridge PID {state.Terminal.Pid}"
                         : $"Connected · bridge PID {state.Terminal.Pid} · server PTY survives app exit",
@@ -1656,7 +1669,7 @@ public sealed partial class MainWindow : Window
 
     private async Task DetachTabAsync(SessionTabState state)
     {
-        if (state.Kind == TerminalSessionKind.Ubuntu)
+        if (state.Kind == TerminalSessionKind.LocalShell)
         {
             await StopAndRemoveTabAsync(state);
             return;
@@ -1666,7 +1679,7 @@ public sealed partial class MainWindow : Window
         WorkspaceTabs.Items.Remove(state.Tab);
         state.IsAttached = false;
         WorkspaceTabs.SelectedItem = DashboardTab;
-        SetStatus($"Detached {state.TitleBlock.Text} · persistent WSL2 process continues", RunningBrush);
+        SetStatus($"Detached {state.TitleBlock.Text} · persistent {_platform.DisplayName} process continues", RunningBrush);
         await SaveWorkspaceAsync();
     }
 
@@ -1892,7 +1905,7 @@ public sealed partial class MainWindow : Window
             state.TitleBlock.Text = state.RenameBox.Text?.Trim() ?? state.TitleBlock.Text;
             AutomationProperties.SetName(
                 state.Tab,
-                state.TitleBlock.Text ?? (state.Kind == TerminalSessionKind.Ubuntu ? "Ubuntu session" : "New Codex session"));
+                state.TitleBlock.Text ?? (state.Kind == TerminalSessionKind.LocalShell ? _platform.LocalShellLabel : "New Codex session"));
             return;
         }
         var title = state.RenameBox.Text?.Trim();
@@ -1955,7 +1968,7 @@ public sealed partial class MainWindow : Window
         {
             state.IsRunning = false;
             state.IsLaunched = false;
-            if (state.Kind == TerminalSessionKind.Ubuntu)
+            if (state.Kind == TerminalSessionKind.LocalShell)
             {
                 state.StatusGlyph.Foreground = args.ExitCode == 0 ? StartingBrush : ErrorBrush;
                 if (_shutdownConfirmed || state.SuppressReconnect || !state.IsAttached) return;
@@ -2169,7 +2182,7 @@ public sealed partial class MainWindow : Window
         var search = new TextBox
         {
             Width = 380,
-            PlaceholderText = "Filter projects or WSL paths…",
+            PlaceholderText = "Filter projects or paths…",
         };
         AutomationProperties.SetName(search, "Filter projects for the new session");
         var options = new StackPanel { Spacing = 4 };
@@ -2200,14 +2213,14 @@ public sealed partial class MainWindow : Window
                 };
                 AutomationProperties.SetName(
                     button,
-                    selectedKind == TerminalSessionKind.Ubuntu
-                        ? $"Start new Ubuntu session in {label}"
+                    selectedKind == TerminalSessionKind.LocalShell
+                        ? $"Start new {_platform.LocalShellLabel} session in {label}"
                         : $"Start new Codex session in {label}");
                 button.Click += async (_, _) =>
                 {
                     _newSessionFlyout?.Hide();
-                    if (selectedKind == TerminalSessionKind.Ubuntu)
-                        await OpenUbuntuSessionAsync(repo.WorkingDir);
+                    if (selectedKind == TerminalSessionKind.LocalShell)
+                        await OpenLocalShellSessionAsync(repo.WorkingDir);
                     else
                         await OpenNewSessionAsync(repo.WorkingDir);
                 };
@@ -2223,15 +2236,15 @@ public sealed partial class MainWindow : Window
             Padding = new Thickness(12, 8),
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
-        var ubuntuChoice = new Button
+        var localShellChoice = new Button
         {
-            Content = "Ubuntu session",
+            Content = _platform.LocalShellLabel,
             Padding = new Thickness(12, 8),
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
-        Grid.SetColumn(ubuntuChoice, 1);
+        Grid.SetColumn(localShellChoice, 1);
         AutomationProperties.SetName(codexChoice, "Choose Codex session");
-        AutomationProperties.SetName(ubuntuChoice, "Choose Ubuntu shell session");
+        AutomationProperties.SetName(localShellChoice, $"Choose {_platform.LocalShellLabel} session");
         var choiceHelp = new TextBlock
         {
             Foreground = ResourceBrush("SecondaryBrush"),
@@ -2243,13 +2256,13 @@ public sealed partial class MainWindow : Window
             var codexSelected = selectedKind == TerminalSessionKind.Codex;
             codexChoice.Background = ResourceBrush(codexSelected ? "HoverBrush" : "ElevatedBrush");
             codexChoice.BorderBrush = ResourceBrush(codexSelected ? "AccentBrush" : "BorderBrush");
-            ubuntuChoice.Background = ResourceBrush(codexSelected ? "ElevatedBrush" : "HoverBrush");
-            ubuntuChoice.BorderBrush = ResourceBrush(codexSelected ? "BorderBrush" : "AccentBrush");
+            localShellChoice.Background = ResourceBrush(codexSelected ? "ElevatedBrush" : "HoverBrush");
+            localShellChoice.BorderBrush = ResourceBrush(codexSelected ? "BorderBrush" : "AccentBrush");
             AutomationProperties.SetItemStatus(codexChoice, codexSelected ? "Selected" : "Not selected");
-            AutomationProperties.SetItemStatus(ubuntuChoice, codexSelected ? "Not selected" : "Selected");
+            AutomationProperties.SetItemStatus(localShellChoice, codexSelected ? "Not selected" : "Selected");
             choiceHelp.Text = codexSelected
                 ? "Start or register a persistent Codex CLI session in the selected project."
-                : $"Start a direct {_settings.Distribution} login shell in the selected project. Closing its tab ends the shell.";
+                : $"Start a direct {_platform.LocalShellLabel} in the selected project. Closing its tab ends the shell.";
         }
         codexChoice.Click += (_, _) =>
         {
@@ -2257,9 +2270,9 @@ public sealed partial class MainWindow : Window
             RenderChoice();
             RenderOptions();
         };
-        ubuntuChoice.Click += (_, _) =>
+        localShellChoice.Click += (_, _) =>
         {
-            selectedKind = TerminalSessionKind.Ubuntu;
+            selectedKind = TerminalSessionKind.LocalShell;
             RenderChoice();
             RenderOptions();
         };
@@ -2270,7 +2283,7 @@ public sealed partial class MainWindow : Window
         {
             ColumnDefinitions = new ColumnDefinitions("*,*"),
             ColumnSpacing = 8,
-            Children = { codexChoice, ubuntuChoice },
+            Children = { codexChoice, localShellChoice },
         };
         var content = new StackPanel
         {
@@ -2974,7 +2987,7 @@ public sealed partial class MainWindow : Window
     private enum TerminalSessionKind
     {
         Codex,
-        Ubuntu,
+        LocalShell,
     }
 
     private sealed class SessionTabState(

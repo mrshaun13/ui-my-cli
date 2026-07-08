@@ -85,6 +85,7 @@ public sealed class StatsFilterInfo
 public sealed class DashboardStatus
 {
     public bool Ok { get; set; }
+    public int ApiVersion { get; set; }
     public int ActivePtys { get; set; }
     public long Uptime { get; set; }
     public List<ProviderStatus> Providers { get; set; } = [];

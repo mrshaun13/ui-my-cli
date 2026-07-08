@@ -1,12 +1,12 @@
 # Agent Dashboard
 
-A browser dashboard for managing multiple local headless-agent sessions across Codex and Devin, plus a browser-free Windows frontend for Codex in WSL2. Both surfaces share persistent server PTYs, live status, analytics, search, and session metadata; the native surface renders terminals through Windows ConPTY and can reattach after the UI exits.
+A browser dashboard for managing multiple local headless-agent sessions across Codex and Devin, plus a browser-free native frontend for Windows and macOS. Both surfaces share persistent server PTYs, live status, analytics, search, and session metadata; the native surface renders terminals through an Avalonia PTY view and can reattach after the UI exits.
 
 ## Features
 
 - **Live status badges** — ⚡ Question / ⚙ Running / ✓ Finished / · Idle, updated every 3 seconds
 - **Provider switch** — top-level Codex / Devin toggle; sessions, repo filters, tabs, stats, archives, and terminals are scoped to the selected provider
-- **Native Windows frontend** — standalone Avalonia dashboard with push updates, multi-project and archive search, actionable rich previews, responsive layouts, theme-aware control chrome, a custom pixel-art app identity, a rich compact session rail, a searchable Codex-or-Ubuntu WSL project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics, latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent Codex terminal reattachment through a Windows ConPTY view
+- **Native Windows and macOS frontend** — standalone Avalonia dashboard with push updates, multi-project and archive search, actionable rich previews, responsive layouts, theme-aware control chrome, a custom pixel-art app identity, a rich compact session rail, a searchable Codex-or-local-shell project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics, latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent Codex terminal reattachment
 - **Real terminals** — xterm.js + node-pty: identical to running the selected provider CLI in your shell (`codex resume <id>` or `devin --resume <id>`)
 - **Click to switch** — click any agent in the sidebar to attach its live terminal; switching is instant with scrollback preserved
 - **New session** — floating "+" button in the sidebar lets you start a new Codex or Devin session in any previously-used repo; the terminal opens automatically
@@ -14,7 +14,7 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - **Inline rename** — double-click any session title to rename it (native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)
 - **Needs-your-input filter** — one click to show only agents waiting for a reply
 - **Repo filter pills** — filter sessions by project; selection persists across reloads
-- **Persistent native terminals** — Codex PTYs stay in WSL2 when the Windows UI closes; reopening the native app reattaches with buffered scrollback
+- **Persistent native terminals** — Codex PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
 - **Archive / restore** — hide sessions from the list without deleting them; restore from the collapsible drawer at the bottom of the sidebar
 - **Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), token usage, tool call breakdown, model distribution, and Codex stats cohort switching, shown when no session is selected
@@ -27,7 +27,7 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 ### Prerequisites
 
 - **Node.js 18+** — `node --version` to check
-- **.NET 10 SDK** — optional; required only to build or publish the native Windows frontend
+- **.NET 10 SDK** — optional; required only to build or publish the native Windows/macOS frontend
 - **Codex CLI installed and run at least once** — creates the Codex state database
 - **Devin CLI installed and run at least once** — optional, required only for the Devin dashboard/provider
 - **Native build tools** for node-pty compilation:
@@ -47,10 +47,11 @@ npm start          # start the dashboard server
 
 Open **http://localhost:7575** in your browser.
 
-### Native Windows frontend (WSL2)
+### Native Windows and macOS frontend
 
-The native frontend uses a real Windows ConPTY terminal view attached through
-a small console bridge to persistent WSL2 PTYs owned by the dashboard service.
+The native frontend uses a real operating-system PTY terminal view attached
+through a small console bridge to persistent PTYs owned by the dashboard service.
+Windows runs the service and Codex in WSL2; macOS runs both locally.
 Its Avalonia shell adds push-driven sessions, multi-project and archived search,
 rich previews, interactive cohort analytics, latest-prompt navigation, context
 composition, Codex subagent timelines, desktop shortcuts, provider/quota health,
@@ -64,9 +65,9 @@ npm run native:build
 npm run native:publish
 ```
 
-The self-contained Windows executable is published under
-`native/artifacts/win-x64/`. See `native/README.md` for prerequisites and
-the current milestone.
+Self-contained artifacts are published under `native/artifacts/win-x64/`,
+`native/artifacts/osx-x64/`, and `native/artifacts/osx-arm64/`. See
+`native/README.md` for platform prerequisites and packaging details.
 
 ### Development Mode (hot reload)
 
@@ -178,16 +179,19 @@ client/src/
   client/src/hooks/useStatusFeed.js                useStatusFeed — subscribes to the selected provider's status WebSocket
 
 native/
-  native/CodexNative/MainWindow.axaml.cs           Native Windows dashboard shell, persistent Codex tabs, direct Ubuntu shell tabs, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.
+  native/CodexNative/MainWindow.axaml.cs           Cross-platform native dashboard shell, persistent Codex tabs, direct local shell tabs, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.
   native/CodexNative/MainWindow.axaml              Native dashboard layout with theme-aware control chrome and the in-app pixel C identity.
   native/CodexNative/Assets/codex-native-icon.png  Transparent generated pixel-art C used by the native dashboard header.
   native/CodexNative/Assets/codex-native-icon.ico  Multi-resolution Windows executable and title-bar icon bundle.
   native/CodexNative/DashboardApiClient.cs         Typed localhost client for sessions, repos, stats, context, configuration, rename, and archive metadata.
   native/CodexNative/DashboardTheme.cs             Native equivalents of the browser dashboard themes and text-size choices.
-  native/CodexNative/DashboardServiceManager.cs    Starts the local ui-my-cli metadata service inside WSL2 when port 7575 is unavailable.
-  native/CodexNative.Core/NativeLaunchBuilder.cs   Validated launch specifications for the loopback terminal bridge, direct Ubuntu shells, and private WSL2 service.
-  native/CodexNative.WslHost/Program.cs            Console-subsystem ConPTY companion for persistent server-terminal bridging, direct Ubuntu shells, and private-service startup.
-  native/CodexNative.WslHost/TerminalBridge.cs     Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent WSL2 PTYs.
+  native/CodexNative/DashboardServiceManager.cs    Starts the local ui-my-cli service in WSL2 or macOS when port 7575 is unavailable.
+  native/CodexNative.Core/NativeLaunchBuilder.cs   Validated launch specifications for the loopback terminal bridge, local shells, and private Windows/macOS service.
+  native/CodexNative.TerminalHost/Program.cs       Cross-platform console companion for persistent server-terminal bridging and Windows WSL startup.
+  native/CodexNative.TerminalHost/TerminalBridge.cs Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent server PTYs.
+  native/CodexNative.Core/NativePlatform.cs        Explicit Windows, macOS, and Linux native runtime profile and artifact naming.
+  native/CodexNative.Core/ExecutableResolver.cs    Validated Node.js and login-shell discovery without user-controlled shell interpolation.
+  native/CodexNative.Core/DashboardRepositoryLocator.cs Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths.
   native/CodexNative/DashboardStatusFeed.cs        Reconnecting Codex status-feed client for push-driven native session updates and rekey events.
   native/CodexNative/AnalyticsControls.cs          Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition.
   native/CodexNative/SessionPreviewControl.cs      Rich native session summary with conversation history, context composition, model changes, and Codex subagent timelines.

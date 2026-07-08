@@ -286,7 +286,7 @@
               <TextBlock x:Name="SessionCountText" Text="Connecting…" FontSize="11"
                          Foreground="{DynamicResource SecondaryBrush}" />
             </StackPanel>
-            <Button Grid.Column="1" x:Name="NewSessionButton" Content="＋" ToolTip.Tip="New Codex or Ubuntu session (Ctrl+Shift+N)" Click="OnNewSessionClicked"
+            <Button Grid.Column="1" x:Name="NewSessionButton" Content="＋" ToolTip.Tip="New Codex or local shell session (Ctrl+Shift+N)" Click="OnNewSessionClicked"
                     FontSize="18" Padding="8,2" />
           </Grid>
 
@@ -415,7 +415,7 @@
               BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
         <Grid RowDefinitions="Auto,*,Auto">
           <Button Grid.Row="0" x:Name="CompactNewSessionButton" Content="＋" FontSize="18" Padding="5,3" Margin="6,8,6,6"
-                  ToolTip.Tip="New Codex or Ubuntu session (Ctrl+Shift+N)" Click="OnNewSessionClicked" />
+                  ToolTip.Tip="New Codex or local shell session (Ctrl+Shift+N)" Click="OnNewSessionClicked" />
           <ListBox Grid.Row="1" x:Name="CompactSessionsList" SelectionChanged="OnCompactSessionSelected"
                    Background="Transparent" BorderThickness="0" Padding="3,0">
             <ListBox.ItemTemplate>
@@ -651,7 +651,7 @@
                  VerticalAlignment="Center" Margin="0,0,8,0" />
         <TextBlock Grid.Column="1" x:Name="StatusText" Text="Starting native dashboard…"
                    Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center" />
-        <TextBlock Grid.Column="2" x:Name="TerminalPathText" Text="Terminal path: native view → persistent WSL2 PTY → Codex"
+        <TextBlock Grid.Column="2" x:Name="TerminalPathText" Text="Terminal path: native view → persistent PTY → Codex"
                    Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" />
       </Grid>
     </Border>

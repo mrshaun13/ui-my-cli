@@ -7,7 +7,7 @@ with an appropriate HTTP status code.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/api/status` | Server health check — returns `ok`, default provider, provider availability, active PTY count, uptime seconds |
+| `GET` | `/api/status` | Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds |
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
 | `GET` | `/api/:providerId/terminals` |  |
 | `GET` | `/api/terminals` |  |

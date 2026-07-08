@@ -1,89 +1,84 @@
-# Codex Native for Windows
+# Codex Native for Windows and macOS
 
-Codex Native is a browser-free Windows frontend for the Codex CLI installed in
-WSL2. The interactive path is:
+Codex Native is a browser-free Avalonia frontend for the local Codex CLI. It
+keeps the dashboard service as the authoritative owner of persistent PTYs, so
+the browser and desktop clients can reconnect to the same live sessions.
 
 ```text
-Avalonia terminal control -> Windows ConPTY -> terminal bridge -> WebSocket -> persistent WSL2 PTY -> Codex CLI
-Avalonia terminal control -> Windows ConPTY -> WSL2 -> Ubuntu login shell
+Windows: Avalonia PTY -> terminal host -> WebSocket -> persistent WSL2 PTY -> Codex
+macOS:   Avalonia PTY -> terminal host -> WebSocket -> persistent local PTY -> Codex
+shell:   Avalonia PTY -> validated project path -> platform login shell
 ```
 
-No React, browser, or xterm.js is involved. Project files, Codex state, and the
-PTY remain in WSL2. A small console bridge connects the native ConPTY view to
-the same persistent, buffered server PTY used by the web dashboard. Closing the
-native UI disconnects the view without killing Codex; reopening it reattaches
-and replays recent scrollback.
+Closing the native UI detaches its terminal views without killing server-owned
+Codex processes. Direct local-shell tabs are intentionally UI-owned and end
+when their tab or the app closes.
 
 ## Features
 
-- Conversation-aware search across active and optionally archived sessions.
-- Multi-project filter chips plus waiting-for-input, headless, and age filters.
-- Multiple simultaneous session tabs backed by persistent WSL2 PTYs.
-- Detachable tabs, explicit Stop actions, and terminal reattachment after the
-  native application exits.
-- Automatic terminal-bridge reconnect with bounded backoff and a manual
-  "Retry now" action when the WSL2 view disconnects unexpectedly.
-- New-session chooser with Codex and Ubuntu-shell modes plus searchable known
-  WSL projects and paths. Ubuntu tabs open a direct login shell in the selected
-  project and close the shell when the tab or application closes.
-- Automatic reconciliation of new terminals with their saved Codex session ID.
-- Per-session context usage, model, reasoning, permissions, rules, active
-  skills, latest prompt, rename, and archive controls.
-- Native session summaries with complete conversation history, copy actions,
-  an interactive context-composition ring, tool usage, model changes, and real
-  Codex subagent lifecycle timelines with task/result details.
-- Actionable summaries with rename, confirmed archive, restore, resume,
-  incremental history loading, loaded-history search, detailed rules/skills,
-  and expanded token/context telemetry.
-- Headless-run summaries plus archived-session browsing and restore.
-- Push-driven session updates over the dashboard status feed, with polling as a
-  health fallback.
-- Animated, hoverable and keyboard-explorable workspace analytics for hourly
-  token activity, weekday/hour heatmaps, toggleable project trends, all six
-  token categories, tools, environment, and three session leaderboards.
-- Clickable latest-prompt navigation and analytics cohort switching across
-  combined, transcript-triage-only, and native-Codex-only data.
-- Codex provider health, persistent PTY count, CLI version, rate-limit windows,
-  reset times, plan, and credit status.
-- Persistent tabs, active session, sidebar width/collapse state, project,
-  search, multi-project, waiting, headless, archive, analytics-window, and
-  age-filter preferences.
-- A compact collapsed session rail that preserves status visibility and quick
-  switching without consuming the full sidebar width, with rich native
-  tooltips for project, activity time, status, and latest prompt.
-- Responsive dashboard, terminal-inspector, and session-preview layouts that
-  reflow cards and actions as the native window narrows.
-- The same ten dashboard styles and four text/terminal size options as the
-  browser UI, with theme-owned input, dropdown, button, checkbox, scrollbar,
-  focus, hover, drag, and selected-state chrome instead of Fluent's default
-  white outlines. Scrollbars use one stable full-size geometry so their visual
-  state and drag position cannot diverge.
-- A custom transparent pixel-art C identity used by the Windows executable,
-  title bar, and in-app header.
-- Reuses an existing ui-my-cli metadata service on port 7575 so the browser and
-  native clients do not duplicate Codex-state scans. If 7575 is unavailable,
-  it starts a private fallback service inside WSL2 on port 7577.
-- Remembers the WSL distribution, working directory, style, and text size in
-  `%LOCALAPPDATA%\CodexNative\settings.json`.
-- Desktop shortcuts: `Ctrl+K` search, `Ctrl+Shift+N` new Codex or Ubuntu
-  session, `Ctrl+R` refresh, `Ctrl+W` detach a Codex tab or close an Ubuntu
-  tab, and `Esc` return home.
+- Push-driven Codex sessions with hot/cold grouping, project filters, archive
+  search, attention filters, and buffered terminal reattachment.
+- Multiple simultaneous terminal tabs with reconnect status and manual retry.
+- New-session chooser for persistent Codex sessions and a platform login shell.
+- Rich session previews for conversation, context composition, model changes,
+  configuration, and delegated subagents.
+- Cohort analytics, quota/provider status, latest-prompt navigation, ten themes,
+  four text sizes, responsive layouts, keyboard shortcuts, and saved workspace
+  state.
+- Reuses a compatible service on `127.0.0.1:7575`; if none exists, starts a
+  private service on `127.0.0.1:7577` without exposing it to the network.
 
-## Build
+## Prerequisites
+
+All platforms need Codex CLI, Node.js 18 or newer, an installed ui-my-cli
+checkout with dependencies, and the .NET 10 SDK only when building locally.
+
+Windows additionally needs WSL2 and the configured Ubuntu distribution. The
+desktop process delegates the service and shell launch to WSL, while persistent
+Codex PTYs remain server-owned there.
+
+macOS needs Command Line Tools (`xcode-select --install`) so `node-pty` can be
+installed in the checkout. Apple Silicon and Intel packages are separate. The
+app looks for Node through `NODE_BIN`, `PATH`, Homebrew's standard paths, and
+installed nvm versions. It finds a checkout above the app artifact or under
+common home-directory locations. If the checkout is elsewhere, set
+`UI_MY_CLI_HOME` before first launch or set
+`DashboardWorkingDirectory` in the app settings file under the platform's local
+application-data `CodexNative` directory.
+
+## Build and package
 
 Install the .NET 10 SDK, then run from the repository root:
 
 ```bash
 npm run native:test
 npm run native:build
-npm run native:publish
+npm run native:publish:win
+npm run native:publish:mac
 ```
 
-The self-contained Windows build is written to `native/artifacts/win-x64/`.
-Copy that directory to Windows and run `CodexNative.exe`; keep
-`CodexNative.WslHost.exe` beside it. The target machine
-must have WSL2, the configured Ubuntu distribution, and Codex installed inside
-that distribution.
+Artifacts are written to:
 
-The app defaults to the `Ubuntu` distribution, a WSL home inferred from the
-Windows account name (`/home/<user>`), and the ui-my-cli checkout beneath it.
+- `native/artifacts/win-x64/`
+- `native/artifacts/osx-x64/CodexNative.app`
+- `native/artifacts/osx-arm64/CodexNative.app`
+
+The macOS packages are real `.app` bundles with a native Mach-O app host and
+terminal host. Cross-publishing verifies their structure from Linux, but final
+release packages still require macOS launch testing, code signing, and Apple
+notarization before distribution outside a development machine.
+
+## Run
+
+On Windows, keep `CodexNative.TerminalHost.exe` beside `CodexNative.exe` and run
+`CodexNative.exe`.
+
+On macOS, copy the matching `CodexNative.app` to `Applications` or run it from
+the artifact directory. An unsigned local development build may require an
+explicit Open action in Finder. Do not remove quarantine from downloaded
+release builds as a substitute for signing and notarization.
+
+Desktop shortcuts are `Ctrl+K` search, `Ctrl+Shift+N` new Codex or local-shell
+session, `Ctrl+R` refresh, `Ctrl+W` detach/close the selected tab, and `Esc`
+return home. On macOS, Avalonia currently retains these control-key mappings so
+the behavior matches the Windows client.

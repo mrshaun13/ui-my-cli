@@ -1,7 +1,100 @@
 using CodexNative.Core;
 
 var failures = new List<string>();
-const string host = @"C:\Apps\CodexNative.WslHost.exe";
+const string host = @"C:\Apps\CodexNative.TerminalHost.exe";
+
+Check("platform profiles select the correct terminal host and release runtime", () =>
+{
+    var windows = NativePlatformProfile.For(NativePlatform.Windows);
+    Equal(true, windows.UsesWsl);
+    Equal("CodexNative.TerminalHost.exe", windows.TerminalHostFileName);
+    Equal("win-x64", windows.ReleaseRuntimeIdentifier);
+
+    var macArm = NativePlatformProfile.For(
+        NativePlatform.MacOS,
+        System.Runtime.InteropServices.Architecture.Arm64);
+    Equal(false, macArm.UsesWsl);
+    Equal("macOS shell", macArm.LocalShellLabel);
+    Equal("CodexNative.TerminalHost", macArm.TerminalHostFileName);
+    Equal("osx-arm64", macArm.ReleaseRuntimeIdentifier);
+});
+
+Check("macOS local shell uses a structured env launch without shell interpolation", () =>
+{
+    var spec = NativeLaunchBuilder.LocalShell(
+        NativePlatform.MacOS,
+        host,
+        "Ubuntu",
+        "/Users/tester/a repo",
+        "/bin/zsh");
+    Equal("/usr/bin/env", spec.Process);
+    Equal("/Users/tester/a repo", spec.WorkingDirectory);
+    SequenceEqual(
+        new[] { "TERM=xterm-256color", "COLORTERM=truecolor", "/bin/zsh", "-l" },
+        spec.Arguments);
+    Throws<ArgumentException>(() => NativeLaunchBuilder.LocalShell(
+        NativePlatform.MacOS,
+        host,
+        "Ubuntu",
+        "relative/path",
+        "/bin/zsh"));
+});
+
+Check("macOS dashboard service uses structured process settings", () =>
+{
+    var spec = NativeLaunchBuilder.DashboardService(
+        NativePlatform.MacOS,
+        host,
+        "Ubuntu",
+        "/Users/tester/ui-my-cli",
+        "/opt/homebrew/bin/node");
+    Equal("/opt/homebrew/bin/node", spec.Process);
+    Equal("/Users/tester/ui-my-cli", spec.WorkingDirectory);
+    SequenceEqual(new[] { "server/index.js" }, spec.Arguments);
+    Equal("production", spec.Environment!["NODE_ENV"]);
+    Equal("7577", spec.Environment["PORT"]);
+});
+
+Check("node resolver prefers an explicit executable then PATH", () =>
+{
+    var available = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "/custom/node",
+        "/path/bin/node",
+    };
+    var explicitNode = ExecutableResolver.ResolveNode(
+        NativePlatform.MacOS,
+        "/custom/node",
+        "/path/bin",
+        "/Users/tester",
+        available.Contains,
+        _ => []);
+    Equal("/custom/node", explicitNode);
+
+    var pathNode = ExecutableResolver.ResolveNode(
+        NativePlatform.MacOS,
+        null,
+        "/path/bin",
+        "/Users/tester",
+        available.Contains,
+        _ => []);
+    Equal("/path/bin/node", pathNode);
+});
+
+Check("dashboard repository locator finds a checkout above the app artifact", () =>
+{
+    var files = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "/Users/tester/ui-my-cli/package.json",
+        "/Users/tester/ui-my-cli/server/index.js",
+    };
+    var found = DashboardRepositoryLocator.Find(
+        "/Users/tester/ui-my-cli/native/artifacts/osx-arm64/CodexNative.app/Contents/MacOS",
+        "/Users/tester",
+        null,
+        files.Contains);
+    Equal("/Users/tester/ui-my-cli", found);
+});
 
 Check("resume picker uses the console WSL host", () =>
 {

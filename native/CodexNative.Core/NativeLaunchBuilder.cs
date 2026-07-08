@@ -15,7 +15,11 @@ public sealed record WslHostRequest(
     string? WorkingDirectory = null,
     string? SessionId = null);
 
-public sealed record NativeLaunchSpec(string Process, IReadOnlyList<string> Arguments);
+public sealed record NativeLaunchSpec(
+    string Process,
+    IReadOnlyList<string> Arguments,
+    string? WorkingDirectory = null,
+    IReadOnlyDictionary<string, string>? Environment = null);
 
 public static class NativeLaunchBuilder
 {
@@ -65,6 +69,57 @@ public static class NativeLaunchBuilder
         BuildHostSpec(
             hostExecutable,
             new WslHostRequest(NativeLaunchMode.DashboardService, distribution, workingDirectory));
+
+    public static NativeLaunchSpec DashboardService(
+        NativePlatform platform,
+        string hostExecutable,
+        string distribution,
+        string workingDirectory,
+        string? nodeExecutable = null)
+    {
+        if (platform == NativePlatform.Windows)
+            return DashboardService(hostExecutable, distribution, workingDirectory);
+        if (!IsValidLinuxPath(workingDirectory))
+            throw new ArgumentException(
+                "Dashboard working directory must be an absolute path without control characters.",
+                nameof(workingDirectory));
+
+        var node = nodeExecutable ?? ExecutableResolver.ResolveNode(
+            platform,
+            Environment.GetEnvironmentVariable("NODE_BIN"));
+        return new NativeLaunchSpec(
+            node,
+            ["server/index.js"],
+            workingDirectory,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["NODE_ENV"] = "production",
+                ["PORT"] = "7577",
+            });
+    }
+
+    public static NativeLaunchSpec LocalShell(
+        NativePlatform platform,
+        string hostExecutable,
+        string distribution,
+        string workingDirectory,
+        string? shellExecutable = null)
+    {
+        if (platform == NativePlatform.Windows)
+            return UbuntuShell(hostExecutable, distribution, workingDirectory);
+        if (!IsValidLinuxPath(workingDirectory))
+            throw new ArgumentException(
+                "Shell working directory must be an absolute path without control characters.",
+                nameof(workingDirectory));
+
+        var shell = shellExecutable ?? ExecutableResolver.ResolveLoginShell(
+            platform,
+            Environment.GetEnvironmentVariable("SHELL"));
+        return new NativeLaunchSpec(
+            "/usr/bin/env",
+            ["TERM=xterm-256color", "COLORTERM=truecolor", shell, "-l"],
+            workingDirectory);
+    }
 
     public static NativeLaunchSpec ServerTerminal(string hostExecutable, string endpoint)
     {

@@ -15,9 +15,11 @@
     "docs:check": "node scripts/generate-docs.js --check",
     "test": "npx playwright test",
     "test:smoke": "npx playwright test tests/smoke.spec.js",
-    "native:build": "dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.WslHost/CodexNative.WslHost.csproj",
+    "native:build": "dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.TerminalHost/CodexNative.TerminalHost.csproj",
     "native:test": "dotnet run --project native/CodexNative.CommandTests/CodexNative.CommandTests.csproj",
-    "native:publish": "dotnet publish native/CodexNative/CodexNative.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o native/artifacts/win-x64 && dotnet publish native/CodexNative.WslHost/CodexNative.WslHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o native/artifacts/win-x64",
+    "native:publish": "npm run native:publish:win && npm run native:publish:mac",
+    "native:publish:win": "bash scripts/publish-native.sh win-x64",
+    "native:publish:mac": "bash scripts/publish-native.sh osx-x64 && bash scripts/publish-native.sh osx-arm64",
     "prepare": "husky"
   },
   "dependencies": {

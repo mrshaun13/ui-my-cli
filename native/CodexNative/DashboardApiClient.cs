@@ -5,6 +5,7 @@ namespace CodexNative;
 
 public sealed class DashboardApiClient : IDisposable
 {
+    public const int RequiredApiVersion = 1;
     private static readonly Uri SharedService = new("http://127.0.0.1:7575/api/");
     private static readonly Uri PrivateService = new("http://127.0.0.1:7577/api/");
     private readonly HttpClient _http = new()
@@ -54,7 +55,9 @@ public sealed class DashboardApiClient : IDisposable
         try
         {
             using var response = await _http.GetAsync(new Uri(service, "status"), timeout.Token);
-            return response.IsSuccessStatusCode;
+            if (!response.IsSuccessStatusCode) return false;
+            var status = await response.Content.ReadFromJsonAsync<DashboardStatus>(JsonOptions, timeout.Token);
+            return status is { Ok: true, ApiVersion: >= RequiredApiVersion };
         }
         catch (HttpRequestException)
         {

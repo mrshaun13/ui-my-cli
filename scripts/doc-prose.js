@@ -14,15 +14,15 @@ module.exports = {
     title: 'Agent Dashboard',
     tagline:
       'A browser dashboard for managing multiple local headless-agent sessions across Codex and Devin, ' +
-      'plus a browser-free Windows frontend for Codex in WSL2. Both surfaces share persistent server PTYs, ' +
+      'plus a browser-free native frontend for Windows and macOS. Both surfaces share persistent server PTYs, ' +
       'live status, analytics, search, and session metadata; the native surface renders terminals through ' +
-      'Windows ConPTY and can reattach after the UI exits.',
+      'an Avalonia PTY view and can reattach after the UI exits.',
   },
 
   features: [
     '**Live status badges** — ⚡ Question / ⚙ Running / ✓ Finished / · Idle, updated every 3 seconds',
     '**Provider switch** — top-level Codex / Devin toggle; sessions, repo filters, tabs, stats, archives, and terminals are scoped to the selected provider',
-    '**Native Windows frontend** — standalone Avalonia dashboard with push updates, multi-project and archive search, actionable rich previews, responsive layouts, theme-aware control chrome, a custom pixel-art app identity, a rich compact session rail, a searchable Codex-or-Ubuntu WSL project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics, latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent Codex terminal reattachment through a Windows ConPTY view',
+    '**Native Windows and macOS frontend** — standalone Avalonia dashboard with push updates, multi-project and archive search, actionable rich previews, responsive layouts, theme-aware control chrome, a custom pixel-art app identity, a rich compact session rail, a searchable Codex-or-local-shell project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics, latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent Codex terminal reattachment',
     '**Real terminals** — xterm.js + node-pty: identical to running the selected provider CLI in your shell (`codex resume <id>` or `devin --resume <id>`)',
     '**Click to switch** — click any agent in the sidebar to attach its live terminal; ' +
       'switching is instant with scrollback preserved',
@@ -34,7 +34,7 @@ module.exports = {
       '(native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)',
     '**Needs-your-input filter** — one click to show only agents waiting for a reply',
     '**Repo filter pills** — filter sessions by project; selection persists across reloads',
-    '**Persistent native terminals** — Codex PTYs stay in WSL2 when the Windows UI closes; reopening the native app reattaches with buffered scrollback',
+    '**Persistent native terminals** — Codex PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback',
     '**Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider',
     '**Archive / restore** — hide sessions from the list without deleting them; ' +
       'restore from the collapsible drawer at the bottom of the sidebar',
@@ -50,7 +50,7 @@ module.exports = {
 
   prerequisites: [
     '**Node.js 18+** — `node --version` to check',
-    '**.NET 10 SDK** — optional; required only to build or publish the native Windows frontend',
+    '**.NET 10 SDK** — optional; required only to build or publish the native Windows/macOS frontend',
     '**Codex CLI installed and run at least once** — creates the Codex state database',
     '**Devin CLI installed and run at least once** — optional, required only for the Devin dashboard/provider',
     '**Native build tools** for node-pty compilation:',
@@ -101,7 +101,7 @@ module.exports = {
     'Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. ' +
     'The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. ' +
     'The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. ' +
-    'The Windows native frontend uses Avalonia for the dashboard and Windows ConPTY for terminal rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so Codex and project files remain in WSL2 and sessions can outlive either UI. It can also launch direct Ubuntu login-shell tabs in validated WSL project paths; those shells end when their tab or the application closes.',
+    'The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Windows keeps Codex and project files in WSL2; macOS uses the local Node service and Codex state. Direct login-shell tabs run in validated project paths and end when their tab or the application closes.',
 
   data_flow: [
     'Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  Codex provider adapter  →  WebSocket push  →  React client',
@@ -111,6 +111,8 @@ module.exports = {
     'Windows native app  →  Avalonia terminal control  →  ConPTY  →  console bridge  →  WebSocket  →  persistent WSL2 PTY  →  Codex CLI',
     'Windows native app  →  Avalonia terminal control  →  ConPTY  →  validated WSL2 launch  →  Ubuntu login shell',
     'Windows native dashboard controls  →  localhost provider API  →  session/context/stats readers  →  Codex state in WSL2',
+    'macOS native app  →  Avalonia terminal control  →  local PTY  →  console bridge  →  WebSocket  →  persistent macOS PTY  →  Codex CLI',
+    'macOS native app  →  Avalonia terminal control  →  validated project path  →  local login shell',
   ].join('\n'),
 
   conventions: [
@@ -118,7 +120,7 @@ module.exports = {
       ' The value `archived` is used by the API but not stored in the database.',
     'All server modules use CommonJS (`require` / `module.exports`).',
     'The client uses ES modules with React 19 + Vite.',
-    'The native Windows frontend uses .NET 10, Avalonia, an XTerm-compatible terminal control, and ConPTY; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback.',
+    'The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback.',
     'Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).',
     'Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Native Codex titles are stored in Codex `state_*.sqlite`; external transcript-pipeline headless title and hide/restore metadata is stored in `~/.codex/ui-my-cli-dashboard.db`.',
     'Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.',
@@ -175,7 +177,7 @@ module.exports = {
 
   // Descriptions for REST routes — keyed as "METHOD /path"
   routeDescriptions: {
-    'GET /api/status':               'Server health check — returns `ok`, default provider, provider availability, active PTY count, uptime seconds',
+    'GET /api/status':               'Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds',
     'GET /api/providers':            'Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata',
     'GET /api/:providerId/stats':    'Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex supports `statsMode=combined|triage|codex` to switch chart cohorts while leaving tool-call columns stable.',
     'GET /api/stats':                'Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default; accepts the same stats query params',

@@ -216,7 +216,7 @@ function collect() {
     fileDescs[rel] = moduleOneliner(tryRead(rel));
   }
   fileDescs['native/CodexNative/MainWindow.axaml.cs'] =
-    'Native Windows dashboard shell, persistent Codex tabs, direct Ubuntu shell tabs, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.';
+    'Cross-platform native dashboard shell, persistent Codex tabs, direct local shell tabs, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.';
   fileDescs['native/CodexNative/MainWindow.axaml'] =
     'Native dashboard layout with theme-aware control chrome and the in-app pixel C identity.';
   fileDescs['native/CodexNative/Assets/codex-native-icon.png'] =
@@ -228,13 +228,19 @@ function collect() {
   fileDescs['native/CodexNative/DashboardTheme.cs'] =
     'Native equivalents of the browser dashboard themes and text-size choices.';
   fileDescs['native/CodexNative/DashboardServiceManager.cs'] =
-    'Starts the local ui-my-cli metadata service inside WSL2 when port 7575 is unavailable.';
+    'Starts the local ui-my-cli service in WSL2 or macOS when port 7575 is unavailable.';
   fileDescs['native/CodexNative.Core/NativeLaunchBuilder.cs'] =
-    'Validated launch specifications for the loopback terminal bridge, direct Ubuntu shells, and private WSL2 service.';
-  fileDescs['native/CodexNative.WslHost/Program.cs'] =
-    'Console-subsystem ConPTY companion for persistent server-terminal bridging, direct Ubuntu shells, and private-service startup.';
-  fileDescs['native/CodexNative.WslHost/TerminalBridge.cs'] =
-    'Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent WSL2 PTYs.';
+    'Validated launch specifications for the loopback terminal bridge, local shells, and private Windows/macOS service.';
+  fileDescs['native/CodexNative.TerminalHost/Program.cs'] =
+    'Cross-platform console companion for persistent server-terminal bridging and Windows WSL startup.';
+  fileDescs['native/CodexNative.TerminalHost/TerminalBridge.cs'] =
+    'Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent server PTYs.';
+  fileDescs['native/CodexNative.Core/NativePlatform.cs'] =
+    'Explicit Windows, macOS, and Linux native runtime profile and artifact naming.';
+  fileDescs['native/CodexNative.Core/ExecutableResolver.cs'] =
+    'Validated Node.js and login-shell discovery without user-controlled shell interpolation.';
+  fileDescs['native/CodexNative.Core/DashboardRepositoryLocator.cs'] =
+    'Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths.';
   fileDescs['native/CodexNative/DashboardStatusFeed.cs'] =
     'Reconnecting Codex status-feed client for push-driven native session updates and rekey events.';
   fileDescs['native/CodexNative/AnalyticsControls.cs'] =
@@ -354,10 +360,11 @@ npm start          # start the dashboard server
 
 Open **http://localhost:7575** in your browser.
 
-### Native Windows frontend (WSL2)
+### Native Windows and macOS frontend
 
-The native frontend uses a real Windows ConPTY terminal view attached through
-a small console bridge to persistent WSL2 PTYs owned by the dashboard service.
+The native frontend uses a real operating-system PTY terminal view attached
+through a small console bridge to persistent PTYs owned by the dashboard service.
+Windows runs the service and Codex in WSL2; macOS runs both locally.
 Its Avalonia shell adds push-driven sessions, multi-project and archived search,
 rich previews, interactive cohort analytics, latest-prompt navigation, context
 composition, Codex subagent timelines, desktop shortcuts, provider/quota health,
@@ -371,9 +378,9 @@ npm run native:build
 npm run native:publish
 \`\`\`
 
-The self-contained Windows executable is published under
-\`native/artifacts/win-x64/\`. See \`native/README.md\` for prerequisites and
-the current milestone.
+Self-contained artifacts are published under \`native/artifacts/win-x64/\`,
+\`native/artifacts/osx-x64/\`, and \`native/artifacts/osx-arm64/\`. See
+\`native/README.md\` for platform prerequisites and packaging details.
 
 ### Development Mode (hot reload)
 
@@ -643,7 +650,7 @@ ${serverFileTable}
 
 ${clientFileTable}
 
-## Native Windows Frontend Files
+## Native Windows and macOS Frontend Files
 
 ${nativeFileTable}
 
