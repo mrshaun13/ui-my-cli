@@ -1,0 +1,120 @@
+name: Native desktop
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-release.yml'
+      - 'Directory.Build.props'
+      - 'native/**'
+      - 'scripts/check-native-version.mjs'
+      - 'scripts/package-native-release.py'
+      - 'scripts/publish-native.sh'
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  source-validation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.109'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: node scripts/check-native-version.mjs "${GITHUB_REF_NAME:-}"
+        if: startsWith(github.ref, 'refs/tags/')
+      - run: node scripts/check-native-version.mjs
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - run: npm run docs:check
+      - run: npm run native:test
+
+  build:
+    needs: source-validation
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            rid: win-x64
+          - runner: macos-15-intel
+            rid: osx-x64
+          - runner: macos-15
+            rid: osx-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.109'
+      - run: npm run native:test
+      - run: bash scripts/publish-native.sh "${{ matrix.rid }}"
+      - name: Validate macOS bundle on native hardware
+        if: startsWith(matrix.rid, 'osx-')
+        run: |
+          bundle="native/artifacts/${{ matrix.rid }}/CodexNative.app"
+          plutil -lint "$bundle/Contents/Info.plist"
+          file "$bundle/Contents/MacOS/CodexNative" | grep -q 'Mach-O 64-bit'
+          file "$bundle/Contents/MacOS/CodexNative.TerminalHost" | grep -q 'Mach-O 64-bit'
+          file "$bundle/Contents/MacOS/CodexNative.Updater" | grep -q 'Mach-O 64-bit'
+          test -x "$bundle/Contents/MacOS/CodexNative"
+          test -x "$bundle/Contents/MacOS/CodexNative.TerminalHost"
+          test -x "$bundle/Contents/MacOS/CodexNative.Updater"
+          set +e
+          "$bundle/Contents/MacOS/CodexNative.TerminalHost" --invalid
+          host_exit=$?
+          "$bundle/Contents/MacOS/CodexNative.Updater" --invalid
+          updater_exit=$?
+          set -e
+          test "$host_exit" -eq 1
+          test "$updater_exit" -eq 1
+      - name: Validate Windows executables
+        if: matrix.rid == 'win-x64'
+        run: |
+          file native/artifacts/win-x64/CodexNative.exe | grep -q 'PE32+ executable (GUI)'
+          file native/artifacts/win-x64/CodexNative.TerminalHost.exe | grep -q 'PE32+ executable (console)'
+          file native/artifacts/win-x64/CodexNative.Updater.exe | grep -q 'PE32+ executable (console)'
+      - run: python3 scripts/package-native-release.py "${{ matrix.rid }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-release-${{ matrix.rid }}
+          path: |
+            native/artifacts/releases/CodexNative-${{ matrix.rid }}.zip
+            native/artifacts/releases/CodexNative-${{ matrix.rid }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: native-release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}"
+          release-assets/CodexNative-*.zip
+          release-assets/CodexNative-*.zip.sha256
+          --repo "${GITHUB_REPOSITORY}"
+          --verify-tag
+          --generate-notes
+          --title "Codex Native ${GITHUB_REF_NAME#v}"
