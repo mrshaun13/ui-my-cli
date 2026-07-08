@@ -19,6 +19,7 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - `npm run docs` — `node scripts/generate-docs.js`
 - `npm run docs:check` — `node scripts/generate-docs.js --check`
 - `npm run test` — `npx playwright test`
+- `npm run test:unit` — `node --test tests/unit/*.test.js`
 - `npm run test:smoke` — `npx playwright test tests/smoke.spec.js`
 - `npm run native:build` — `dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.TerminalHost/CodexNative.TerminalHost.csproj && dotnet build native/CodexNative.Updater/CodexNative.Updater.csproj`
 - `npm run native:version:check` — `node scripts/check-native-version.mjs`

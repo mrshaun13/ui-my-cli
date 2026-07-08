@@ -11,7 +11,7 @@ with an appropriate HTTP status code.
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
 | `GET` | `/api/:providerId/terminals` |  |
 | `GET` | `/api/terminals` |  |
-| `GET` | `/api/:providerId/stats` | Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex supports `statsMode=combined|triage|codex` to switch chart cohorts while leaving tool-call columns stable. |
+| `GET` | `/api/:providerId/stats` | Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex includes 1d/2d/7d/14d/30d/all-time token and credit-estimate rollups by model, project, and session, and supports `statsMode=combined|triage|codex` cohort switching. |
 | `GET` | `/api/stats` | Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default; accepts the same stats query params |
 | `GET` | `/api/:providerId/latest-prompt` | Most recent user prompt from the selected provider local state |
 | `GET` | `/api/latest-prompt` | Compatibility alias for the default provider latest prompt |

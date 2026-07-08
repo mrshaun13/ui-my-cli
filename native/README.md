@@ -16,15 +16,22 @@ when their tab or the app closes.
 
 ## Features
 
-- Push-driven Codex sessions with hot/cold grouping, project filters, archive
-  search, attention filters, and buffered terminal reattachment.
+- Push-driven Codex sessions with hot/cold grouping, a compact count-labelled
+  project filter, archive search, attention filters, and buffered terminal
+  reattachment.
 - Multiple simultaneous terminal tabs with reconnect status and manual retry.
 - New-session chooser for persistent Codex sessions and a platform login shell.
-- Rich session previews for conversation, context composition, model changes,
-  configuration, and delegated subagents.
-- Cohort analytics, quota/provider status, latest-prompt navigation, ten themes,
-  four text sizes, responsive layouts, keyboard shortcuts, and saved workspace
-  state.
+- Rich session previews for crash-safe deferred conversation search, context
+  composition, model changes, configuration, delegated subagents, and prominent
+  fresh-input/cached-input/output/reasoning/total-token/credit summaries.
+- Cohort analytics with 24-hour through all-time token and estimated-credit
+  rollups by model, project, and session; quota/provider status; latest-prompt
+  navigation; ten themes; four text sizes; responsive layouts; keyboard
+  shortcuts; and saved workspace state. Credit estimates show coverage and do
+  not assign guessed rates to unpublished model aliases. Reasoning tokens are
+  included in output-token cost rather than multiplied by reasoning effort.
+  Estimates assume Standard mode because stored telemetry does not identify
+  Fast mode reliably enough to apply its separate multiplier.
 - Reuses a compatible service on `127.0.0.1:7575`; if none exists, starts a
   private service on `127.0.0.1:7577` without exposing it to the network.
 - Checks stable GitHub Releases for a newer platform package. Updates are

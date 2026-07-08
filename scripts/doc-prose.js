@@ -22,7 +22,7 @@ module.exports = {
   features: [
     '**Live status badges** — ⚡ Question / ⚙ Running / ✓ Finished / · Idle, updated every 3 seconds',
     '**Provider switch** — top-level Codex / Devin toggle; sessions, repo filters, tabs, stats, archives, and terminals are scoped to the selected provider',
-    '**Native Windows and macOS frontend** — standalone Avalonia dashboard with push updates, multi-project and archive search, actionable rich previews, responsive layouts, theme-aware control chrome, a custom pixel-art app identity, a rich compact session rail, a searchable Codex-or-local-shell project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics, latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent Codex terminal reattachment',
+    '**Native Windows and macOS frontend** — standalone Avalonia dashboard with push updates, deferred crash-safe conversation search, a compact functional project/age/visibility filter, actionable rich previews, responsive layouts, theme-aware control chrome, a custom pixel-art app identity, a rich compact session rail, a searchable Codex-or-local-shell project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics, latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent Codex terminal reattachment',
     '**Real terminals** — xterm.js + node-pty: identical to running the selected provider CLI in your shell (`codex resume <id>` or `devin --resume <id>`)',
     '**Click to switch** — click any agent in the sidebar to attach its live terminal; ' +
       'switching is instant with scrollback preserved',
@@ -33,14 +33,15 @@ module.exports = {
     '**Inline rename** — double-click any session title to rename it ' +
       '(native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)',
     '**Needs-your-input filter** — one click to show only agents waiting for a reply',
-    '**Repo filter pills** — filter sessions by project; selection persists across reloads',
+    '**Project filter** — compact count-labelled project selection replaces the unbounded native pill wall; selection persists across reloads',
     '**Persistent native terminals** — Codex PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback',
     '**Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for all active Codex sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically',
     '**Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider',
     '**Archive / restore** — hide sessions from the list without deleting them; ' +
       'restore from the collapsible drawer at the bottom of the sidebar',
     '**Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), ' +
-      'token usage, tool call breakdown, model distribution, and Codex stats cohort switching, shown when no session is selected',
+      '24-hour through all-time token and estimated-credit rollups by model, project, and session, tool call breakdown, model distribution, and Codex stats cohort switching, shown when no session is selected',
+    '**Transparent Codex credit estimates** — session and dashboard summaries apply the published per-million-token Codex Standard-mode rate card to fresh input, cached input, and output tokens, show pricing coverage, leave unpublished model aliases unpriced, and explain that reasoning tokens are already billed as output rather than through a separate effort multiplier; Fast-mode multipliers are not guessed because stored telemetry does not identify that mode',
     '**Context window pie chart** — per-session donut chart showing context window composition ' +
       '(system prompt, user messages, assistant messages, tool calls, tool results, free capacity)',
     '**Environment banner** — global config overview on the dashboard home page showing active ' +
@@ -181,7 +182,7 @@ module.exports = {
   routeDescriptions: {
     'GET /api/status':               'Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds',
     'GET /api/providers':            'Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata',
-    'GET /api/:providerId/stats':    'Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex supports `statsMode=combined|triage|codex` to switch chart cohorts while leaving tool-call columns stable.',
+    'GET /api/:providerId/stats':    'Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex includes 1d/2d/7d/14d/30d/all-time token and credit-estimate rollups by model, project, and session, and supports `statsMode=combined|triage|codex` cohort switching.',
     'GET /api/stats':                'Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default; accepts the same stats query params',
     'GET /api/:providerId/latest-prompt': 'Most recent user prompt from the selected provider local state',
     'GET /api/latest-prompt':        'Compatibility alias for the default provider latest prompt',
