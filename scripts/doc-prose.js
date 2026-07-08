@@ -175,6 +175,8 @@ module.exports = {
 
   // Descriptions for REST routes — keyed as "METHOD /path"
   routeDescriptions: {
+    'GET /api/native/launch/status': 'Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching.',
+    'POST /api/native/launch':       'Focus the installed Codex Native Windows dashboard, or start it when not already running (Windows/WSL2 only).',
     'GET /api/status':               'Server health check — returns `ok`, default provider, provider availability, active PTY count, uptime seconds',
     'GET /api/providers':            'Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata',
     'GET /api/:providerId/stats':    'Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex supports `statsMode=combined|triage|codex` to switch chart cohorts while leaving tool-call columns stable.',

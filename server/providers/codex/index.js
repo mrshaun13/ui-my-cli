@@ -27,8 +27,12 @@ function codexExecutable() {
 
 function buildCommand(sessionId) {
   const command = codexExecutable();
-  if (sessionId) return { command, args: ['resume', sessionId] };
-  return { command, args: [] };
+  // Dashboard terminals already provide their own visual activity indicators.
+  // Disable Codex's animated welcome/status/spinner treatment so embedded
+  // terminal renderers do not repaint the Working row and cursor continuously.
+  const args = ['-c', 'tui.animations=false'];
+  if (sessionId) args.push('resume', sessionId);
+  return { command, args };
 }
 
 let cachedVersion;

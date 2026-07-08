@@ -17,6 +17,17 @@ namespace CodexNative;
 
 public sealed partial class MainWindow : Window
 {
+    private const double MinimumPaneWidth = 460;
+    private const double PaneSplitterWidth = 5;
+    private static readonly string[] BrowserDashboardUrls =
+    [
+        "http://127.0.0.1:7575",
+        "http://127.0.0.1:7576",
+    ];
+    private static readonly HttpClient BrowserDashboardProbeClient = new()
+    {
+        Timeout = TimeSpan.FromMilliseconds(700),
+    };
     private static readonly IBrush StartingBrush = Brush.Parse("#F59E0B");
     private static readonly IBrush RunningBrush = Brush.Parse("#22C55E");
     private static readonly IBrush ErrorBrush = Brush.Parse("#EF4444");
@@ -26,6 +37,9 @@ public sealed partial class MainWindow : Window
     private readonly DashboardServiceManager _serviceManager = new();
     private readonly Dictionary<string, SessionTabState> _openTabs = [];
     private readonly Dictionary<string, TabItem> _previewTabs = [];
+    private readonly Dictionary<TabItem, TerminalPaneState> _previewPaneByTab = [];
+    private readonly List<TerminalPaneState> _panes = [];
+    private readonly HashSet<TerminalPaneState> _paneRemovalsInProgress = [];
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _connectionPulseTimer;
     private readonly DispatcherTimer _sessionHoverAnimationTimer;
@@ -58,13 +72,17 @@ public sealed partial class MainWindow : Window
     private bool _uiReady;
     private bool _workspaceReady;
     private bool _isDashboardConnected;
+    private bool _restoringPaneLayout;
+    private bool _updatingPaneLayout;
     private int _refreshTick;
+    private TerminalPaneState _activePane = null!;
     private readonly DateTimeOffset _connectionPulseStartedAt = DateTimeOffset.UtcNow;
     private DateTimeOffset _sessionHoverAnimationStartedAt = DateTimeOffset.UtcNow;
 
     public MainWindow()
     {
         InitializeComponent();
+        InitializePaneWorkspace();
         AutomationProperties.SetName(DashboardTab, "Dashboard overview");
         CompactSessionsList.ContainerPrepared += OnCompactSessionContainerPrepared;
         _uiReady = true;
@@ -79,14 +97,7 @@ public sealed partial class MainWindow : Window
         };
         SizeChanged += (_, _) =>
             Dispatcher.UIThread.Post(ConstrainMainContentHeight, DispatcherPriority.Loaded);
-        WorkspaceTabs.SizeChanged += (_, args) =>
-        {
-            var contentHeight = TerminalTabContentHeight(args.NewSize.Height);
-            foreach (var state in _openTabs.Values)
-            {
-                state.TerminalViewport.Height = contentHeight;
-            }
-        };
+        PaneWorkspaceScroll.SizeChanged += (_, _) => UpdatePaneWorkspaceSize();
         SessionFiltersToggle.SizeChanged += (_, args) =>
         {
             var horizontalPadding = SessionFiltersToggle.Padding.Left + SessionFiltersToggle.Padding.Right;
@@ -107,6 +118,354 @@ public sealed partial class MainWindow : Window
         SetSessionFiltersExpanded(false);
         UpdateHeaderConnectionIndicator();
         _connectionPulseTimer.Start();
+    }
+
+    private void InitializePaneWorkspace()
+    {
+        var activeBorder = CreatePaneFocusBorder();
+        PrimaryPaneRoot.Children.Insert(0, activeBorder);
+        var primary = new TerminalPaneState(
+            "pane-1", WorkspaceTabs, PrimaryPaneRoot, PrimaryPaneAddButton,
+            removeButton: null, emptyState: null, activeBorder,
+            MinimumPaneWidth, inspectorHeight: 160);
+        _panes.Add(primary);
+        _activePane = primary;
+        RegisterPane(primary);
+        RebuildPaneHost(equalize: true);
+        SetActivePane(primary);
+    }
+
+    private Border CreatePaneFocusBorder() => new()
+    {
+        BorderBrush = ResourceBrush("AccentBrush"),
+        BorderThickness = new Thickness(1),
+        Opacity = 0,
+        IsHitTestVisible = false,
+        ZIndex = 11,
+    };
+
+    private void RegisterPane(TerminalPaneState pane)
+    {
+        pane.AddButton.Tag = pane;
+        pane.AddButton.Click += OnAddPaneClicked;
+        if (pane.RemoveButton is not null)
+        {
+            pane.RemoveButton.Tag = pane;
+            pane.RemoveButton.Click += OnRemovePaneClicked;
+        }
+        pane.Root.AddHandler(
+            InputElement.PointerPressedEvent,
+            (_, _) => SetActivePane(pane),
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        pane.Tabs.SelectionChanged += OnWorkspaceTabChanged;
+        pane.Tabs.SizeChanged += (_, args) =>
+        {
+            var contentHeight = TerminalTabContentHeight(args.NewSize.Height);
+            foreach (var state in _openTabs.Values.Where(state => ReferenceEquals(state.Pane, pane)))
+                state.TerminalViewport.Height = contentHeight;
+        };
+    }
+
+    private TerminalPaneState CreateSecondaryPane(string? id = null, double? width = null, double inspectorHeight = 160)
+    {
+        var tabs = new TabControl
+        {
+            Background = ResourceBrush("BaseBrush"),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Stretch,
+        };
+        var startNew = new Button { Content = "Choose Codex or Ubuntu", Padding = new Thickness(12, 6) };
+        var emptyState = new Border
+        {
+            Background = ResourceBrush("BaseBrush"),
+            BorderBrush = ResourceBrush("BorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(18),
+            Margin = new Thickness(18),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new StackPanel
+            {
+                Spacing = 9,
+                Width = 250,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "EMPTY TERMINAL",
+                        Foreground = ResourceBrush("AccentBrush"),
+                        FontWeight = FontWeight.Bold,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                    },
+                    new TextBlock
+                    {
+                        Text = "Start a Codex or Ubuntu session in this pane.",
+                        Foreground = ResourceBrush("SecondaryBrush"),
+                        TextAlignment = TextAlignment.Center,
+                        TextWrapping = TextWrapping.Wrap,
+                    },
+                    startNew,
+                },
+            },
+        };
+        var addButton = PaneEdgeButton("+", "Add terminal pane", HorizontalAlignment.Right);
+        var removeButton = PaneEdgeButton("−", "Remove this terminal pane", HorizontalAlignment.Left);
+        var activeBorder = CreatePaneFocusBorder();
+        var root = new Grid
+        {
+            MinWidth = MinimumPaneWidth,
+            Background = ResourceBrush("BaseBrush"),
+            Children = { activeBorder, tabs, emptyState, removeButton, addButton },
+        };
+        activeBorder.ZIndex = 11;
+        removeButton.ZIndex = 12;
+        addButton.ZIndex = 12;
+        emptyState.ZIndex = 2;
+        var pane = new TerminalPaneState(
+            id ?? $"pane-{Guid.NewGuid():N}", tabs, root, addButton, removeButton,
+            emptyState, activeBorder, width ?? MinimumPaneWidth, inspectorHeight);
+        startNew.Click += (_, _) =>
+        {
+            SetActivePane(pane);
+            ShowNewSessionChooser(startNew, pane);
+        };
+        RegisterPane(pane);
+        return pane;
+    }
+
+    private Button PaneEdgeButton(string content, string tooltip, HorizontalAlignment alignment)
+    {
+        var button = new Button
+        {
+            Content = content,
+            Width = 28,
+            Height = 42,
+            Padding = new Thickness(0),
+            FontSize = 18,
+            Opacity = 0.55,
+            HorizontalAlignment = alignment,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = ResourceBrush("ElevatedBrush"),
+            BorderBrush = ResourceBrush("BorderBrightBrush"),
+        };
+        ToolTip.SetTip(button, tooltip);
+        button.PointerEntered += (_, _) => button.Opacity = 0.95;
+        button.PointerExited += (_, _) => button.Opacity = 0.55;
+        return button;
+    }
+
+    private void OnAddPaneClicked(object? sender, RoutedEventArgs e)
+    {
+        var pane = CreateSecondaryPane();
+        _panes.Add(pane);
+        RebuildPaneHost(equalize: true);
+        SetActivePane(pane);
+        UpdatePaneEmptyStates();
+        _ = SaveWorkspaceAsync();
+        Dispatcher.UIThread.Post(() =>
+        {
+            PaneWorkspaceScroll.Offset = new Vector(PaneWorkspaceScroll.Extent.Width, 0);
+            if (pane.EmptyState is not null)
+                ShowNewSessionChooser(pane.EmptyState, pane);
+        }, DispatcherPriority.Loaded);
+    }
+
+    private async void OnRemovePaneClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: TerminalPaneState pane } removeButton
+            || ReferenceEquals(pane, _panes[0])
+            || !_paneRemovalsInProgress.Add(pane)) return;
+        var paneLabel = PaneLabel(pane);
+        removeButton.IsEnabled = false;
+        try
+        {
+            if (!await ConfirmPaneRemovalAsync(pane)) return;
+
+            foreach (var state in _openTabs.Values.Where(state => ReferenceEquals(state.Pane, pane)).ToList())
+            {
+                if (state.Kind == TerminalSessionKind.Ubuntu) await StopAndRemoveTabAsync(state, selectFallback: false);
+                else await DetachTabAsync(state, selectFallback: false);
+            }
+            foreach (var preview in _previewPaneByTab.Where(entry => ReferenceEquals(entry.Value, pane)).Select(entry => entry.Key).ToList())
+                RemovePreviewTab(preview, selectFallback: false);
+
+            _panes.Remove(pane);
+            SetActivePane(_panes[Math.Max(0, _panes.Count - 1)]);
+            RebuildPaneHost(equalize: true);
+            UpdatePaneEmptyStates();
+            await SaveWorkspaceAsync();
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Terminal pane removal failed: {ex}");
+            SetStatus($"Could not remove {paneLabel}: {ex.Message}", ErrorBrush);
+        }
+        finally
+        {
+            _paneRemovalsInProgress.Remove(pane);
+            if (_panes.Contains(pane)) removeButton.IsEnabled = true;
+        }
+    }
+
+    private async Task<bool> ConfirmPaneRemovalAsync(TerminalPaneState pane)
+    {
+        var states = _openTabs.Values.Where(state => ReferenceEquals(state.Pane, pane)).ToList();
+        var codexCount = states.Count(state => state.Kind == TerminalSessionKind.Codex);
+        var ubuntuCount = states.Count(state => state.Kind == TerminalSessionKind.Ubuntu);
+        var previewCount = _previewPaneByTab.Count(entry => ReferenceEquals(entry.Value, pane));
+        if (codexCount + ubuntuCount + previewCount == 0) return true;
+
+        var dialog = new Window
+        {
+            Title = "Remove terminal pane",
+            Width = 440,
+            Height = 230,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = ResourceBrush("SurfaceBrush"),
+        };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(14, 6) };
+        var remove = new Button { Content = "Remove pane", Padding = new Thickness(14, 6), Foreground = ErrorBrush };
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8,
+            Children = { cancel, remove },
+        };
+        dialog.Content = new StackPanel
+        {
+            Margin = new Thickness(20),
+            Spacing = 14,
+            Children =
+            {
+                new TextBlock { Text = $"Remove {PaneLabel(pane)}?", FontSize = 18, FontWeight = FontWeight.Bold, Foreground = ResourceBrush("PrimaryBrush") },
+                new TextBlock
+                {
+                    Text = $"{codexCount} Codex tab{(codexCount == 1 ? "" : "s")} will detach, " +
+                           $"{ubuntuCount} Ubuntu shell{(ubuntuCount == 1 ? "" : "s")} will stop, and " +
+                           $"{previewCount} summary tab{(previewCount == 1 ? "" : "s")} will close.",
+                    Foreground = ResourceBrush("SecondaryBrush"),
+                    TextWrapping = TextWrapping.Wrap,
+                },
+                actions,
+            },
+        };
+        cancel.Click += (_, _) => dialog.Close(false);
+        remove.Click += (_, _) => dialog.Close(true);
+        dialog.Opened += (_, _) => ApplyWindowsTitleBarTheme(dialog, _currentTheme);
+        return await dialog.ShowDialog<bool>(this);
+    }
+
+    private void RebuildPaneHost(bool equalize)
+    {
+        if (_panes.Count == 0 || _updatingPaneLayout) return;
+        _updatingPaneLayout = true;
+        try
+        {
+            if (equalize) EqualizePaneWidths();
+            PaneHost.Children.Clear();
+            PaneHost.ColumnDefinitions.Clear();
+            for (var index = 0; index < _panes.Count; index++)
+            {
+                var pane = _panes[index];
+                PaneHost.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(pane.Width)) { MinWidth = MinimumPaneWidth });
+                Grid.SetColumn(pane.Root, index * 2);
+                PaneHost.Children.Add(pane.Root);
+                pane.AddButton.IsVisible = index == _panes.Count - 1;
+                if (pane.RemoveButton is not null) pane.RemoveButton.IsVisible = index > 0;
+                AutomationProperties.SetName(pane.Root, PaneLabel(pane));
+                AutomationProperties.SetName(pane.AddButton, $"Add terminal pane after {PaneLabel(pane)}");
+                if (pane.RemoveButton is not null) AutomationProperties.SetName(pane.RemoveButton, $"Remove {PaneLabel(pane)}");
+
+                if (index >= _panes.Count - 1) continue;
+                PaneHost.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(PaneSplitterWidth)));
+                var left = pane;
+                var right = _panes[index + 1];
+                var splitter = new GridSplitter
+                {
+                    Width = PaneSplitterWidth,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Stretch,
+                    ResizeDirection = GridResizeDirection.Columns,
+                    ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+                    ShowsPreview = true,
+                    Background = ResourceBrush("BorderBrush"),
+                    Cursor = new Cursor(StandardCursorType.SizeWestEast),
+                };
+                splitter.PointerPressed += (_, _) => BeginHorizontalPaneResize(left, right);
+                splitter.DragCompleted += (_, _) => CompleteHorizontalPaneResize(left, right);
+                Grid.SetColumn(splitter, index * 2 + 1);
+                PaneHost.Children.Add(splitter);
+            }
+            PaneHost.Width = TerminalPaneLayoutMath.TotalWidth(
+                _panes.Select(pane => pane.Width),
+                PaneSplitterWidth);
+            PaneHost.MinWidth = PaneHost.Width;
+            UpdatePaneEmptyStates();
+            SetActivePane(_activePane);
+        }
+        finally
+        {
+            _updatingPaneLayout = false;
+        }
+    }
+
+    private void EqualizePaneWidths()
+    {
+        var viewportWidth = Math.Max(
+            MinimumPaneWidth,
+            Math.Max(PaneWorkspaceScroll.Viewport.Width, PaneWorkspaceScroll.Bounds.Width));
+        var width = TerminalPaneLayoutMath.EqualPaneWidth(
+            viewportWidth, _panes.Count, MinimumPaneWidth, PaneSplitterWidth);
+        foreach (var pane in _panes) pane.Width = width;
+    }
+
+    private void UpdatePaneWorkspaceSize()
+    {
+        if (_panes.Count == 0 || _updatingPaneLayout) return;
+        if (_panes.Count == 1) RebuildPaneHost(equalize: true);
+    }
+
+    private void BeginHorizontalPaneResize(params TerminalPaneState[] panes)
+    {
+        foreach (var state in _openTabs.Values.Where(state => panes.Contains(state.Pane)))
+            BeginTerminalResizeMask(state);
+    }
+
+    private void CompleteHorizontalPaneResize(TerminalPaneState left, TerminalPaneState right)
+    {
+        var leftIndex = _panes.IndexOf(left) * 2;
+        var rightIndex = _panes.IndexOf(right) * 2;
+        if (leftIndex >= 0 && leftIndex < PaneHost.ColumnDefinitions.Count)
+            left.Width = Math.Max(MinimumPaneWidth, PaneHost.ColumnDefinitions[leftIndex].ActualWidth);
+        if (rightIndex >= 0 && rightIndex < PaneHost.ColumnDefinitions.Count)
+            right.Width = Math.Max(MinimumPaneWidth, PaneHost.ColumnDefinitions[rightIndex].ActualWidth);
+        RebuildPaneHost(equalize: false);
+        foreach (var state in _openTabs.Values.Where(state => ReferenceEquals(state.Pane, left) || ReferenceEquals(state.Pane, right)))
+            CompleteTerminalResizeReveal(state);
+        _ = SaveWorkspaceAsync();
+    }
+
+    private void SetActivePane(TerminalPaneState pane)
+    {
+        if (!_panes.Contains(pane)) return;
+        _activePane = pane;
+        foreach (var candidate in _panes)
+        {
+            candidate.ActiveBorder.BorderBrush = ResourceBrush("AccentBrush");
+            candidate.ActiveBorder.Opacity = ReferenceEquals(candidate, pane) ? 0.72 : 0;
+        }
+    }
+
+    private string PaneLabel(TerminalPaneState pane) => $"Terminal {_panes.IndexOf(pane) + 1}";
+
+    private void UpdatePaneEmptyStates()
+    {
+        foreach (var pane in _panes)
+            if (pane.EmptyState is not null) pane.EmptyState.IsVisible = pane.Tabs.ItemCount == 0;
     }
 
     private void ConstrainMainContentHeight()
@@ -149,23 +508,23 @@ public sealed partial class MainWindow : Window
         }
         if (control && e.Key == Key.W)
         {
-            var state = _openTabs.Values.FirstOrDefault(candidate => ReferenceEquals(candidate.Tab, WorkspaceTabs.SelectedItem));
+            var state = _openTabs.Values.FirstOrDefault(candidate =>
+                ReferenceEquals(candidate.Pane, _activePane)
+                && ReferenceEquals(candidate.Tab, _activePane.Tabs.SelectedItem));
             if (state is not null)
             {
                 await DetachTabAsync(state);
             }
-            else if (WorkspaceTabs.SelectedItem is TabItem selected && !ReferenceEquals(selected, DashboardTab))
+            else if (_activePane.Tabs.SelectedItem is TabItem selected && !ReferenceEquals(selected, DashboardTab))
             {
-                WorkspaceTabs.Items.Remove(selected);
-                var preview = _previewTabs.FirstOrDefault(entry => ReferenceEquals(entry.Value, selected));
-                if (!string.IsNullOrEmpty(preview.Key)) _previewTabs.Remove(preview.Key);
-                WorkspaceTabs.SelectedItem = DashboardTab;
+                RemovePreviewTab(selected);
             }
             e.Handled = true;
             return;
         }
         if (e.Key == Key.Escape)
         {
+            SetActivePane(_panes[0]);
             WorkspaceTabs.SelectedItem = DashboardTab;
             e.Handled = true;
         }
@@ -345,9 +704,10 @@ public sealed partial class MainWindow : Window
             || state.Kind != TerminalSessionKind.Codex) return;
         CancelTerminalReconnect(state, suppress: true);
         state.Terminal.Kill();
-        WorkspaceTabs.Items.Remove(state.Tab);
+        state.Pane.Tabs.Items.Remove(state.Tab);
         _openTabs.Remove(temporaryKey);
-        WorkspaceTabs.SelectedItem = DashboardTab;
+        SelectPaneFallback(state.Pane);
+        UpdatePaneEmptyStates();
         SetStatus("The new Codex session did not register and was stopped.", ErrorBrush);
         _ = SaveWorkspaceAsync();
     }
@@ -581,10 +941,15 @@ public sealed partial class MainWindow : Window
 
     private async Task RestoreWorkspaceAsync()
     {
+        if (_settings.SavedPaneLayouts.Count > 0)
+        {
+            await RestorePaneWorkspaceAsync();
+            return;
+        }
         foreach (var id in _settings.SavedSessionIds.Distinct(StringComparer.Ordinal))
         {
             var session = _sessions.FirstOrDefault(candidate => candidate.Id == id && !candidate.IsHeadless);
-            if (session is not null) await OpenSessionAsync(session, activate: false, launch: false);
+            if (session is not null) await OpenSessionAsync(session, activate: false, launch: false, targetPane: _panes[0]);
         }
         if (!string.IsNullOrWhiteSpace(_settings.ActiveSessionId)
             && _openTabs.TryGetValue(_settings.ActiveSessionId, out var active))
@@ -594,14 +959,139 @@ public sealed partial class MainWindow : Window
         }
         else
         {
+            SetActivePane(_panes[0]);
             WorkspaceTabs.SelectedItem = DashboardTab;
         }
     }
 
+    private async Task RestorePaneWorkspaceAsync()
+    {
+        _restoringPaneLayout = true;
+        try
+        {
+            var layouts = _settings.SavedPaneLayouts;
+            var primaryLayout = layouts[0];
+            _panes[0].Width = Math.Max(MinimumPaneWidth, primaryLayout.Width);
+            _panes[0].InspectorHeight = Math.Clamp(primaryLayout.InspectorHeight, 120, 480);
+            for (var index = 1; index < layouts.Count; index++)
+            {
+                var layout = layouts[index];
+                _panes.Add(CreateSecondaryPane(
+                    layout.Id,
+                    Math.Max(MinimumPaneWidth, layout.Width),
+                    Math.Clamp(layout.InspectorHeight, 120, 480)));
+            }
+            RebuildPaneHost(equalize: false);
+            HashSet<string> activeTerminalIds;
+            try { activeTerminalIds = await _api.GetActiveTerminalIdsAsync(); }
+            catch { activeTerminalIds = []; }
+
+            for (var index = 0; index < layouts.Count && index < _panes.Count; index++)
+            {
+                var pane = _panes[index];
+                var layout = layouts[index];
+                foreach (var savedTab in layout.SavedTabs)
+                {
+                    switch (savedTab.Kind)
+                    {
+                        case "dashboard":
+                            break;
+                        case "codex":
+                        {
+                            var sessionId = savedTab.SessionId ?? savedTab.Key;
+                            var session = _sessions.FirstOrDefault(candidate => candidate.Id == sessionId && !candidate.IsHeadless);
+                            if (session is not null)
+                                await OpenSessionAsync(session, activate: false, launch: false, targetPane: pane);
+                            break;
+                        }
+                        case "codex-pending":
+                        {
+                            var registered = _sessions
+                                .Where(candidate => candidate.WorkingDir == savedTab.WorkingDirectory)
+                                .Where(candidate => savedTab.LaunchedAt <= 0 || candidate.CreatedAt >= savedTab.LaunchedAt - 5)
+                                .OrderBy(candidate => savedTab.LaunchedAt <= 0
+                                    ? candidate.CreatedAt
+                                    : Math.Abs(candidate.CreatedAt - savedTab.LaunchedAt))
+                                .FirstOrDefault();
+                            if (registered is not null)
+                                await OpenSessionAsync(registered, activate: false, launch: false, targetPane: pane);
+                            else if (activeTerminalIds.Contains(savedTab.Key))
+                                RestorePendingCodexTab(savedTab, pane);
+                            break;
+                        }
+                        case "ubuntu":
+                            await OpenUbuntuSessionAsync(
+                                savedTab.WorkingDirectory,
+                                pane,
+                                activate: false,
+                                launch: false,
+                                restoredKey: savedTab.Key,
+                                restoredTitle: savedTab.Title);
+                            break;
+                        case "preview":
+                        {
+                            var sessionId = savedTab.SessionId ?? savedTab.Key.Replace("preview:", string.Empty, StringComparison.Ordinal);
+                            var session = _sessions.Concat(_archivedSessions).FirstOrDefault(candidate => candidate.Id == sessionId);
+                            if (session is not null) await OpenPreviewAsync(session, pane, activate: false);
+                            break;
+                        }
+                    }
+                }
+                SelectSavedPaneTab(pane, layout.ActiveTabKey);
+                ApplyPaneInspectorHeight(pane);
+            }
+
+            var activePane = _panes.FirstOrDefault(pane => pane.Id == _settings.ActivePaneId) ?? _panes[0];
+            SetActivePane(activePane);
+            foreach (var pane in _panes)
+            {
+                var activeState = _openTabs.Values.FirstOrDefault(state =>
+                    ReferenceEquals(state.Pane, pane)
+                    && ReferenceEquals(state.Tab, pane.Tabs.SelectedItem));
+                if (activeState is not null) await EnsureTerminalLaunchedAsync(activeState);
+            }
+            UpdatePaneEmptyStates();
+        }
+        finally
+        {
+            _restoringPaneLayout = false;
+        }
+    }
+
+    private void RestorePendingCodexTab(NativePaneTabLayout savedTab, TerminalPaneState pane)
+    {
+        if (_openTabs.ContainsKey(savedTab.Key)) return;
+        var state = CreateTerminalTab(
+            savedTab.Key,
+            savedTab.Title,
+            savedTab.WorkingDirectory,
+            session: null,
+            kind: TerminalSessionKind.Codex,
+            pane: pane);
+        state.LaunchedAt = savedTab.LaunchedAt;
+        _openTabs[savedTab.Key] = state;
+        pane.Tabs.Items.Add(state.Tab);
+        state.IsAttached = true;
+    }
+
+    private void SelectSavedPaneTab(TerminalPaneState pane, string? activeTabKey)
+    {
+        if (string.IsNullOrWhiteSpace(activeTabKey))
+        {
+            if (ReferenceEquals(pane, _panes[0])) pane.Tabs.SelectedItem = DashboardTab;
+            else if (pane.Tabs.ItemCount > 0) pane.Tabs.SelectedIndex = 0;
+            return;
+        }
+        var match = pane.Tabs.Items.OfType<TabItem>().FirstOrDefault(tab => TabPersistenceKey(tab) == activeTabKey);
+        if (match is not null) pane.Tabs.SelectedItem = match;
+    }
+
     private async Task SaveWorkspaceAsync()
     {
-        if (!_workspaceReady) return;
-        var active = _openTabs.Values.FirstOrDefault(state => ReferenceEquals(WorkspaceTabs.SelectedItem, state.Tab));
+        if (!_workspaceReady || _restoringPaneLayout) return;
+        var active = _openTabs.Values.FirstOrDefault(state =>
+            ReferenceEquals(state.Pane, _activePane)
+            && ReferenceEquals(_activePane.Tabs.SelectedItem, state.Tab));
         _settings = _settings with
         {
             OpenSessionIds = _openTabs.Values
@@ -610,6 +1100,8 @@ public sealed partial class MainWindow : Window
                 .Distinct(StringComparer.Ordinal)
                 .ToList(),
             ActiveSessionId = active?.Session?.Id,
+            PaneLayouts = _panes.Select(CreatePaneLayout).ToList(),
+            ActivePaneId = _activePane.Id,
             SidebarCollapsed = !SidebarBorder.IsVisible,
             SelectedRepo = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir,
             SelectedRepos = _activeRepoPaths.Order(StringComparer.Ordinal).ToList(),
@@ -620,6 +1112,60 @@ public sealed partial class MainWindow : Window
             SidebarWidth = SidebarBorder.IsVisible ? MainContentGrid.ColumnDefinitions[0].ActualWidth : _settings.SidebarWidth,
         };
         await PersistSettingsAsync();
+    }
+
+    private NativePaneLayout CreatePaneLayout(TerminalPaneState pane)
+    {
+        var tabs = pane.Tabs.Items.OfType<TabItem>()
+            .Select(CreateTabLayout)
+            .Where(layout => layout is not null)
+            .Cast<NativePaneTabLayout>()
+            .ToList();
+        return new NativePaneLayout(
+            pane.Id,
+            Math.Max(MinimumPaneWidth, pane.Width),
+            Math.Clamp(pane.InspectorHeight, 120, 480),
+            tabs,
+            pane.Tabs.SelectedItem is TabItem selected ? TabPersistenceKey(selected) : null);
+    }
+
+    private NativePaneTabLayout? CreateTabLayout(TabItem tab)
+    {
+        if (ReferenceEquals(tab, DashboardTab))
+            return new NativePaneTabLayout("dashboard", "dashboard", null, string.Empty, "Dashboard overview");
+        var state = _openTabs.Values.FirstOrDefault(candidate => ReferenceEquals(candidate.Tab, tab));
+        if (state is not null)
+        {
+            var kind = state.Kind == TerminalSessionKind.Ubuntu
+                ? "ubuntu"
+                : state.Session is null ? "codex-pending" : "codex";
+            return new NativePaneTabLayout(
+                kind,
+                state.Key,
+                state.Session?.Id,
+                state.WorkingDirectory,
+                state.TitleBlock.Text ?? state.Key,
+                state.LaunchedAt);
+        }
+        var preview = _previewTabs.FirstOrDefault(entry => ReferenceEquals(entry.Value, tab));
+        if (!string.IsNullOrWhiteSpace(preview.Key))
+        {
+            var sessionId = preview.Key.Replace("preview:", string.Empty, StringComparison.Ordinal);
+            var session = _sessions.Concat(_archivedSessions).FirstOrDefault(candidate => candidate.Id == sessionId);
+            return new NativePaneTabLayout(
+                "preview", preview.Key, sessionId, session?.WorkingDir ?? string.Empty,
+                session?.DisplayTitle ?? sessionId);
+        }
+        return null;
+    }
+
+    private string? TabPersistenceKey(TabItem tab)
+    {
+        if (ReferenceEquals(tab, DashboardTab)) return "dashboard";
+        var state = _openTabs.Values.FirstOrDefault(candidate => ReferenceEquals(candidate.Tab, tab));
+        if (state is not null) return state.Key;
+        var preview = _previewTabs.FirstOrDefault(entry => ReferenceEquals(entry.Value, tab));
+        return string.IsNullOrWhiteSpace(preview.Key) ? null : preview.Key;
     }
 
     private async Task PersistSettingsAsync()
@@ -1068,49 +1614,63 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task OpenSessionAsync(DashboardSession session, bool activate = true, bool launch = true)
+    private async Task OpenSessionAsync(
+        DashboardSession session,
+        bool activate = true,
+        bool launch = true,
+        TerminalPaneState? targetPane = null)
     {
+        targetPane ??= _activePane;
         if (session.IsHeadless || session.Archived)
         {
-            await OpenPreviewAsync(session);
+            await OpenPreviewAsync(session, targetPane);
             return;
         }
         if (_openTabs.TryGetValue(session.Id, out var existing))
         {
+            if (!ReferenceEquals(existing.Pane, targetPane)) MoveTabToPane(existing, targetPane);
             AttachTab(existing, activate);
             if (launch) await EnsureTerminalLaunchedAsync(existing);
             return;
         }
 
         var state = CreateTerminalTab(
-            session.Id, session.DisplayTitle, session.WorkingDir, session, TerminalSessionKind.Codex);
+            session.Id, session.DisplayTitle, session.WorkingDir, session, TerminalSessionKind.Codex, targetPane);
         _openTabs.Add(session.Id, state);
-        WorkspaceTabs.Items.Add(state.Tab);
+        targetPane.Tabs.Items.Add(state.Tab);
         state.IsAttached = true;
-        if (activate) WorkspaceTabs.SelectedItem = state.Tab;
+        if (activate)
+        {
+            targetPane.Tabs.SelectedItem = state.Tab;
+            SetActivePane(targetPane);
+        }
         if (launch)
         {
             await EnsureTerminalLaunchedAsync(state);
         }
         _ = LoadSessionDetailsAsync(state, session);
+        UpdatePaneEmptyStates();
         await SaveWorkspaceAsync();
     }
 
-    private async Task OpenNewSessionAsync(string workingDirectory)
+    private async Task OpenNewSessionAsync(string workingDirectory, TerminalPaneState? targetPane = null)
     {
+        targetPane ??= _activePane;
         try
         {
             var key = await _api.CreateSessionAsync(workingDirectory);
             var project = workingDirectory.TrimEnd('/').Split('/').LastOrDefault() ?? workingDirectory;
             var state = CreateTerminalTab(
-                key, $"New · {project}", workingDirectory, null, TerminalSessionKind.Codex);
+                key, $"New · {project}", workingDirectory, null, TerminalSessionKind.Codex, targetPane);
             state.KnownSessionIdsAtLaunch = _sessions.Select(session => session.Id).ToHashSet(StringComparer.Ordinal);
             state.LaunchedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             _openTabs.Add(key, state);
-            WorkspaceTabs.Items.Add(state.Tab);
+            targetPane.Tabs.Items.Add(state.Tab);
             state.IsAttached = true;
-            WorkspaceTabs.SelectedItem = state.Tab;
+            targetPane.Tabs.SelectedItem = state.Tab;
+            SetActivePane(targetPane);
             await LaunchTerminalAsync(state);
+            UpdatePaneEmptyStates();
             await SaveWorkspaceAsync();
         }
         catch (Exception ex)
@@ -1119,20 +1679,32 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task OpenUbuntuSessionAsync(string workingDirectory)
+    private async Task OpenUbuntuSessionAsync(
+        string workingDirectory,
+        TerminalPaneState? targetPane = null,
+        bool activate = true,
+        bool launch = true,
+        string? restoredKey = null,
+        string? restoredTitle = null)
     {
+        targetPane ??= _activePane;
         try
         {
-            var key = $"ubuntu:{Guid.NewGuid():N}";
+            var key = restoredKey ?? $"ubuntu:{Guid.NewGuid():N}";
             var project = workingDirectory.TrimEnd('/').Split('/').LastOrDefault() ?? workingDirectory;
-            var title = $"{_settings.Distribution} · {project}";
+            var title = restoredTitle ?? $"{_settings.Distribution} · {project}";
             var state = CreateTerminalTab(
-                key, title, workingDirectory, null, TerminalSessionKind.Ubuntu);
+                key, title, workingDirectory, null, TerminalSessionKind.Ubuntu, targetPane);
             _openTabs.Add(key, state);
-            WorkspaceTabs.Items.Add(state.Tab);
+            targetPane.Tabs.Items.Add(state.Tab);
             state.IsAttached = true;
-            WorkspaceTabs.SelectedItem = state.Tab;
-            await EnsureTerminalLaunchedAsync(state);
+            if (activate)
+            {
+                targetPane.Tabs.SelectedItem = state.Tab;
+                SetActivePane(targetPane);
+            }
+            if (launch) await EnsureTerminalLaunchedAsync(state);
+            UpdatePaneEmptyStates();
             await SaveWorkspaceAsync();
         }
         catch (Exception ex)
@@ -1146,7 +1718,8 @@ public sealed partial class MainWindow : Window
         string title,
         string workingDirectory,
         DashboardSession? session,
-        TerminalSessionKind kind)
+        TerminalSessionKind kind,
+        TerminalPaneState pane)
     {
         var isUbuntu = kind == TerminalSessionKind.Ubuntu;
         var textSize = DashboardTextSize.Find(_settings.TextSizeId);
@@ -1307,11 +1880,16 @@ public sealed partial class MainWindow : Window
             BorderBrush = ResourceBrush("BorderBrush"),
             BorderThickness = new Thickness(0, 1, 0, 0),
             Padding = new Thickness(14, 10),
-            Child = new Grid
+            Child = new ScrollViewer
             {
-                RowDefinitions = new RowDefinitions("Auto,Auto"),
-                RowSpacing = 9,
-                Children = { detailsGrid, actions },
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Content = new Grid
+                {
+                    RowDefinitions = new RowDefinitions("Auto,Auto"),
+                    RowSpacing = 9,
+                    Children = { detailsGrid, actions },
+                },
             },
         };
         Grid.SetRow(actions, 1);
@@ -1360,14 +1938,14 @@ public sealed partial class MainWindow : Window
 
         var content = new Grid
         {
-            RowDefinitions = new RowDefinitions("*,12,160"),
+            RowDefinitions = new RowDefinitions($"*,12,{Math.Clamp(pane.InspectorHeight, 120, 480):0.##}"),
             Background = ResourceBrush("TerminalBrush"),
             MinHeight = 0,
             ClipToBounds = true,
             VerticalAlignment = VerticalAlignment.Stretch,
         };
         content.Loaded += (_, _) =>
-            content.Height = TerminalTabContentHeight(WorkspaceTabs.Bounds.Height);
+            content.Height = TerminalTabContentHeight(pane.Tabs.Bounds.Height);
         var terminalClip = new Border
         {
             ClipToBounds = true,
@@ -1428,7 +2006,7 @@ public sealed partial class MainWindow : Window
             titleBlock, statusGlyph, contextText, contextBar, contextDonut,
             detailHeadings, configText,
             promptText, renameBox, renameButton, archiveButton, summaryButton, stopButton,
-            workingDirectory, session, kind);
+            workingDirectory, session, kind, pane);
 
         ApplyThemeToSessionState(state, DashboardTheme.Find(_settings.StyleId));
         inspectorSplitter.AddHandler(
@@ -1445,14 +2023,20 @@ public sealed partial class MainWindow : Window
             },
             RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
             handledEventsToo: true);
-        inspectorSplitter.DragCompleted += (_, _) => CompleteTerminalResizeReveal(state);
+        inspectorSplitter.DragCompleted += (_, _) =>
+        {
+            pane.InspectorHeight = Math.Clamp(content.RowDefinitions[2].ActualHeight, 120, 480);
+            ApplyPaneInspectorHeight(pane, state);
+            CompleteTerminalResizeReveal(state);
+            _ = SaveWorkspaceAsync();
+        };
         terminal.Loaded += (_, _) => AttachTerminalVisualStyling(state);
 
         closeButton.Click += async (_, _) => await DetachTabAsync(state);
         stopButton.Click += async (_, _) => await StopAndRemoveTabAsync(state);
         summaryButton.Click += async (_, _) =>
         {
-            if (state.Session is not null) await OpenPreviewAsync(state.Session);
+            if (state.Session is not null) await OpenPreviewAsync(state.Session, state.Pane);
         };
         renameButton.Click += async (_, _) => await RenameSessionAsync(state);
         archiveButton.Click += async (_, _) =>
@@ -1643,34 +2227,63 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void MoveTabToPane(SessionTabState state, TerminalPaneState targetPane)
+    {
+        if (ReferenceEquals(state.Pane, targetPane)) return;
+        var sourcePane = state.Pane;
+        if (state.IsAttached) sourcePane.Tabs.Items.Remove(state.Tab);
+        state.Pane = targetPane;
+        ApplyPaneInspectorHeight(targetPane, state);
+        if (state.IsAttached) targetPane.Tabs.Items.Add(state.Tab);
+        targetPane.Tabs.SelectedItem = state.Tab;
+        SetActivePane(targetPane);
+        UpdatePaneEmptyStates();
+    }
+
+    private void ApplyPaneInspectorHeight(TerminalPaneState pane, SessionTabState? except = null)
+    {
+        foreach (var state in _openTabs.Values.Where(state => ReferenceEquals(state.Pane, pane)))
+        {
+            if (state.TerminalViewport.RowDefinitions.Count > 2)
+                state.TerminalViewport.RowDefinitions[2].Height = new GridLength(Math.Clamp(pane.InspectorHeight, 120, 480));
+            if (!ReferenceEquals(state, except)) state.TerminalViewport.InvalidateVisual();
+        }
+    }
+
     private void AttachTab(SessionTabState state, bool activate = true)
     {
         state.SuppressReconnect = false;
         if (!state.IsAttached)
         {
-            WorkspaceTabs.Items.Add(state.Tab);
+            state.Pane.Tabs.Items.Add(state.Tab);
             state.IsAttached = true;
         }
-        if (activate) WorkspaceTabs.SelectedItem = state.Tab;
+        if (activate)
+        {
+            state.Pane.Tabs.SelectedItem = state.Tab;
+            SetActivePane(state.Pane);
+        }
+        UpdatePaneEmptyStates();
     }
 
-    private async Task DetachTabAsync(SessionTabState state)
+    private async Task DetachTabAsync(SessionTabState state, bool selectFallback = true)
     {
         if (state.Kind == TerminalSessionKind.Ubuntu)
         {
-            await StopAndRemoveTabAsync(state);
+            await StopAndRemoveTabAsync(state, selectFallback);
             return;
         }
         CancelTerminalReconnect(state, suppress: true);
         EndTerminalStartupReveal(state);
-        WorkspaceTabs.Items.Remove(state.Tab);
+        state.Pane.Tabs.Items.Remove(state.Tab);
         state.IsAttached = false;
-        WorkspaceTabs.SelectedItem = DashboardTab;
+        if (selectFallback) SelectPaneFallback(state.Pane);
+        UpdatePaneEmptyStates();
         SetStatus($"Detached {state.TitleBlock.Text} · persistent WSL2 process continues", RunningBrush);
         await SaveWorkspaceAsync();
     }
 
-    private async Task StopAndRemoveTabAsync(SessionTabState state)
+    private async Task StopAndRemoveTabAsync(SessionTabState state, bool selectFallback = true)
     {
         CancelTerminalReconnect(state, suppress: true);
         EndTerminalStartupReveal(state);
@@ -1682,12 +2295,19 @@ public sealed partial class MainWindow : Window
         state.Terminal.Kill();
         state.IsRunning = false;
         state.IsLaunched = false;
-        WorkspaceTabs.Items.Remove(state.Tab);
+        state.Pane.Tabs.Items.Remove(state.Tab);
         state.IsAttached = false;
         _openTabs.Remove(state.Key);
-        WorkspaceTabs.SelectedItem = DashboardTab;
+        if (selectFallback) SelectPaneFallback(state.Pane);
+        UpdatePaneEmptyStates();
         SetStatus($"Stopped {state.TitleBlock.Text}", StartingBrush);
         await SaveWorkspaceAsync();
+    }
+
+    private void SelectPaneFallback(TerminalPaneState pane)
+    {
+        if (pane.Tabs.ItemCount > 0) pane.Tabs.SelectedIndex = Math.Max(0, pane.Tabs.ItemCount - 1);
+        else if (ReferenceEquals(pane, _panes[0])) pane.Tabs.SelectedItem = DashboardTab;
     }
 
     private void ResetArchiveConfirmation(SessionTabState state)
@@ -1773,7 +2393,7 @@ public sealed partial class MainWindow : Window
         RestyleTerminalText(state);
         state.TerminalView?.InvalidateVisual();
         state.Terminal.InvalidateVisual();
-        if (state.IsAttached && ReferenceEquals(WorkspaceTabs.SelectedItem, state.Tab))
+        if (state.IsAttached && ReferenceEquals(state.Pane.Tabs.SelectedItem, state.Tab))
         {
             state.Terminal.Focus();
         }
@@ -1984,7 +2604,7 @@ public sealed partial class MainWindow : Window
         if (SessionsList.SelectedItem is DashboardSession session)
         {
             SessionsList.SelectedItem = null;
-            await OpenSelectedSessionAsync(session);
+            await RouteSelectedSessionAsync(SessionsList, session);
         }
     }
 
@@ -1992,13 +2612,67 @@ public sealed partial class MainWindow : Window
     {
         if (CompactSessionsList.SelectedItem is not DashboardSession session) return;
         CompactSessionsList.SelectedItem = null;
-        await OpenSelectedSessionAsync(session);
+        await RouteSelectedSessionAsync(CompactSessionsList, session);
     }
 
-    private Task OpenSelectedSessionAsync(DashboardSession session) =>
+    private async Task RouteSelectedSessionAsync(Control anchor, DashboardSession session)
+    {
+        if (session.IsHeadless || session.Archived || _panes.Count == 1)
+        {
+            await OpenSelectedSessionAsync(session, _activePane);
+            return;
+        }
+        ShowSessionTargetFlyout(anchor, session);
+    }
+
+    private Task OpenSelectedSessionAsync(DashboardSession session, TerminalPaneState pane) =>
         session.IsHeadless || session.Archived
-            ? OpenPreviewAsync(session)
-            : OpenSessionAsync(session);
+            ? OpenPreviewAsync(session, pane)
+            : OpenSessionAsync(session, targetPane: pane);
+
+    private void ShowSessionTargetFlyout(Control anchor, DashboardSession session)
+    {
+        Flyout? flyout = null;
+        var options = new StackPanel { Spacing = 4, MinWidth = 210 };
+        options.Children.Add(new TextBlock
+        {
+            Text = "OPEN SESSION IN",
+            Foreground = ResourceBrush("AccentBrush"),
+            FontWeight = FontWeight.Bold,
+            Margin = new Thickness(8, 4, 8, 6),
+        });
+        foreach (var pane in _panes)
+        {
+            var target = pane;
+            var button = new Button
+            {
+                Content = $"Open in {PaneLabel(target)}",
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 7),
+            };
+            button.Click += async (_, _) =>
+            {
+                flyout?.Hide();
+                await OpenSelectedSessionAsync(session, target);
+            };
+            options.Children.Add(button);
+        }
+        flyout = new Flyout
+        {
+            Placement = PlacementMode.Pointer,
+            Content = new Border
+            {
+                Background = ResourceBrush("SurfaceBrush"),
+                BorderBrush = ResourceBrush("BorderBrightBrush"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(8),
+                Child = options,
+            },
+        };
+        FlyoutBase.SetAttachedFlyout(anchor, flyout);
+        flyout.ShowAt(anchor);
+    }
 
     private void OnCompactSessionContainerPrepared(object? sender, ContainerPreparedEventArgs e)
     {
@@ -2054,12 +2728,28 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task OpenPreviewAsync(DashboardSession session)
+    private async Task OpenPreviewAsync(
+        DashboardSession session,
+        TerminalPaneState? targetPane = null,
+        bool activate = true)
     {
+        targetPane ??= _activePane;
         var key = $"preview:{session.Id}";
         if (_previewTabs.TryGetValue(key, out var existing))
         {
-            WorkspaceTabs.SelectedItem = existing;
+            var existingPane = _previewPaneByTab.GetValueOrDefault(existing) ?? _panes[0];
+            if (!ReferenceEquals(existingPane, targetPane))
+            {
+                existingPane.Tabs.Items.Remove(existing);
+                targetPane.Tabs.Items.Add(existing);
+                _previewPaneByTab[existing] = targetPane;
+            }
+            if (activate)
+            {
+                targetPane.Tabs.SelectedItem = existing;
+                SetActivePane(targetPane);
+            }
+            UpdatePaneEmptyStates();
             return;
         }
         var textSize = DashboardTextSize.Find(_settings.TextSizeId);
@@ -2080,9 +2770,9 @@ public sealed partial class MainWindow : Window
         void ClosePreview(bool selectDashboard = true)
         {
             if (tab is null) return;
-            WorkspaceTabs.Items.Remove(tab);
-            _previewTabs.Remove(key);
-            if (selectDashboard) WorkspaceTabs.SelectedItem = DashboardTab;
+            var pane = _previewPaneByTab.GetValueOrDefault(tab) ?? targetPane;
+            RemovePreviewTab(tab, selectFallback: selectDashboard);
+            if (selectDashboard) SelectPaneFallback(pane);
         }
         async Task RenamePreviewAsync(string title)
         {
@@ -2114,9 +2804,12 @@ public sealed partial class MainWindow : Window
         async Task ResumePreviewAsync()
         {
             if (session.IsHeadless || session.Archived) return;
+            var resumePane = tab is not null
+                ? _previewPaneByTab.GetValueOrDefault(tab) ?? targetPane
+                : targetPane;
             ClosePreview(selectDashboard: false);
             var current = _sessions.FirstOrDefault(candidate => candidate.Id == session.Id) ?? session;
-            await OpenSessionAsync(current);
+            await OpenSessionAsync(current, targetPane: resumePane);
         }
         preview = new SessionPreviewControl(
             _api,
@@ -2133,19 +2826,38 @@ public sealed partial class MainWindow : Window
             ClosePreview();
         };
         _previewTabs[key] = tab;
-        WorkspaceTabs.Items.Add(tab);
-        WorkspaceTabs.SelectedItem = tab;
+        _previewPaneByTab[tab] = targetPane;
+        targetPane.Tabs.Items.Add(tab);
+        if (activate)
+        {
+            targetPane.Tabs.SelectedItem = tab;
+            SetActivePane(targetPane);
+        }
+        UpdatePaneEmptyStates();
         await Task.CompletedTask;
+    }
+
+    private void RemovePreviewTab(TabItem tab, bool selectFallback = true)
+    {
+        var pane = _previewPaneByTab.GetValueOrDefault(tab) ?? _panes[0];
+        pane.Tabs.Items.Remove(tab);
+        _previewPaneByTab.Remove(tab);
+        var preview = _previewTabs.FirstOrDefault(entry => ReferenceEquals(entry.Value, tab));
+        if (!string.IsNullOrEmpty(preview.Key)) _previewTabs.Remove(preview.Key);
+        if (selectFallback) SelectPaneFallback(pane);
+        UpdatePaneEmptyStates();
+        _ = SaveWorkspaceAsync();
     }
 
     private void OnNewSessionClicked(object? sender, RoutedEventArgs e)
     {
-        if (sender is Control anchor) ShowNewSessionChooser(anchor);
+        if (sender is Control anchor) ShowNewSessionChooser(anchor, _activePane);
     }
 
-    private void ShowNewSessionChooser(Control anchor)
+    private void ShowNewSessionChooser(Control anchor, TerminalPaneState? initialPane = null)
     {
         _newSessionFlyout?.Hide();
+        var selectedPane = initialPane is not null && _panes.Contains(initialPane) ? initialPane : _activePane;
         var candidates = _repos
             .Where(repo => !string.IsNullOrWhiteSpace(repo.WorkingDir))
             .GroupBy(repo => repo.WorkingDir, StringComparer.Ordinal)
@@ -2207,9 +2919,9 @@ public sealed partial class MainWindow : Window
                 {
                     _newSessionFlyout?.Hide();
                     if (selectedKind == TerminalSessionKind.Ubuntu)
-                        await OpenUbuntuSessionAsync(repo.WorkingDir);
+                        await OpenUbuntuSessionAsync(repo.WorkingDir, selectedPane);
                     else
-                        await OpenNewSessionAsync(repo.WorkingDir);
+                        await OpenNewSessionAsync(repo.WorkingDir, selectedPane);
                 };
                 options.Children.Add(button);
             }
@@ -2266,6 +2978,35 @@ public sealed partial class MainWindow : Window
         search.TextChanged += (_, _) => RenderOptions();
         RenderChoice();
         RenderOptions();
+        var paneSelector = new ComboBox
+        {
+            ItemsSource = _panes.Select(PaneLabel).ToList(),
+            SelectedIndex = Math.Max(0, _panes.IndexOf(selectedPane)),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        AutomationProperties.SetName(paneSelector, "Open new session in terminal pane");
+        paneSelector.SelectionChanged += (_, _) =>
+        {
+            if (paneSelector.SelectedIndex >= 0 && paneSelector.SelectedIndex < _panes.Count)
+                selectedPane = _panes[paneSelector.SelectedIndex];
+        };
+        var paneChoice = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+            ColumnSpacing = 8,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "OPEN IN",
+                    Foreground = ResourceBrush("SecondaryBrush"),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    FontWeight = FontWeight.Bold,
+                },
+                paneSelector,
+            },
+        };
+        Grid.SetColumn(paneSelector, 1);
         var kindChoices = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,*"),
@@ -2279,6 +3020,7 @@ public sealed partial class MainWindow : Window
             Children =
             {
                 new TextBlock { Text = "START NEW SESSION", Foreground = ResourceBrush("AccentBrush"), FontWeight = FontWeight.Bold },
+                paneChoice,
                 kindChoices,
                 choiceHelp,
                 search,
@@ -2309,6 +3051,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnHomeClicked(object? sender, RoutedEventArgs e)
     {
+        SetActivePane(_panes[0]);
         WorkspaceTabs.SelectedItem = DashboardTab;
         await SaveWorkspaceAsync();
     }
@@ -2442,8 +3185,16 @@ public sealed partial class MainWindow : Window
     private async void OnWorkspaceTabChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (!_uiReady) return;
-        var state = _openTabs.Values.FirstOrDefault(candidate => ReferenceEquals(candidate.Tab, WorkspaceTabs.SelectedItem));
+        var pane = sender is TabControl tabs
+            ? _panes.FirstOrDefault(candidate => ReferenceEquals(candidate.Tabs, tabs)) ?? _activePane
+            : _activePane;
+        SetActivePane(pane);
+        var state = _openTabs.Values.FirstOrDefault(candidate =>
+            ReferenceEquals(candidate.Pane, pane)
+            && ReferenceEquals(candidate.Tab, pane.Tabs.SelectedItem));
         if (state is not null) await EnsureTerminalLaunchedAsync(state);
+        ApplyPaneInspectorHeight(pane);
+        UpdatePaneEmptyStates();
         await SaveWorkspaceAsync();
     }
 
@@ -2454,6 +3205,58 @@ public sealed partial class MainWindow : Window
             await EnsureDashboardServiceAsync();
         }
         await RefreshAllAsync();
+    }
+
+    private async void OnLaunchBrowserClicked(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            LaunchBrowserButton.IsEnabled = false;
+            var dashboardUrl = await FindBrowserDashboardUrlAsync();
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dashboardUrl)
+            {
+                UseShellExecute = true,
+            });
+            SetStatus("Opened browser-based Codex dashboard", RunningBrush);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not open browser dashboard: {ex.Message}", ErrorBrush);
+        }
+        finally
+        {
+            LaunchBrowserButton.IsEnabled = true;
+        }
+    }
+
+    private static async Task<string> FindBrowserDashboardUrlAsync()
+    {
+        foreach (var dashboardUrl in BrowserDashboardUrls)
+        {
+            try
+            {
+                using var response = await BrowserDashboardProbeClient.GetAsync(
+                    $"{dashboardUrl}/api/native/launch/status");
+                if (!response.IsSuccessStatusCode
+                    || !string.Equals(
+                        response.Content.Headers.ContentType?.MediaType,
+                        "application/json",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                var payload = await response.Content.ReadAsStringAsync();
+                if (payload.Contains("\"ok\":true", StringComparison.OrdinalIgnoreCase))
+                {
+                    return dashboardUrl;
+                }
+            }
+            catch
+            {
+                // Try the next known local browser-dashboard port.
+            }
+        }
+        return BrowserDashboardUrls[0];
     }
 
     private async void OnThemeChanged(object? sender, SelectionChangedEventArgs e)
@@ -2499,6 +3302,12 @@ public sealed partial class MainWindow : Window
             Color.FromArgb(72, divider.R, divider.G, divider.B));
         _sessionDividerAccent = Color.Parse(theme.Accent);
         _sessionDividerSecondary = Color.Parse(theme.Secondary);
+        Resources["TabIdleBrush"] = new SolidColorBrush(Color.FromArgb(
+            20, _sessionDividerAccent.R, _sessionDividerAccent.G, _sessionDividerAccent.B));
+        Resources["TabActiveBrush"] = new SolidColorBrush(Color.FromArgb(
+            48, _sessionDividerAccent.R, _sessionDividerAccent.G, _sessionDividerAccent.B));
+        Resources["TabDividerBrush"] = new SolidColorBrush(Color.FromArgb(
+            85, divider.R, divider.G, divider.B));
         UpdateSessionHoverOverlayBrushes();
         UpdateHeaderConnectionIndicator();
         ApplyWindowsTitleBarTheme(theme);
@@ -2534,6 +3343,31 @@ public sealed partial class MainWindow : Window
         foreach (var state in _openTabs.Values)
         {
             ApplyThemeToSessionState(state, theme);
+        }
+        foreach (var pane in _panes)
+        {
+            pane.Root.Background = Brush.Parse(theme.Base);
+            pane.Tabs.Background = Brush.Parse(theme.Base);
+            pane.ActiveBorder.BorderBrush = Brush.Parse(theme.Accent);
+            pane.AddButton.Background = Brush.Parse(theme.Elevated);
+            pane.AddButton.BorderBrush = Brush.Parse(theme.BorderBright);
+            if (pane.RemoveButton is not null)
+            {
+                pane.RemoveButton.Background = Brush.Parse(theme.Elevated);
+                pane.RemoveButton.BorderBrush = Brush.Parse(theme.BorderBright);
+            }
+            if (pane.EmptyState is not null)
+            {
+                pane.EmptyState.Background = Brush.Parse(theme.Base);
+                pane.EmptyState.BorderBrush = Brush.Parse(theme.Border);
+                if (pane.EmptyState.Child is StackPanel emptyContent)
+                {
+                    if (emptyContent.Children.ElementAtOrDefault(0) is TextBlock heading)
+                        heading.Foreground = Brush.Parse(theme.Accent);
+                    if (emptyContent.Children.ElementAtOrDefault(1) is TextBlock body)
+                        body.Foreground = Brush.Parse(theme.Secondary);
+                }
+            }
         }
         foreach (var tab in _previewTabs.Values)
         {
@@ -2618,7 +3452,8 @@ public sealed partial class MainWindow : Window
         {
             state.Terminal.FontSize = size.TerminalFontSize;
         }
-        foreach (var tab in WorkspaceTabs.Items.OfType<TabItem>()) ApplyTabHeaderTextSize(tab, size);
+        foreach (var pane in _panes)
+            foreach (var tab in pane.Tabs.Items.OfType<TabItem>()) ApplyTabHeaderTextSize(tab, size);
     }
 
     private static void ApplyTabHeaderTextSize(TabItem tab, DashboardTextSize size)
@@ -2646,7 +3481,7 @@ public sealed partial class MainWindow : Window
     private static double TabIconFontSize(DashboardTextSize size) => TabHeaderFontSize(size) - 2;
     private static double TabCloseFontSize(DashboardTextSize size) => Math.Max(11, TabHeaderFontSize(size) - 2);
 
-    private static void AttachTerminalVisualStyling(SessionTabState state)
+    private void AttachTerminalVisualStyling(SessionTabState state)
     {
         if (state.TerminalView is not null) return;
         var terminalView = state.Terminal
@@ -2656,13 +3491,73 @@ public sealed partial class MainWindow : Window
         if (terminalView is null) return;
 
         state.TerminalView = terminalView;
+        terminalView.CursorBlink = false;
+        terminalView.Terminal.Options.CursorBlink = false;
+        terminalView.AddHandler(
+            InputElement.PointerPressedEvent,
+            (_, args) => OnTerminalLinkPointerPressed(state, args),
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        terminalView.Terminal.CursorStyleChanged += (_, _) =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                terminalView.CursorBlink = false;
+                terminalView.Terminal.Options.CursorBlink = false;
+            });
+        terminalView.PropertyChanged += (_, args) =>
+        {
+            if (args.Property == TerminalView.ViewportYProperty)
+            {
+                Dispatcher.UIThread.Post(() => RestyleTerminalText(state));
+            }
+        };
         terminalView.Terminal.BufferChanged += (_, _) =>
             Dispatcher.UIThread.Post(() =>
             {
+                terminalView.CursorBlink = false;
+                terminalView.Terminal.Options.CursorBlink = false;
                 state.TerminalStartupGate?.ObserveOutput(DateTimeOffset.UtcNow);
                 if (state.TerminalStartupGate is null) RestyleTerminalText(state);
             });
         RestyleTerminalText(state);
+    }
+
+    private void OnTerminalLinkPointerPressed(SessionTabState state, PointerPressedEventArgs args)
+    {
+        if (state.TerminalView is not { } terminalView
+            || (args.KeyModifiers & KeyModifiers.Control) == 0
+            || args.GetCurrentPoint(terminalView).Properties.PointerUpdateKind
+                is not PointerUpdateKind.LeftButtonPressed)
+        {
+            return;
+        }
+
+        var terminal = terminalView.Terminal;
+        if (terminal.Cols <= 0 || terminal.Rows <= 0
+            || terminalView.Bounds.Width <= 0 || terminalView.Bounds.Height <= 0) return;
+        var point = args.GetPosition(terminalView);
+        var column = Math.Clamp((int)(point.X / (terminalView.Bounds.Width / terminal.Cols)), 0, terminal.Cols - 1);
+        var viewportRow = Math.Clamp((int)(point.Y / (terminalView.Bounds.Height / terminal.Rows)), 0, terminal.Rows - 1);
+        var lineIndex = terminal.Buffer.ViewportY + viewportRow;
+        if (lineIndex < 0 || lineIndex >= terminal.Buffer.Length) return;
+        var line = terminal.Buffer.GetLine(lineIndex);
+        if (line is null) return;
+        var url = TerminalLinkDetector.FindHttpUrlAtColumn(line.TranslateToString(trimRight: false), column);
+        if (url is null) return;
+
+        args.Handled = true;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
+            {
+                UseShellExecute = true,
+            });
+            SetStatus($"Opened {new Uri(url).Host} in the default browser", RunningBrush);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not open link: {ex.Message}", ErrorBrush);
+        }
     }
 
     private static bool IsCodexComposerReady(SessionTabState state)
@@ -2701,17 +3596,34 @@ public sealed partial class MainWindow : Window
         for (var lineIndex = firstLine; lineIndex < lastLine; lineIndex++)
         {
             if (lines[lineIndex] is not { } line) continue;
+            var links = TerminalLinkDetector.FindHttpUrls(line.TranslateToString(trimRight: false));
             var changed = false;
             for (var cellIndex = 0; cellIndex < line.Length; cellIndex++)
             {
                 var cell = line[cellIndex];
-                if (!cell.Attributes.IsDim()) continue;
                 var attributes = cell.Attributes;
-                if (attributes.GetFgColorMode() == (int)XTerm.Common.ColorMode.RGB
-                    && attributes.GetFgColor() == packedRgb
-                    && !attributes.IsBold()) continue;
-                attributes.SetFgColor(packedRgb, (int)XTerm.Common.ColorMode.RGB);
-                attributes.SetBold(false);
+                var changedCell = false;
+                if (attributes.IsBlink())
+                {
+                    attributes.SetBlink(false);
+                    changedCell = true;
+                }
+                if (attributes.IsDim()
+                    && (attributes.GetFgColorMode() != (int)XTerm.Common.ColorMode.RGB
+                        || attributes.GetFgColor() != packedRgb
+                        || attributes.IsBold()))
+                {
+                    attributes.SetFgColor(packedRgb, (int)XTerm.Common.ColorMode.RGB);
+                    attributes.SetBold(false);
+                    changedCell = true;
+                }
+                if (!attributes.IsUnderline()
+                    && links.Any(link => cellIndex >= link.Start && cellIndex < link.Start + link.Length))
+                {
+                    attributes.SetUnderline(true);
+                    changedCell = true;
+                }
+                if (!changedCell) continue;
                 cell.Attributes = attributes;
                 line[cellIndex] = cell;
                 changed = true;
@@ -2845,9 +3757,12 @@ public sealed partial class MainWindow : Window
         HeaderStatusHalo.Opacity = 0.08 + intensity * 0.2;
     }
 
-    private void ApplyWindowsTitleBarTheme(DashboardTheme theme)
+    private void ApplyWindowsTitleBarTheme(DashboardTheme theme) =>
+        ApplyWindowsTitleBarTheme(this, theme);
+
+    private static void ApplyWindowsTitleBarTheme(Window window, DashboardTheme theme)
     {
-        var handle = TryGetPlatformHandle();
+        var handle = window.TryGetPlatformHandle();
         if (handle is null) return;
         WindowsTitleBarTheme.Apply(
             handle.Handle,
@@ -2977,6 +3892,28 @@ public sealed partial class MainWindow : Window
         Ubuntu,
     }
 
+    private sealed class TerminalPaneState(
+        string id,
+        TabControl tabs,
+        Grid root,
+        Button addButton,
+        Button? removeButton,
+        Border? emptyState,
+        Border activeBorder,
+        double width,
+        double inspectorHeight)
+    {
+        public string Id { get; } = id;
+        public TabControl Tabs { get; } = tabs;
+        public Grid Root { get; } = root;
+        public Button AddButton { get; } = addButton;
+        public Button? RemoveButton { get; } = removeButton;
+        public Border? EmptyState { get; } = emptyState;
+        public Border ActiveBorder { get; } = activeBorder;
+        public double Width { get; set; } = width;
+        public double InspectorHeight { get; set; } = inspectorHeight;
+    }
+
     private sealed class SessionTabState(
         string key,
         TabItem tab,
@@ -3006,7 +3943,8 @@ public sealed partial class MainWindow : Window
         Button stopButton,
         string workingDirectory,
         DashboardSession? session,
-        TerminalSessionKind kind)
+        TerminalSessionKind kind,
+        TerminalPaneState pane)
     {
         public string Key { get; set; } = key;
         public TabItem Tab { get; } = tab;
@@ -3039,6 +3977,7 @@ public sealed partial class MainWindow : Window
         public string WorkingDirectory { get; } = workingDirectory;
         public DashboardSession? Session { get; set; } = session;
         public TerminalSessionKind Kind { get; } = kind;
+        public TerminalPaneState Pane { get; set; } = pane;
         public HashSet<string> KnownSessionIdsAtLaunch { get; set; } = [];
         public long LaunchedAt { get; set; }
         public bool IsAttached { get; set; }

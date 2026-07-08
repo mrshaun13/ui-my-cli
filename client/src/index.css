@@ -429,6 +429,56 @@ html, body, #root {
   align-items: center;
   gap: 10px;
   margin-left: auto;
+  position: relative;
+}
+
+.surface-launch-btn {
+  white-space: nowrap;
+  padding: 7px 12px;
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-elevated));
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.surface-launch-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+  color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.surface-launch-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.surface-launch-btn:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.surface-launch-error {
+  position: absolute;
+  top: calc(100% + 9px);
+  right: 0;
+  z-index: var(--z-tooltip);
+  width: max-content;
+  max-width: min(360px, 80vw);
+  padding: 7px 10px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--text-scale));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .filter-btn {

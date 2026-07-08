@@ -19,6 +19,9 @@ and replays recent scrollback.
 - Conversation-aware search across active and optionally archived sessions.
 - Multi-project filter chips plus waiting-for-input, headless, and age filters.
 - Multiple simultaneous session tabs backed by persistent WSL2 PTYs.
+- Unlimited horizontally scrollable terminal panes, each with its own tab strip
+  and independently resizable context/configuration panel. Session and new-run
+  pickers can target any pane, and the complete pane workspace is restored.
 - Detachable tabs, explicit Stop actions, and terminal reattachment after the
   native application exits.
 - Automatic terminal-bridge reconnect with bounded backoff and a manual
@@ -53,8 +56,9 @@ and replays recent scrollback.
   tooltips for project, activity time, status, and latest prompt.
 - Responsive dashboard, terminal-inspector, and session-preview layouts that
   reflow cards and actions as the native window narrows.
-- The same ten dashboard styles and four text/terminal size options as the
-  browser UI, with theme-owned input, dropdown, button, checkbox, scrollbar,
+- Nineteen native dashboard styles, including black-terminal neon red, blue,
+  green, and purple variants, plus four text/terminal size options. All use
+  theme-owned input, dropdown, button, checkbox, scrollbar,
   focus, hover, drag, and selected-state chrome instead of Fluent's default
   white outlines. Scrollbars use one stable full-size geometry so their visual
   state and drag position cannot diverge.

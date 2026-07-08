@@ -29,6 +29,9 @@
     <SolidColorBrush x:Key="ErrorBrush" Color="#EF4444" />
     <SolidColorBrush x:Key="TerminalBrush" Color="#020507" />
     <SolidColorBrush x:Key="SessionDividerBrush" Color="#2A3F56" Opacity="0.3" />
+    <SolidColorBrush x:Key="TabIdleBrush" Color="#1400FFA3" />
+    <SolidColorBrush x:Key="TabActiveBrush" Color="#3000FFA3" />
+    <SolidColorBrush x:Key="TabDividerBrush" Color="#552A3F56" />
     <!-- Override the Fluent scrollbar resources that otherwise reappear when
          its IsExpanded state activates. ApplyTheme updates these with every
          dashboard palette change. -->
@@ -69,6 +72,22 @@
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="CornerRadius" Value="5" />
       <Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}" />
+    </Style>
+
+    <Style Selector="TabItem">
+      <Setter Property="Background" Value="{DynamicResource TabIdleBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource TabDividerBrush}" />
+      <Setter Property="BorderThickness" Value="0,0,1,0" />
+      <Setter Property="Padding" Value="9,5" />
+      <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="TabItem:pointerover">
+      <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="TabItem:selected">
+      <Setter Property="Background" Value="{DynamicResource TabActiveBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="Button:pointerover">
       <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
@@ -238,7 +257,7 @@
   <Grid RowDefinitions="Auto,*,Auto">
     <Border Grid.Row="0" x:Name="AppHeader" Background="{DynamicResource SurfaceBrush}"
             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto">
         <Button Grid.Column="0" x:Name="HomeButton" Click="OnHomeClicked" Margin="0,0,12,0"
                 Background="Transparent" BorderThickness="0" Padding="4">
           <StackPanel Orientation="Horizontal" Spacing="8">
@@ -272,6 +291,10 @@
                 ToolTip.Tip="Show or hide session sidebar" Padding="10,5" Margin="0,0,8,0" />
         <Button Grid.Column="8" x:Name="RefreshButton" Content="Refresh" Click="OnRefreshClicked"
                 ToolTip.Tip="Refresh dashboard (Ctrl+R)"
+                Padding="12,5" Margin="0,0,8,0" />
+        <Button Grid.Column="9" x:Name="LaunchBrowserButton" Content="Launch in Browser"
+                Click="OnLaunchBrowserClicked"
+                ToolTip.Tip="Open the browser-based Codex dashboard"
                 Padding="12,5" />
       </Grid>
     </Border>
@@ -435,9 +458,13 @@
       <GridSplitter Grid.Column="1" x:Name="SidebarSplitter" Width="5" Background="{DynamicResource BorderBrush}"
                     ResizeDirection="Columns" DragCompleted="OnSidebarResizeCompleted" />
 
-      <TabControl Grid.Column="2" x:Name="WorkspaceTabs" Background="{DynamicResource BaseBrush}"
-                  HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
-                  SelectionChanged="OnWorkspaceTabChanged">
+      <ScrollViewer Grid.Column="2" x:Name="PaneWorkspaceScroll"
+                    HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                    Background="{DynamicResource BaseBrush}">
+        <Grid x:Name="PaneHost" MinWidth="460" Background="{DynamicResource BaseBrush}">
+          <Grid x:Name="PrimaryPaneRoot" MinWidth="460" Background="{DynamicResource BaseBrush}">
+      <TabControl x:Name="WorkspaceTabs" Background="{DynamicResource BaseBrush}"
+                  HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
         <TabItem x:Name="DashboardTab">
           <TabItem.Header>
             <TextBlock Text="Dashboard overview" FontSize="12" VerticalAlignment="Center" />
@@ -642,6 +669,13 @@
           </ScrollViewer>
         </TabItem>
       </TabControl>
+            <Button x:Name="PrimaryPaneAddButton" Content="+"
+                    Width="28" Height="42" Padding="0" FontSize="18" Opacity="0.55"
+                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                    ToolTip.Tip="Add terminal pane" ZIndex="12" />
+          </Grid>
+        </Grid>
+      </ScrollViewer>
     </Grid>
 
     <Border Grid.Row="2" x:Name="AppFooter" Background="{DynamicResource SurfaceBrush}"

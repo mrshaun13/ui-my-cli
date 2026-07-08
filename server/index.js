@@ -26,6 +26,7 @@ const { WebSocketServer } = require('ws');
 
 const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
 const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./providers');
+const { launchWindowsNativeDashboard } = require('./native-launcher');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
 const IS_DEV = process.env.NODE_ENV !== 'production';
@@ -65,6 +66,21 @@ app.get('/api/status', (_req, res) => {
 
 app.get('/api/providers', (_req, res) => {
   res.json(safeListProviders());
+});
+
+app.get('/api/native/launch/status', (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.post('/api/native/launch', async (_req, res) => {
+  try {
+    const action = await launchWindowsNativeDashboard();
+    res.json({ ok: true, action });
+  } catch (err) {
+    const unavailable = err.code === 'NATIVE_LAUNCH_UNAVAILABLE';
+    console.error('[native:launch] error:', err.message);
+    res.status(unavailable ? 501 : 500).json({ error: err.message });
+  }
 });
 
 app.get(['/api/:providerId/terminals', '/api/terminals'], providerRoute((provider, _req, res) => {

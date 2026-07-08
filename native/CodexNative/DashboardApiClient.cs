@@ -5,13 +5,12 @@ namespace CodexNative;
 
 public sealed class DashboardApiClient : IDisposable
 {
-    private static readonly Uri SharedService = new("http://127.0.0.1:7575/api/");
     private static readonly Uri PrivateService = new("http://127.0.0.1:7577/api/");
     private readonly HttpClient _http = new()
     {
         Timeout = TimeSpan.FromSeconds(30),
     };
-    private Uri _service = SharedService;
+    private Uri _service = PrivateService;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -26,11 +25,6 @@ public sealed class DashboardApiClient : IDisposable
 
     public async Task<bool> TryUseExistingServiceAsync(CancellationToken cancellationToken = default)
     {
-        if (await ProbeAsync(SharedService, TimeSpan.FromSeconds(10), cancellationToken))
-        {
-            _service = SharedService;
-            return true;
-        }
         if (await ProbeAsync(PrivateService, TimeSpan.FromSeconds(4), cancellationToken))
         {
             _service = PrivateService;
@@ -68,6 +62,15 @@ public sealed class DashboardApiClient : IDisposable
 
     public Task<List<DashboardSession>> GetSessionsAsync(CancellationToken cancellationToken = default) =>
         GetCodexAsync<List<DashboardSession>>("sessions", cancellationToken);
+
+    public async Task<HashSet<string>> GetActiveTerminalIdsAsync(CancellationToken cancellationToken = default)
+    {
+        var terminals = await GetCodexAsync<List<TerminalDescriptor>>("terminals", cancellationToken);
+        return terminals
+            .Where(terminal => !string.IsNullOrWhiteSpace(terminal.SessionId))
+            .Select(terminal => terminal.SessionId)
+            .ToHashSet(StringComparer.Ordinal);
+    }
 
     public Task<List<DashboardSession>> GetArchivedSessionsAsync(CancellationToken cancellationToken = default) =>
         GetCodexAsync<List<DashboardSession>>("sessions/archived", cancellationToken);
@@ -168,4 +171,9 @@ public sealed class DashboardApiClient : IDisposable
     }
 
     public void Dispose() => _http.Dispose();
+
+    private sealed class TerminalDescriptor
+    {
+        public string SessionId { get; set; } = string.Empty;
+    }
 }

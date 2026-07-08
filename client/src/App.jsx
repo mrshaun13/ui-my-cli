@@ -378,6 +378,8 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [coldDays, setColdDaysState] = useState(() => loadColdDays(providerId))
+  const [nativeLaunchPending, setNativeLaunchPending] = useState(false)
+  const [nativeLaunchError, setNativeLaunchError] = useState('')
   const env = useEnv(providerId, providerSessionsReady)
 
   const setSelectedProviderId = useCallback((nextProviderId) => {
@@ -459,6 +461,33 @@ export default function App() {
   }, [sidebarWidth])
 
   const goHome = useCallback(() => dispatch({ type: 'deactivate' }), [])
+
+  const handleLaunchWindows = useCallback(async () => {
+    setNativeLaunchPending(true)
+    setNativeLaunchError('')
+    try {
+      const response = await fetch('/api/native/launch', { method: 'POST' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        // A long-running dashboard can serve a freshly built client while its
+        // in-memory routes still predate this endpoint. Bridge through the
+        // other known loopback dashboard without restarting its live PTYs.
+        if (response.status === 404) {
+          const alternatePort = window.location.port === '7576' ? '7575' : '7576'
+          await fetch(`http://127.0.0.1:${alternatePort}/api/native/launch`, {
+            method: 'POST',
+            mode: 'no-cors',
+          })
+          return
+        }
+        throw new Error(data.error || 'Windows could not launch Codex Native.')
+      }
+    } catch (error) {
+      setNativeLaunchError(error.message)
+    } finally {
+      setNativeLaunchPending(false)
+    }
+  }, [])
 
   // ── Persist tabs to localStorage on every change ───────────────────────────
   useEffect(() => {
@@ -748,6 +777,19 @@ export default function App() {
             <div className="topbar-meta">
               <span style={{ color: 'var(--yellow)' }}>⚡ {needsYouCount}</span> waiting
             </div>
+          )}
+          <button
+            type="button"
+            className="surface-launch-btn"
+            onClick={handleLaunchWindows}
+            disabled={nativeLaunchPending}
+            aria-busy={nativeLaunchPending}
+            title={nativeLaunchError || 'Open the Codex Native Windows dashboard'}
+          >
+            Launch in Windows
+          </button>
+          {nativeLaunchError && (
+            <span className="surface-launch-error" role="status">{nativeLaunchError}</span>
           )}
         </div>
       </header>
