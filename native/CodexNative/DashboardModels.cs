@@ -99,6 +99,20 @@ public sealed class ProviderStatus
     public string? Error { get; set; }
 }
 
+public sealed class AdaptiveRouteResult
+{
+    public string Model { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string Effort { get; set; } = string.Empty;
+    public string Level { get; set; } = string.Empty;
+    public string Source { get; set; } = string.Empty;
+    public double Confidence { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public bool ClassifierUsed { get; set; }
+    public string? SessionId { get; set; }
+    public string? TurnId { get; set; }
+}
+
 public sealed class TokenWindow
 {
     public List<long> Input { get; set; } = [];

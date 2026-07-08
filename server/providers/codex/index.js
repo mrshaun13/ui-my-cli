@@ -25,12 +25,13 @@ function codexExecutable() {
   return fs.existsSync(userInstall) ? userInstall : 'codex';
 }
 
-function buildCommand(sessionId) {
+function buildCommand(sessionId, options = {}) {
   const command = codexExecutable();
   // Dashboard terminals already provide their own visual activity indicators.
   // Disable Codex's animated welcome/status/spinner treatment so embedded
   // terminal renderers do not repaint the Working row and cursor continuously.
   const args = ['-c', 'tui.animations=false'];
+  if (options.remoteEndpoint) args.push('--remote', options.remoteEndpoint);
   if (sessionId) args.push('resume', sessionId);
   return { command, args };
 }
@@ -65,6 +66,7 @@ module.exports = {
   ...metadata,
   availability,
   buildCommand,
+  codexExecutable,
   watchPaths,
   listSessions: codex.listSessions,
   listArchivedSessions: codex.listArchivedSessions,

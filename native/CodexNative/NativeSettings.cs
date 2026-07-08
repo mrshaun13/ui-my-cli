@@ -91,7 +91,10 @@ public sealed record NativePaneLayout(
     double InspectorHeight,
     List<NativePaneTabLayout>? Tabs = null,
     string? ActiveTabKey = null,
-    bool InspectorCollapsed = false)
+    bool InspectorCollapsed = false,
+    bool AdaptiveEnabled = false,
+    string AdaptivePreference = "balanced",
+    string? StyleId = null)
 {
     [JsonIgnore]
     public IReadOnlyList<NativePaneTabLayout> SavedTabs => Tabs ?? [];

@@ -11,6 +11,8 @@ with an appropriate HTTP status code.
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
 | `GET` | `/api/native/launch/status` | Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching. |
 | `POST` | `/api/native/launch` | Focus the installed Codex Native Windows dashboard, or start it when not already running (Windows/WSL2 only). |
+| `GET` | `/api/codex/adaptive/models` | Authenticated Codex model catalog used by native Adaptive routing, including each visible model's supported reasoning efforts and service tiers. |
+| `POST` | `/api/codex/sessions/:id/adaptive/submit` | Classify and submit one native Adaptive prompt through the shared Codex app-server thread. For a pending session, body `{ text, preference?, workingDir }` starts the first turn before returning its real `sessionId`; later turns use `{ text, preference? }`. |
 | `GET` | `/api/:providerId/terminals` |  |
 | `GET` | `/api/terminals` |  |
 | `GET` | `/api/:providerId/stats` | Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex supports `statsMode=combined|triage|codex` to switch chart cohorts while leaving tool-call columns stable. |
@@ -25,7 +27,7 @@ with an appropriate HTTP status code.
 | `GET` | `/api/sessions/search` | Compatibility alias for default provider search |
 | `GET` | `/api/:providerId/repos` | List all unique repos (working directories) from one provider's past sessions |
 | `GET` | `/api/repos` | Compatibility alias for default provider repos |
-| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string }`); returns `{ tempKey }` |
+| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string, adaptive?: boolean }`); returns `{ tempKey }` |
 | `POST` | `/api/sessions/create` | Compatibility alias for default provider session creation |
 | `GET` | `/api/:providerId/sessions/:id/preview` | Provider-scoped rich read-only session detail — chat history, stats, top tools |
 | `GET` | `/api/sessions/:id/preview` | Rich read-only session detail — chat history, stats, top tools |

@@ -27,6 +27,9 @@ public sealed partial class MainWindow : Window
     private const double InspectorMinimumHeight = 120;
     private const double InspectorMaximumHeight = 480;
     private const double InspectorCollapsedHeight = 44;
+    private const int AdaptiveComposerRow = 1;
+    private const int InspectorSplitterRow = 2;
+    private const int InspectorRow = 3;
     private static readonly string[] BrowserDashboardUrls =
     [
         "http://127.0.0.1:7575",
@@ -109,7 +112,11 @@ public sealed partial class MainWindow : Window
             ApplyResponsiveDashboardLayout(args.NewSize.Width);
         };
         SizeChanged += (_, _) =>
-            Dispatcher.UIThread.Post(ConstrainMainContentHeight, DispatcherPriority.Loaded);
+            Dispatcher.UIThread.Post(() =>
+            {
+                ConstrainMainContentHeight();
+                UpdateTerminalTabContentHeights();
+            }, DispatcherPriority.Loaded);
         PaneWorkspaceScroll.SizeChanged += (_, _) => UpdatePaneWorkspaceSize();
         SessionFiltersToggle.SizeChanged += (_, args) =>
         {
@@ -160,6 +167,31 @@ public sealed partial class MainWindow : Window
 
     private void RegisterPane(TerminalPaneState pane)
     {
+        var themeSelector = new ComboBox
+        {
+            Width = 142,
+            Height = 28,
+            Padding = new Thickness(8, 2),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 3, 36, 0),
+            ItemsSource = DashboardTheme.All
+                .Select(theme => new PaneThemeOption(theme.Id, theme.Label))
+                .ToList(),
+            ZIndex = 13,
+        };
+        pane.ThemeComboBox = themeSelector;
+        pane.Root.Children.Add(themeSelector);
+        ToolTip.SetTip(themeSelector, "Choose a theme for this terminal pane");
+        AutomationProperties.SetName(themeSelector, "Terminal pane theme");
+        themeSelector.SelectionChanged += async (_, _) =>
+        {
+            if (pane.UpdatingThemeSelector || themeSelector.SelectedItem is not PaneThemeOption option) return;
+            pane.StyleId = option.Id;
+            ApplyPaneTheme(pane);
+            await SaveWorkspaceAsync();
+        };
+        SyncPaneThemeSelector(pane);
         pane.AddButton.Tag = pane;
         pane.AddButton.Click += OnAddPaneClicked;
         if (pane.RemoveButton is not null)
@@ -179,6 +211,7 @@ public sealed partial class MainWindow : Window
             foreach (var state in _openTabs.Values.Where(state => ReferenceEquals(state.Pane, pane)))
                 state.TerminalViewport.Height = contentHeight;
         };
+        ApplyPaneTheme(pane);
     }
 
     private void AddPaneSessionLauncher(TerminalPaneState pane)
@@ -549,6 +582,14 @@ public sealed partial class MainWindow : Window
     {
         if (_panes.Count == 0 || _updatingPaneLayout) return;
         if (_panes.Count == 1) RebuildPaneHost(equalize: true);
+        UpdateTerminalTabContentHeights();
+    }
+
+    private void UpdateTerminalTabContentHeights()
+    {
+        var contentHeight = TerminalTabContentHeight();
+        foreach (var state in _openTabs.Values)
+            state.TerminalViewport.Height = contentHeight;
     }
 
     private void CompleteHorizontalPaneResize(TerminalPaneState left, TerminalPaneState right)
@@ -571,6 +612,249 @@ public sealed partial class MainWindow : Window
     }
 
     private string PaneLabel(TerminalPaneState pane) => $"Terminal {_panes.IndexOf(pane) + 1}";
+
+    private static string NormalizeAdaptivePreference(string? value) => value switch
+    {
+        "speed" => "speed",
+        "quality" => "quality",
+        _ => "balanced",
+    };
+
+    private static bool IsPendingCodexSession(SessionTabState state) =>
+        state.Kind == TerminalSessionKind.Codex
+        && state.Key.StartsWith("pending-", StringComparison.Ordinal);
+
+    private DashboardTheme EffectivePaneTheme(TerminalPaneState pane) =>
+        string.IsNullOrWhiteSpace(pane.StyleId)
+            ? _currentTheme
+            : DashboardTheme.Find(pane.StyleId);
+
+    private static string? NormalizePaneStyleId(string? value) =>
+        DashboardTheme.All.Any(theme => theme.Id == value) ? value : null;
+
+    private void SyncPaneThemeSelector(TerminalPaneState pane)
+    {
+        if (pane.ThemeComboBox is null) return;
+        pane.UpdatingThemeSelector = true;
+        try
+        {
+            var selectedStyleId = pane.StyleId ?? _currentTheme.Id;
+            pane.ThemeComboBox.SelectedItem = pane.ThemeComboBox.ItemsSource?
+                .OfType<PaneThemeOption>()
+                .FirstOrDefault(option => option.Id == selectedStyleId)
+                ?? pane.ThemeComboBox.ItemsSource?.OfType<PaneThemeOption>().FirstOrDefault();
+        }
+        finally
+        {
+            pane.UpdatingThemeSelector = false;
+        }
+    }
+
+    private void ApplyPaneTheme(TerminalPaneState pane)
+    {
+        SyncPaneThemeSelector(pane);
+        var theme = EffectivePaneTheme(pane);
+        var baseBrush = Brush.Parse(theme.Base);
+        var elevated = Brush.Parse(theme.Elevated);
+        var border = Brush.Parse(theme.Border);
+        var borderBright = Brush.Parse(theme.BorderBright);
+        var primary = Brush.Parse(theme.Primary);
+        var secondary = Brush.Parse(theme.Secondary);
+        var accent = Brush.Parse(theme.Accent);
+        pane.Root.Background = baseBrush;
+        pane.Tabs.Background = baseBrush;
+        pane.ActiveBorder.BorderBrush = accent;
+        pane.AddButton.Background = elevated;
+        pane.AddButton.BorderBrush = borderBright;
+        if (pane.RemoveButton is not null)
+        {
+            pane.RemoveButton.Background = elevated;
+            pane.RemoveButton.BorderBrush = borderBright;
+        }
+        if (pane.ThemeComboBox is not null)
+        {
+            pane.ThemeComboBox.Background = elevated;
+            pane.ThemeComboBox.BorderBrush = borderBright;
+            pane.ThemeComboBox.Foreground = primary;
+        }
+        if (pane.EmptyState is not null)
+        {
+            pane.EmptyState.Background = baseBrush;
+            pane.EmptyState.BorderBrush = border;
+            if (pane.EmptyState.Child is StackPanel emptyContent)
+            {
+                if (emptyContent.Children.ElementAtOrDefault(0) is TextBlock heading)
+                    heading.Foreground = accent;
+                if (emptyContent.Children.ElementAtOrDefault(1) is TextBlock body)
+                    body.Foreground = secondary;
+            }
+        }
+        foreach (var tab in pane.Tabs.Items.OfType<TabItem>())
+        {
+            var selected = ReferenceEquals(tab, pane.Tabs.SelectedItem);
+            tab.Background = selected ? Brush.Parse(theme.Hover) : elevated;
+            tab.BorderBrush = selected ? accent : borderBright;
+            if (tab.Header is TextBlock text)
+            {
+                text.Foreground = primary;
+            }
+            else if (tab.Header is Button launcher)
+            {
+                launcher.Foreground = accent;
+                launcher.Background = Brushes.Transparent;
+            }
+        }
+        foreach (var state in _openTabs.Values.Where(candidate => ReferenceEquals(candidate.Pane, pane)))
+            ApplyThemeToSessionState(state, theme);
+    }
+
+    private void UpdateAdaptiveControls(SessionTabState state)
+    {
+        var codex = state.Kind == TerminalSessionKind.Codex;
+        var enabled = codex && state.Pane.AdaptiveEnabled;
+        var pending = IsPendingCodexSession(state);
+        state.AdaptiveToggleButton.IsVisible = codex;
+        state.AdaptiveToggleButton.IsChecked = enabled;
+        state.AdaptiveToggleButton.Content = enabled ? "Adaptive on" : "Adaptive off";
+        state.AdaptiveToggleButton.IsEnabled = codex && !state.Pane.AdaptiveChanging;
+        state.AdaptiveComposer.IsVisible = enabled;
+        state.AdaptivePromptBox.IsEnabled = !state.AdaptiveSubmitting && !state.Pane.AdaptiveChanging;
+        state.AdaptiveSendButton.IsEnabled = !state.AdaptiveSubmitting && !state.Pane.AdaptiveChanging;
+        ApplyAdaptiveToggleTheme(state, EffectivePaneTheme(state.Pane));
+        state.ScreenshotButton.HorizontalAlignment = HorizontalAlignment.Right;
+        state.ScreenshotButton.VerticalAlignment = VerticalAlignment.Bottom;
+        state.ScreenshotButton.Margin = new Thickness(0, 0, 9, 8);
+        ToolTip.SetTip(
+            state.AdaptiveToggleButton,
+            pending
+                ? "Adaptive will create this Codex session when you send its first routed prompt"
+                : enabled
+                    ? "Adaptive routes prompts submitted in the native composer; click to restore manual model selection"
+                    : "Automatically choose a Codex model and reasoning effort for each native prompt");
+    }
+
+    private void UpdatePaneAdaptiveControls(TerminalPaneState pane)
+    {
+        foreach (var state in _openTabs.Values.Where(candidate => ReferenceEquals(candidate.Pane, pane)))
+            UpdateAdaptiveControls(state);
+    }
+
+    private async Task SetPaneAdaptiveEnabledAsync(TerminalPaneState pane, bool enabled)
+    {
+        if (pane.AdaptiveChanging || pane.AdaptiveEnabled == enabled)
+        {
+            UpdatePaneAdaptiveControls(pane);
+            return;
+        }
+        var previousEnabled = pane.AdaptiveEnabled;
+        pane.AdaptiveChanging = true;
+        pane.AdaptiveEnabled = enabled;
+        UpdatePaneAdaptiveControls(pane);
+        try
+        {
+            var launched = _openTabs.Values
+                .Where(state => ReferenceEquals(state.Pane, pane)
+                    && state.Kind == TerminalSessionKind.Codex
+                    && state.IsLaunched)
+                .ToList();
+            var reconnecting = launched.Where(state => !IsPendingCodexSession(state)).ToList();
+            if (reconnecting.Count > 0)
+            {
+                SetStatus(
+                    $"{(enabled ? "Enabling" : "Disabling")} Adaptive · reconnecting {reconnecting.Count} Codex terminal{(reconnecting.Count == 1 ? string.Empty : "s")}…",
+                    StartingBrush);
+            }
+            else if (enabled && launched.Any(IsPendingCodexSession))
+            {
+                SetStatus("Adaptive enabled · the first routed prompt will create and attach this Codex session…", StartingBrush);
+            }
+            foreach (var state in reconnecting)
+                await RestartTerminalForAdaptiveModeAsync(state);
+            await SaveWorkspaceAsync();
+            SetStatus(
+                enabled
+                    ? $"Adaptive enabled for {PaneLabel(pane)} · use the native prompt composer"
+                    : $"Adaptive disabled for {PaneLabel(pane)} · manual /model control is available",
+                RunningBrush);
+        }
+        catch (Exception ex)
+        {
+            pane.AdaptiveEnabled = previousEnabled;
+            NativeLog.Write($"Adaptive terminal mode change failed: {ex}");
+            SetStatus($"Could not change Adaptive mode: {ex.Message}", ErrorBrush);
+        }
+        finally
+        {
+            pane.AdaptiveChanging = false;
+            UpdatePaneAdaptiveControls(pane);
+        }
+    }
+
+    private async Task RestartTerminalForAdaptiveModeAsync(SessionTabState state)
+    {
+        CancelTerminalReconnect(state, suppress: true);
+        EndTerminalStartupReveal(state);
+        try { await _api.KillTerminalAsync(state.Key); }
+        catch (Exception ex) { NativeLog.Write($"Adaptive PTY restart could not stop {state.Key}: {ex.Message}"); }
+        state.Terminal.Kill();
+        state.IsRunning = false;
+        state.IsLaunched = false;
+        await Task.Delay(100);
+        state.SuppressReconnect = false;
+        await EnsureTerminalLaunchedAsync(state);
+    }
+
+    private async Task SubmitAdaptivePromptAsync(SessionTabState state)
+    {
+        if (state.Kind != TerminalSessionKind.Codex || !state.Pane.AdaptiveEnabled) return;
+        var text = state.AdaptivePromptBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(text) || state.AdaptiveSubmitting) return;
+
+        var temporaryKey = IsPendingCodexSession(state) ? state.Key : null;
+        if (temporaryKey is not null) CancelTerminalReconnect(state, suppress: true);
+        state.AdaptiveSubmitting = true;
+        state.AdaptiveRouteText.Text = "Routing prompt…";
+        UpdateAdaptiveControls(state);
+        try
+        {
+            var route = await _api.SubmitAdaptivePromptAsync(
+                state.Key,
+                text,
+                state.Pane.AdaptivePreference,
+                state.WorkingDirectory);
+            if (temporaryKey is not null)
+            {
+                var sessionId = route.SessionId
+                    ?? throw new InvalidDataException("Adaptive did not return the new Codex session ID.");
+                if (state.Key == temporaryKey) ApplySessionRekey(temporaryKey, sessionId);
+                await RestartTerminalForAdaptiveModeAsync(state);
+            }
+            state.AdaptivePromptBox.Text = string.Empty;
+            var modelLabel = string.IsNullOrWhiteSpace(route.DisplayName) ? route.Model : route.DisplayName;
+            var routingSource = route.ClassifierUsed ? "model-assisted" : "local rules";
+            state.AdaptiveRouteText.Text =
+                $"{modelLabel} · {route.Effort} · {route.Level} · {routingSource}";
+            ToolTip.SetTip(
+                state.AdaptiveRouteText,
+                $"{route.Reason} · confidence {route.Confidence:P0}");
+            if (state.Session is not null) state.Session.Status = "active";
+            SetStatus(
+                $"Adaptive sent · {modelLabel} · {route.Effort} · {route.Level}",
+                RunningBrush);
+        }
+        catch (Exception ex)
+        {
+            state.SuppressReconnect = false;
+            state.AdaptiveRouteText.Text = "Routing failed · prompt preserved";
+            NativeLog.Write($"Adaptive prompt failed for {state.Key}: {ex}");
+            SetStatus($"Adaptive prompt failed: {ex.Message}", ErrorBrush);
+        }
+        finally
+        {
+            state.AdaptiveSubmitting = false;
+            UpdateAdaptiveControls(state);
+        }
+    }
 
     private void UpdatePaneEmptyStates()
     {
@@ -653,6 +937,8 @@ public sealed partial class MainWindow : Window
         await RefreshAllAsync();
         StartStatusFeed();
         await RestoreWorkspaceAsync();
+        UpdateTerminalTabContentHeights();
+        Dispatcher.UIThread.Post(UpdateTerminalTabContentHeights, DispatcherPriority.Loaded);
         _workspaceReady = true;
         await SaveWorkspaceAsync();
         _refreshTimer.Start();
@@ -804,6 +1090,7 @@ public sealed partial class MainWindow : Window
         state.SummaryButton.IsVisible = session is not null;
         _openTabs[realId] = state;
         if (session is not null) _ = LoadSessionDetailsAsync(state, session);
+        UpdatePaneAdaptiveControls(state.Pane);
         SetStatus($"Session registered · {realId[..Math.Min(8, realId.Length)]}", RunningBrush);
         _ = SaveWorkspaceAsync();
     }
@@ -816,6 +1103,7 @@ public sealed partial class MainWindow : Window
         state.Terminal.Kill();
         state.Pane.Tabs.Items.Remove(state.Tab);
         _openTabs.Remove(temporaryKey);
+        UpdatePaneAdaptiveControls(state.Pane);
         SelectPaneFallback(state.Pane);
         UpdatePaneEmptyStates();
         SetStatus("The new Codex session did not register and was stopped.", ErrorBrush);
@@ -1044,6 +1332,7 @@ public sealed partial class MainWindow : Window
             _openTabs[candidate.Id] = state;
             changed = true;
             _ = LoadSessionDetailsAsync(state, candidate);
+            UpdatePaneAdaptiveControls(state.Pane);
             SetStatus($"New session registered · {candidate.Id[..8]}", RunningBrush);
         }
         if (changed) _ = SaveWorkspaceAsync();
@@ -1085,6 +1374,11 @@ public sealed partial class MainWindow : Window
             _panes[0].InspectorHeight = Math.Clamp(
                 primaryLayout.InspectorHeight, InspectorMinimumHeight, InspectorMaximumHeight);
             _panes[0].InspectorCollapsed = primaryLayout.InspectorCollapsed;
+            _panes[0].AdaptiveEnabled = primaryLayout.AdaptiveEnabled;
+            _panes[0].AdaptivePreference = NormalizeAdaptivePreference(primaryLayout.AdaptivePreference);
+            _panes[0].StyleId = NormalizePaneStyleId(primaryLayout.StyleId);
+            SyncPaneThemeSelector(_panes[0]);
+            ApplyPaneTheme(_panes[0]);
             for (var index = 1; index < layouts.Count; index++)
             {
                 var layout = layouts[index];
@@ -1093,6 +1387,11 @@ public sealed partial class MainWindow : Window
                     Math.Max(MinimumPaneWidth, layout.Width),
                     Math.Clamp(layout.InspectorHeight, InspectorMinimumHeight, InspectorMaximumHeight));
                 restoredPane.InspectorCollapsed = layout.InspectorCollapsed;
+                restoredPane.AdaptiveEnabled = layout.AdaptiveEnabled;
+                restoredPane.AdaptivePreference = NormalizeAdaptivePreference(layout.AdaptivePreference);
+                restoredPane.StyleId = NormalizePaneStyleId(layout.StyleId);
+                SyncPaneThemeSelector(restoredPane);
+                ApplyPaneTheme(restoredPane);
                 _panes.Add(restoredPane);
             }
             RebuildPaneHost(equalize: false);
@@ -1186,6 +1485,7 @@ public sealed partial class MainWindow : Window
         _openTabs[savedTab.Key] = state;
         AddTabToPane(pane, state.Tab);
         state.IsAttached = true;
+        UpdatePaneAdaptiveControls(pane);
     }
 
     private void SelectSavedPaneTab(TerminalPaneState pane, string? activeTabKey)
@@ -1241,7 +1541,10 @@ public sealed partial class MainWindow : Window
             Math.Clamp(pane.InspectorHeight, InspectorMinimumHeight, InspectorMaximumHeight),
             tabs,
             pane.Tabs.SelectedItem is TabItem selected ? TabPersistenceKey(selected) : null,
-            pane.InspectorCollapsed);
+            pane.InspectorCollapsed,
+            pane.AdaptiveEnabled,
+            pane.AdaptivePreference,
+            pane.StyleId);
     }
 
     private NativePaneTabLayout? CreateTabLayout(TabItem tab)
@@ -1743,7 +2046,7 @@ public sealed partial class MainWindow : Window
         }
         if (_openTabs.TryGetValue(session.Id, out var existing))
         {
-            if (!ReferenceEquals(existing.Pane, targetPane)) MoveTabToPane(existing, targetPane);
+            if (!ReferenceEquals(existing.Pane, targetPane)) await MoveTabToPaneAsync(existing, targetPane);
             AttachTab(existing, activate);
             if (launch) await EnsureTerminalLaunchedAsync(existing);
             return;
@@ -1773,7 +2076,7 @@ public sealed partial class MainWindow : Window
         targetPane ??= _activePane;
         try
         {
-            var key = await _api.CreateSessionAsync(workingDirectory);
+            var key = await _api.CreateSessionAsync(workingDirectory, targetPane.AdaptiveEnabled);
             var project = workingDirectory.TrimEnd('/').Split('/').LastOrDefault() ?? workingDirectory;
             var state = CreateTerminalTab(
                 key, $"New · {project}", workingDirectory, null, TerminalSessionKind.Codex, targetPane);
@@ -1782,6 +2085,7 @@ public sealed partial class MainWindow : Window
             _openTabs.Add(key, state);
             AddTabToPane(targetPane, state.Tab);
             state.IsAttached = true;
+            UpdatePaneAdaptiveControls(targetPane);
             targetPane.Tabs.SelectedItem = state.Tab;
             SetActivePane(targetPane);
             await LaunchTerminalAsync(state);
@@ -2121,7 +2425,7 @@ public sealed partial class MainWindow : Window
         var content = new Grid
         {
             RowDefinitions = new RowDefinitions(
-                $"*,12,{(pane.InspectorCollapsed ? InspectorCollapsedHeight : Math.Clamp(pane.InspectorHeight, InspectorMinimumHeight, InspectorMaximumHeight)):0.##}"),
+                $"*,Auto,12,{(pane.InspectorCollapsed ? InspectorCollapsedHeight : Math.Clamp(pane.InspectorHeight, InspectorMinimumHeight, InspectorMaximumHeight)):0.##}"),
             Background = ResourceBrush("TerminalBrush"),
             MinHeight = 0,
             ClipToBounds = true,
@@ -2144,27 +2448,113 @@ public sealed partial class MainWindow : Window
             FontSize = 15,
             Opacity = 0.82,
             IsVisible = !isUbuntu,
-            HorizontalAlignment = HorizontalAlignment.Left,
+            HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(9, 0, 0, 8),
+            Margin = new Thickness(0, 0, 9, 8),
             Background = ResourceBrush("ElevatedBrush"),
             BorderBrush = ResourceBrush("BorderBrightBrush"),
         };
         ToolTip.SetTip(screenshotButton, "Capture and attach a screenshot");
         AutomationProperties.SetName(screenshotButton, "Capture and attach a screenshot");
+        var adaptiveToggleButton = new ToggleButton
+        {
+            Content = "Adaptive off",
+            Padding = new Thickness(9, 3),
+            FontSize = 11,
+            IsVisible = !isUbuntu,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Background = ResourceBrush("ElevatedBrush"),
+            BorderBrush = ResourceBrush("BorderBrightBrush"),
+        };
+        adaptiveToggleButton.Classes.Add("adaptive-toggle");
+        ToolTip.SetTip(adaptiveToggleButton, "Automatically choose a Codex model and reasoning effort for each native prompt");
+        AutomationProperties.SetName(adaptiveToggleButton, "Toggle Adaptive model routing for this terminal pane");
+        var adaptivePulseHalo = new Border
+        {
+            IsVisible = false,
+            IsHitTestVisible = false,
+            Margin = new Thickness(-3),
+            CornerRadius = new CornerRadius(7),
+            BorderThickness = new Thickness(2),
+            Opacity = 0,
+        };
+        var adaptiveToggleHost = new Grid
+        {
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 8, 9, 0),
+            Children = { adaptivePulseHalo, adaptiveToggleButton },
+        };
+        var adaptivePromptBox = new TextBox
+        {
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MinHeight = 38,
+            MaxHeight = 88,
+            PlaceholderText = "Ask Codex with Adaptive routing…",
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        var adaptiveSendButton = new Button
+        {
+            Content = "Route + send",
+            Padding = new Thickness(12, 7),
+            MinWidth = 98,
+            VerticalAlignment = VerticalAlignment.Stretch,
+        };
+        var adaptiveRouteText = new TextBlock
+        {
+            Text = "Rules-first routing · model classifier only when confidence is low",
+            FontSize = 10,
+            Foreground = ResourceBrush("SecondaryBrush"),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxLines = 1,
+        };
+        var adaptiveComposerLayout = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            RowDefinitions = new RowDefinitions("Auto,Auto"),
+            ColumnSpacing = 8,
+            RowSpacing = 4,
+            Children = { adaptivePromptBox, adaptiveSendButton, adaptiveRouteText },
+        };
+        Grid.SetColumn(adaptiveSendButton, 1);
+        Grid.SetRow(adaptiveRouteText, 1);
+        Grid.SetColumnSpan(adaptiveRouteText, 2);
+        var adaptiveComposer = new Border
+        {
+            IsVisible = false,
+            MaxWidth = 900,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Margin = new Thickness(12, 8),
+            Padding = new Thickness(9, 8),
+            CornerRadius = new CornerRadius(7),
+            Background = ResourceBrush("SurfaceBrush"),
+            BorderBrush = ResourceBrush("AccentBrush"),
+            BorderThickness = new Thickness(1),
+            Child = adaptiveComposerLayout,
+        };
+        AutomationProperties.SetName(adaptiveComposer, "Adaptive Codex prompt composer");
         content.Children.Add(terminalClip);
         content.Children.Add(screenshotButton);
+        content.Children.Add(adaptiveToggleHost);
+        content.Children.Add(adaptiveComposer);
         content.Children.Add(reconnectBanner);
         content.Children.Add(restoreOverlay);
         content.Children.Add(inspectorResizeTrack);
         content.Children.Add(inspector);
-        Grid.SetRow(inspectorResizeTrack, 1);
-        Grid.SetRow(inspector, 2);
+        Grid.SetRow(adaptiveComposer, AdaptiveComposerRow);
+        Grid.SetRow(inspectorResizeTrack, InspectorSplitterRow);
+        Grid.SetRow(inspector, InspectorRow);
         Grid.SetRow(screenshotButton, 0);
+        Grid.SetRow(adaptiveToggleHost, 0);
         terminalClip.ZIndex = 0;
         screenshotButton.ZIndex = 5;
+        adaptiveToggleHost.ZIndex = 6;
+        adaptiveComposer.ZIndex = 6;
         inspectorResizeTrack.ZIndex = 3;
         inspector.ZIndex = 2;
         reconnectBanner.ZIndex = 4;
@@ -2228,6 +2618,7 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(tab, title);
         var state = new SessionTabState(
             key, tab, terminal, content, screenshotButton,
+            adaptiveToggleButton, adaptivePulseHalo, adaptiveComposer, adaptivePromptBox, adaptiveSendButton, adaptiveRouteText,
             inspector, inspectorBody, inspectorHeading, inspectorToggleButton, inspectorSplitter,
             inspectorResizeTrack, inspectorResizeGrip,
             reconnectBanner, reconnectText, reconnectButton,
@@ -2237,8 +2628,22 @@ public sealed partial class MainWindow : Window
             promptText, renameBox, renameButton, archiveButton, summaryButton, stopButton,
             workingDirectory, session, kind, pane);
 
-        ApplyThemeToSessionState(state, DashboardTheme.Find(_settings.StyleId));
+        ApplyThemeToSessionState(state, EffectivePaneTheme(pane));
         screenshotButton.Click += async (_, _) => await CaptureAndPasteScreenshotAsync(state);
+        adaptiveToggleButton.Click += async (_, _) =>
+            await SetPaneAdaptiveEnabledAsync(pane, adaptiveToggleButton.IsChecked == true);
+        adaptiveSendButton.Click += async (_, _) => await SubmitAdaptivePromptAsync(state);
+        adaptivePromptBox.AddHandler(
+            InputElement.KeyDownEvent,
+            async (_, args) =>
+            {
+                if (args.Key != Key.Enter || args.KeyModifiers.HasFlag(KeyModifiers.Shift)) return;
+                args.Handled = true;
+                await SubmitAdaptivePromptAsync(state);
+            },
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        UpdateAdaptiveControls(state);
         var inspectorDragActive = false;
         var inspectorDragStartY = 0d;
         var inspectorDragStartHeight = pane.InspectorHeight;
@@ -2249,7 +2654,7 @@ public sealed partial class MainWindow : Window
             inspectorDragActive = true;
             inspectorDragStartY = args.GetPosition(content).Y;
             inspectorDragStartHeight = Math.Clamp(
-                content.RowDefinitions[2].ActualHeight,
+                content.RowDefinitions[InspectorRow].ActualHeight,
                 InspectorMinimumHeight,
                 InspectorMaximumHeight);
             args.Pointer.Capture(inspectorSplitter);
@@ -2352,8 +2757,12 @@ public sealed partial class MainWindow : Window
         return state;
     }
 
-    private static double TerminalTabContentHeight(double workspaceHeight) =>
-        Math.Max(240, workspaceHeight - 46);
+    private double TerminalTabContentHeight(double fallbackHeight = 0)
+    {
+        var workspaceHeight = PaneWorkspaceScroll.Bounds.Height;
+        if (workspaceHeight <= 0) workspaceHeight = fallbackHeight;
+        return Math.Max(240, workspaceHeight - 46);
+    }
 
     private async void OnTerminalPasteKeyDown(object? sender, KeyEventArgs args)
     {
@@ -2425,6 +2834,14 @@ public sealed partial class MainWindow : Window
 
             var wslPath = await ResolveScreenshotWslPathAsync(windowsPath);
             var composerReference = ScreenshotAttachmentPath.ComposerReference(wslPath);
+            if (state.Pane.AdaptiveEnabled && state.Session is not null)
+            {
+                InsertAdaptiveComposerText(state.AdaptivePromptBox, composerReference);
+                SetStatus(
+                    $"Screenshot added to Adaptive prompt · {bitmap.PixelSize.Width}×{bitmap.PixelSize.Height} · {fileName}",
+                    RunningBrush);
+                return true;
+            }
             Exception? restoreError = null;
             try
             {
@@ -2444,6 +2861,18 @@ public sealed partial class MainWindow : Window
                 RunningBrush);
             return true;
         }
+    }
+
+    private static void InsertAdaptiveComposerText(TextBox composer, string text)
+    {
+        var current = composer.Text ?? string.Empty;
+        var selectionStart = Math.Clamp(Math.Min(composer.SelectionStart, composer.SelectionEnd), 0, current.Length);
+        var selectionEnd = Math.Clamp(Math.Max(composer.SelectionStart, composer.SelectionEnd), 0, current.Length);
+        composer.Text = current[..selectionStart] + text + current[selectionEnd..];
+        composer.CaretIndex = selectionStart + text.Length;
+        composer.SelectionStart = composer.CaretIndex;
+        composer.SelectionEnd = composer.CaretIndex;
+        composer.Focus();
     }
 
     private async Task CaptureAndPasteScreenshotAsync(SessionTabState state)
@@ -2664,7 +3093,9 @@ public sealed partial class MainWindow : Window
             {
                 TerminalSessionKind.Codex => NativeLaunchBuilder.ServerTerminal(
                     hostExecutable,
-                    _api.TerminalWebSocketUri(state.Key).AbsoluteUri),
+                    _api.TerminalWebSocketUri(
+                        state.Key,
+                        adaptive: state.Pane.AdaptiveEnabled).AbsoluteUri),
                 TerminalSessionKind.Ubuntu => NativeLaunchBuilder.UbuntuShell(
                     hostExecutable,
                     _settings.Distribution,
@@ -2725,17 +3156,23 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void MoveTabToPane(SessionTabState state, TerminalPaneState targetPane)
+    private async Task MoveTabToPaneAsync(SessionTabState state, TerminalPaneState targetPane)
     {
         if (ReferenceEquals(state.Pane, targetPane)) return;
         var sourcePane = state.Pane;
+        var adaptiveModeChanged = sourcePane.AdaptiveEnabled != targetPane.AdaptiveEnabled;
         if (state.IsAttached) sourcePane.Tabs.Items.Remove(state.Tab);
         state.Pane = targetPane;
         ApplyPaneInspectorHeight(targetPane);
+        UpdateAdaptiveControls(state);
+        ApplyPaneTheme(sourcePane);
+        ApplyPaneTheme(targetPane);
         if (state.IsAttached) AddTabToPane(targetPane, state.Tab);
         targetPane.Tabs.SelectedItem = state.Tab;
         SetActivePane(targetPane);
         UpdatePaneEmptyStates();
+        if (adaptiveModeChanged && state.Kind == TerminalSessionKind.Codex && state.IsLaunched)
+            await RestartTerminalForAdaptiveModeAsync(state);
     }
 
     private void ApplyPaneInspectorHeight(TerminalPaneState pane)
@@ -2745,8 +3182,8 @@ public sealed partial class MainWindow : Window
             : Math.Clamp(pane.InspectorHeight, InspectorMinimumHeight, InspectorMaximumHeight);
         foreach (var state in _openTabs.Values.Where(state => ReferenceEquals(state.Pane, pane)))
         {
-            if (state.TerminalViewport.RowDefinitions.Count > 2)
-                state.TerminalViewport.RowDefinitions[2].Height = new GridLength(height);
+            if (state.TerminalViewport.RowDefinitions.Count > InspectorRow)
+                state.TerminalViewport.RowDefinitions[InspectorRow].Height = new GridLength(height);
             state.Inspector.MinHeight = pane.InspectorCollapsed
                 ? InspectorCollapsedHeight
                 : InspectorMinimumHeight;
@@ -2808,6 +3245,7 @@ public sealed partial class MainWindow : Window
         state.Pane.Tabs.Items.Remove(state.Tab);
         state.IsAttached = false;
         _openTabs.Remove(state.Key);
+        UpdatePaneAdaptiveControls(state.Pane);
         if (selectFallback) SelectPaneFallback(state.Pane);
         UpdatePaneEmptyStates();
         SetStatus($"Stopped {state.TitleBlock.Text}", StartingBrush);
@@ -3049,7 +3487,10 @@ public sealed partial class MainWindow : Window
             if (current is not null)
             {
                 state.Session.Status = current.Status;
+                state.Session.Model = current.Model;
+                state.Session.ReasoningEffort = current.ReasoningEffort;
                 state.PromptText.Text = current.LastUserPrompt;
+                UpdateAdaptiveControls(state);
             }
         }
     }
@@ -3679,6 +4120,7 @@ public sealed partial class MainWindow : Window
             SelectPaneFallback(pane);
             return;
         }
+        ApplyPaneTheme(pane);
         var state = _openTabs.Values.FirstOrDefault(candidate =>
             ReferenceEquals(candidate.Pane, pane)
             && ReferenceEquals(candidate.Tab, pane.Tabs.SelectedItem));
@@ -3830,35 +4272,8 @@ public sealed partial class MainWindow : Window
         {
             Application.Current.RequestedThemeVariant = theme.IsLight ? ThemeVariant.Light : ThemeVariant.Dark;
         }
-        foreach (var state in _openTabs.Values)
-        {
-            ApplyThemeToSessionState(state, theme);
-        }
         foreach (var pane in _panes)
-        {
-            pane.Root.Background = Brush.Parse(theme.Base);
-            pane.Tabs.Background = Brush.Parse(theme.Base);
-            pane.ActiveBorder.BorderBrush = Brush.Parse(theme.Accent);
-            pane.AddButton.Background = Brush.Parse(theme.Elevated);
-            pane.AddButton.BorderBrush = Brush.Parse(theme.BorderBright);
-            if (pane.RemoveButton is not null)
-            {
-                pane.RemoveButton.Background = Brush.Parse(theme.Elevated);
-                pane.RemoveButton.BorderBrush = Brush.Parse(theme.BorderBright);
-            }
-            if (pane.EmptyState is not null)
-            {
-                pane.EmptyState.Background = Brush.Parse(theme.Base);
-                pane.EmptyState.BorderBrush = Brush.Parse(theme.Border);
-                if (pane.EmptyState.Child is StackPanel emptyContent)
-                {
-                    if (emptyContent.Children.ElementAtOrDefault(0) is TextBlock heading)
-                        heading.Foreground = Brush.Parse(theme.Accent);
-                    if (emptyContent.Children.ElementAtOrDefault(1) is TextBlock body)
-                        body.Foreground = Brush.Parse(theme.Secondary);
-                }
-            }
-        }
+            ApplyPaneTheme(pane);
         PaneWorkspaceScroll.Background = Brush.Parse(theme.Base);
         PaneHost.Background = Brush.Parse(theme.Base);
         foreach (var paneSplitter in _paneSplitters)
@@ -3867,10 +4282,13 @@ public sealed partial class MainWindow : Window
         }
         foreach (var tab in _previewTabs.Values)
         {
+            var previewTheme = _previewPaneByTab.TryGetValue(tab, out var previewPane)
+                ? EffectivePaneTheme(previewPane)
+                : theme;
             if (tab.Header is StackPanel header)
             {
-                if (header.Children.ElementAtOrDefault(0) is TextBlock icon) icon.Foreground = Brush.Parse(theme.Accent);
-                if (header.Children.ElementAtOrDefault(1) is TextBlock title) title.Foreground = Brush.Parse(theme.Primary);
+                if (header.Children.ElementAtOrDefault(0) is TextBlock icon) icon.Foreground = Brush.Parse(previewTheme.Accent);
+                if (header.Children.ElementAtOrDefault(1) is TextBlock title) title.Foreground = Brush.Parse(previewTheme.Primary);
             }
             if (tab.Content is SessionPreviewControl preview) _ = preview.ReloadAsync();
         }
@@ -3894,6 +4312,16 @@ public sealed partial class MainWindow : Window
         state.ScreenshotButton.Background = Brush.Parse(theme.Elevated);
         state.ScreenshotButton.BorderBrush = Brush.Parse(theme.BorderBright);
         state.ScreenshotButton.Foreground = primary;
+        ApplyAdaptiveToggleTheme(state, theme);
+        state.AdaptiveComposer.Background = surface;
+        state.AdaptiveComposer.BorderBrush = accent;
+        state.AdaptivePromptBox.Background = Brush.Parse(theme.Elevated);
+        state.AdaptivePromptBox.BorderBrush = Brush.Parse(theme.BorderBright);
+        state.AdaptivePromptBox.Foreground = primary;
+        state.AdaptiveSendButton.Background = Brush.Parse(theme.Elevated);
+        state.AdaptiveSendButton.BorderBrush = accent;
+        state.AdaptiveSendButton.Foreground = primary;
+        state.AdaptiveRouteText.Foreground = secondary;
         state.MutedTextColor = Color.Parse(theme.Muted);
 
         // TerminalControl's template owns the actual drawing surface. Updating the
@@ -3918,6 +4346,9 @@ public sealed partial class MainWindow : Window
         state.Inspector.Background = surface;
         state.Inspector.BorderBrush = border;
         state.InspectorHeading.Foreground = secondary;
+        state.InspectorToggleButton.Background = Brush.Parse(theme.Elevated);
+        state.InspectorToggleButton.BorderBrush = Brush.Parse(theme.BorderBright);
+        state.InspectorToggleButton.Foreground = primary;
         state.InspectorResizeTrack.Background = surface;
         state.InspectorResizeTrack.BorderBrush = Brush.Parse(theme.BorderBright);
         state.InspectorResizeGrip.Background = accent;
@@ -3928,9 +4359,30 @@ public sealed partial class MainWindow : Window
         state.RestoreOverlay.BorderBrush = Brush.Parse(theme.BorderBright);
         state.RestoreText.Foreground = primary;
         state.TitleBlock.Foreground = primary;
+        state.RenameBox.Background = Brush.Parse(theme.Elevated);
+        state.RenameBox.BorderBrush = Brush.Parse(theme.BorderBright);
+        state.RenameBox.Foreground = primary;
+        foreach (var action in new[]
+                 {
+                     state.RenameButton,
+                     state.SummaryButton,
+                     state.ArchiveButton,
+                     state.StopButton,
+                     state.ReconnectButton,
+                 })
+        {
+            action.Background = Brush.Parse(theme.Elevated);
+            action.BorderBrush = Brush.Parse(theme.BorderBright);
+            action.Foreground = primary;
+        }
+        if (state.ArchiveConfirmationPending) state.ArchiveButton.Foreground = ErrorBrush;
         state.ContextText.Foreground = secondary;
+        state.ContextBar.Background = Brush.Parse(theme.Elevated);
+        state.ContextBar.Foreground = accent;
         state.ConfigText.Foreground = secondary;
         state.PromptText.Foreground = secondary;
+        ApplyScopedScrollbarTheme(state.Terminal, theme);
+        ApplyScopedScrollbarTheme(state.InspectorBody, theme);
         foreach (var heading in state.DetailHeadings) heading.Foreground = accent;
         state.ContextDonut.SegmentBrushes =
         [
@@ -3942,6 +4394,62 @@ public sealed partial class MainWindow : Window
         state.Terminal.InvalidateVisual();
         state.TerminalViewport.InvalidateVisual();
         state.Inspector.InvalidateVisual();
+    }
+
+    private static void ApplyAdaptiveToggleTheme(SessionTabState state, DashboardTheme theme)
+    {
+        var enabled = state.Kind == TerminalSessionKind.Codex && state.Pane.AdaptiveEnabled;
+        var elevated = Brush.Parse(theme.Elevated);
+        var hover = Brush.Parse(theme.Hover);
+        var borderBright = Brush.Parse(theme.BorderBright);
+        var primary = Brush.Parse(theme.Primary);
+        var accent = Brush.Parse(theme.Accent);
+
+        // Checked and pointer-over ToggleButton styles resolve these resources
+        // from the control, keeping their chrome scoped to the terminal pane.
+        state.AdaptiveToggleButton.Resources["ElevatedBrush"] = elevated;
+        state.AdaptiveToggleButton.Resources["HoverBrush"] = hover;
+        state.AdaptiveToggleButton.Resources["BorderBrightBrush"] = borderBright;
+        state.AdaptiveToggleButton.Resources["PrimaryBrush"] = primary;
+        state.AdaptiveToggleButton.Resources["AccentBrush"] = accent;
+        state.AdaptiveToggleButton.Background = enabled ? hover : elevated;
+        state.AdaptiveToggleButton.BorderBrush = enabled ? accent : borderBright;
+        state.AdaptiveToggleButton.BorderThickness = new Thickness(enabled ? 2 : 1);
+        state.AdaptiveToggleButton.Foreground = enabled ? accent : primary;
+        state.AdaptivePulseHalo.BorderBrush = accent;
+        state.AdaptivePulseHalo.IsVisible = enabled;
+        if (!enabled) state.AdaptivePulseHalo.Opacity = 0;
+    }
+
+    private static void ApplyScopedScrollbarTheme(Control scope, DashboardTheme theme)
+    {
+        scope.Resources["ScrollBarBackground"] = Brush.Parse(theme.Elevated);
+        scope.Resources["ScrollBarForeground"] = Brush.Parse(theme.Secondary);
+        scope.Resources["ScrollBarBorderBrush"] = Brush.Parse(theme.Border);
+        scope.Resources["ScrollBarPanningThumbBackground"] = Brush.Parse(theme.BorderBright);
+        scope.Resources["ScrollBarThumbBackgroundColor"] = Brush.Parse(theme.BorderBright);
+        scope.Resources["ScrollBarThumbFillPointerOver"] = Brush.Parse(theme.Accent);
+        scope.Resources["ScrollBarThumbFillPressed"] = Brush.Parse(theme.Accent);
+        scope.Resources["ScrollBarThumbFillDisabled"] = Brush.Parse(theme.Muted);
+        scope.Resources["ScrollBarTrackFill"] = Brush.Parse(theme.Elevated);
+        scope.Resources["ScrollBarTrackStroke"] = Brush.Parse(theme.Border);
+        scope.Resources["ScrollBarBackgroundPointerOver"] = Brush.Parse(theme.Hover);
+        scope.Resources["ScrollBarTrackFillPointerOver"] = Brush.Parse(theme.Elevated);
+        scope.Resources["ScrollBarTrackStrokePointerOver"] = Brush.Parse(theme.BorderBright);
+        scope.Resources["ScrollBarButtonArrowForeground"] = Brush.Parse(theme.Secondary);
+        scope.Resources["ScrollBarButtonArrowForegroundPointerOver"] = Brush.Parse(theme.Accent);
+        scope.Resources["ScrollBarButtonArrowForegroundPressed"] = Brush.Parse(theme.Primary);
+        scope.Resources["ScrollBarButtonArrowForegroundDisabled"] = Brush.Parse(theme.Muted);
+        scope.Resources["ScrollBarButtonBackground"] = Brushes.Transparent;
+        scope.Resources["ScrollBarButtonBackgroundPointerOver"] = Brush.Parse(theme.Hover);
+        scope.Resources["ScrollBarButtonBackgroundPressed"] = Brush.Parse(theme.BorderBright);
+        scope.Resources["ScrollBarButtonBackgroundDisabled"] = Brushes.Transparent;
+        scope.Resources["ScrollBarButtonBorderBrush"] = Brushes.Transparent;
+        scope.Resources["ScrollBarButtonBorderBrushPointerOver"] = Brush.Parse(theme.Accent);
+        scope.Resources["ScrollBarButtonBorderBrushPressed"] = Brush.Parse(theme.Primary);
+        scope.Resources["ScrollBarButtonBorderBrushDisabled"] = Brushes.Transparent;
+        foreach (var scrollbar in scope.GetVisualDescendants().OfType<ScrollBar>())
+            scrollbar.InvalidateVisual();
     }
 
     private void ApplyTextSize(DashboardTextSize size)
@@ -4255,6 +4763,11 @@ public sealed partial class MainWindow : Window
         var intensity = (Math.Cos(elapsedSeconds / 2.4 * Math.PI * 2) + 1) / 2;
         HeaderStatusDot.Opacity = 0.42 + intensity * 0.58;
         HeaderStatusHalo.Opacity = 0.08 + intensity * 0.2;
+        foreach (var state in _openTabs.Values)
+        {
+            if (!state.AdaptivePulseHalo.IsVisible) continue;
+            state.AdaptivePulseHalo.Opacity = 0.12 + intensity * 0.38;
+        }
     }
 
     private void ApplyWindowsTitleBarTheme(DashboardTheme theme) =>
@@ -4386,6 +4899,11 @@ public sealed partial class MainWindow : Window
         public override string ToString() => Label;
     }
 
+    private sealed record PaneThemeOption(string? Id, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
     private enum TerminalSessionKind
     {
         Codex,
@@ -4414,6 +4932,12 @@ public sealed partial class MainWindow : Window
         public double Width { get; set; } = width;
         public double InspectorHeight { get; set; } = inspectorHeight;
         public bool InspectorCollapsed { get; set; }
+        public bool AdaptiveEnabled { get; set; }
+        public string AdaptivePreference { get; set; } = "balanced";
+        public bool AdaptiveChanging { get; set; }
+        public ComboBox? ThemeComboBox { get; set; }
+        public string? StyleId { get; set; }
+        public bool UpdatingThemeSelector { get; set; }
     }
 
     private sealed class SessionTabState(
@@ -4422,6 +4946,12 @@ public sealed partial class MainWindow : Window
         TerminalControl terminal,
         Grid terminalViewport,
         Button screenshotButton,
+        ToggleButton adaptiveToggleButton,
+        Border adaptivePulseHalo,
+        Border adaptiveComposer,
+        TextBox adaptivePromptBox,
+        Button adaptiveSendButton,
+        TextBlock adaptiveRouteText,
         Border inspector,
         ScrollViewer inspectorBody,
         TextBlock inspectorHeading,
@@ -4457,6 +4987,12 @@ public sealed partial class MainWindow : Window
         public TerminalControl Terminal { get; } = terminal;
         public Grid TerminalViewport { get; } = terminalViewport;
         public Button ScreenshotButton { get; } = screenshotButton;
+        public ToggleButton AdaptiveToggleButton { get; } = adaptiveToggleButton;
+        public Border AdaptivePulseHalo { get; } = adaptivePulseHalo;
+        public Border AdaptiveComposer { get; } = adaptiveComposer;
+        public TextBox AdaptivePromptBox { get; } = adaptivePromptBox;
+        public Button AdaptiveSendButton { get; } = adaptiveSendButton;
+        public TextBlock AdaptiveRouteText { get; } = adaptiveRouteText;
         public TerminalView? TerminalView { get; set; }
         public Color MutedTextColor { get; set; } = Colors.Gray;
         public Border Inspector { get; } = inspector;
@@ -4496,6 +5032,7 @@ public sealed partial class MainWindow : Window
         public bool IsRunning { get; set; }
         public bool SuppressReconnect { get; set; }
         public bool ReconnectLoopActive { get; set; }
+        public bool AdaptiveSubmitting { get; set; }
         public int ReconnectAttempt { get; set; }
         public CancellationTokenSource? ReconnectCancellation { get; set; }
         public TaskCompletionSource<bool>? ReconnectNow { get; set; }

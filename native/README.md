@@ -30,6 +30,11 @@ and replays recent scrollback.
   WSL projects and paths. Ubuntu tabs open a direct login shell in the selected
   project and close the shell when the tab or application closes.
 - Automatic reconciliation of new terminals with their saved Codex session ID.
+- Per-terminal Adaptive model routing. When enabled, a native prompt composer
+  uses local task-shape rules first, calls a small ephemeral classifier only
+  for low-confidence requests, validates the decision against Codex's live
+  `model/list` catalog, and submits the turn with a supported model and
+  reasoning effort. Non-Adaptive terminals retain the existing direct PTY path.
 - Clipboard-aware screenshot paste: copy a Windows snip, press `Ctrl+V` in a
   Codex terminal, and the native client stores a managed temporary PNG and
   inserts its WSL-accessible image reference into the composer. Storage defaults
@@ -71,6 +76,9 @@ and replays recent scrollback.
   focus, hover, drag, and selected-state chrome instead of Fluent's default
   white outlines. Scrollbars use one stable full-size geometry so their visual
   state and drag position cannot diverge.
+- A theme selector on every terminal pane. Each pane follows the dashboard
+  theme by default or can persist an independent style without recoloring the
+  surrounding dashboard or neighboring terminal panes.
 - A custom transparent pixel-art C identity used by the Windows executable,
   title bar, and in-app header.
 - Reuses an existing ui-my-cli metadata service on port 7575 so the browser and
@@ -100,6 +108,21 @@ control the managed capture cache:
 variables. Invalid or relative values fall back to the per-user default.
 Positive retention values are constrained to 1–90 days and positive image-size
 values to 1–100 megapixels; missing or non-positive values use the defaults.
+
+### Adaptive routing
+
+Adaptive is stored per terminal pane and is off by default. Enabling it
+reconnects that pane's Codex terminals through a private loopback app-server
+while keeping the authentic Codex TUI visible. Prompts submitted through the
+native Adaptive composer are classified as simple, standard, deep, or critical
+and routed only to model/effort combinations advertised for the signed-in user.
+The composer shows the selected model, effort, route level, and whether the
+model classifier was needed. Turning Adaptive off reconnects the normal direct
+Codex terminal and restores manual `/model` control.
+
+The classifier never receives the full transcript and is skipped for
+high-confidence local decisions. Routing failure preserves the draft and does
+not silently submit with a different configuration.
 
 ## Build
 
