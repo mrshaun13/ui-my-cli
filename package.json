@@ -15,11 +15,13 @@
     "docs:check": "node scripts/generate-docs.js --check",
     "test": "npx playwright test",
     "test:smoke": "npx playwright test tests/smoke.spec.js",
-    "native:build": "dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.TerminalHost/CodexNative.TerminalHost.csproj",
+    "native:build": "dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.TerminalHost/CodexNative.TerminalHost.csproj && dotnet build native/CodexNative.Updater/CodexNative.Updater.csproj",
     "native:test": "dotnet run --project native/CodexNative.CommandTests/CodexNative.CommandTests.csproj",
+    "native:verify-artifacts": "dotnet run --project native/CodexNative.CommandTests/CodexNative.CommandTests.csproj -- --verify-release-artifacts native/artifacts/releases",
     "native:publish": "npm run native:publish:win && npm run native:publish:mac",
     "native:publish:win": "bash scripts/publish-native.sh win-x64",
     "native:publish:mac": "bash scripts/publish-native.sh osx-x64 && bash scripts/publish-native.sh osx-arm64",
+    "native:package": "python3 scripts/package-native-release.py win-x64 osx-x64 osx-arm64",
     "prepare": "husky"
   },
   "dependencies": {

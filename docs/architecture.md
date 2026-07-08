@@ -2,7 +2,7 @@
 
 ## Overview
 
-The browser dashboard server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Windows keeps Codex and project files in WSL2; macOS uses the local Node service and Codex state. Direct login-shell tabs run in validated project paths and end when their tab or the application closes.
+The browser dashboard server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Windows keeps Codex and project files in WSL2; macOS uses the local Node service and Codex state. Direct login-shell tabs run in validated project paths and end when their tab or the application closes. Native updates consume platform-specific GitHub Release archives, verify their SHA-256 manifests, stage them outside the installation, wait for active work to drain, and hand replacement/restart to an external helper with rollback.
 
 ## Data Flow
 
@@ -66,6 +66,11 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | `native/CodexNative.Core/NativePlatform.cs` | Explicit Windows, macOS, and Linux native runtime profile and artifact naming. |
 | `native/CodexNative.Core/ExecutableResolver.cs` | Validated Node.js and login-shell discovery without user-controlled shell interpolation. |
 | `native/CodexNative.Core/DashboardRepositoryLocator.cs` | Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths. |
+| `native/CodexNative.Core/GitHubReleaseClient.cs` | Selects a newer stable GitHub Release and its exact platform archive/checksum through trusted HTTPS URLs. |
+| `native/CodexNative.Core/NativeUpdatePackage.cs` | Downloads bounded release assets, verifies SHA-256, and rejects traversal, links, or incomplete native payloads. |
+| `native/CodexNative.Core/NativeInstallRequest.cs` | Validated structured update handoff arguments and installed-app layout resolution. |
+| `native/CodexNative/NativeUpdateService.cs` | Native release check, verified staging, and external updater launch orchestration. |
+| `native/CodexNative.Updater/Program.cs` | Out-of-process atomic installation, rollback, and native-app restart helper. |
 | `native/CodexNative/DashboardStatusFeed.cs` | Reconnecting Codex status-feed client for push-driven native session updates and rekey events. |
 | `native/CodexNative/AnalyticsControls.cs` | Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition. |
 | `native/CodexNative/SessionPreviewControl.cs` | Rich native session summary with conversation history, context composition, model changes, and Codex subagent timelines. |

@@ -27,6 +27,11 @@ when their tab or the app closes.
   state.
 - Reuses a compatible service on `127.0.0.1:7575`; if none exists, starts a
   private service on `127.0.0.1:7577` without exposing it to the network.
+- Checks stable GitHub Releases for a newer platform package. Updates are
+  bounded, SHA-256 verified, staged outside the installation, and installed
+  only after two consecutive checks find no active Codex sessions
+  or running local-shell tabs. An external helper replaces the app, restores
+  the prior payload if handoff fails, and restarts the new version.
 
 ## Prerequisites
 
@@ -55,6 +60,7 @@ npm run native:test
 npm run native:build
 npm run native:publish:win
 npm run native:publish:mac
+npm run native:package
 ```
 
 Artifacts are written to:
@@ -62,6 +68,7 @@ Artifacts are written to:
 - `native/artifacts/win-x64/`
 - `native/artifacts/osx-x64/CodexNative.app`
 - `native/artifacts/osx-arm64/CodexNative.app`
+- `native/artifacts/releases/CodexNative-<runtime>.zip` and `.zip.sha256`
 
 The macOS packages are real `.app` bundles with a native Mach-O app host and
 terminal host. Cross-publishing verifies their structure from Linux, but final
@@ -82,3 +89,17 @@ Desktop shortcuts are `Ctrl+K` search, `Ctrl+Shift+N` new Codex or local-shell
 session, `Ctrl+R` refresh, `Ctrl+W` detach/close the selected tab, and `Esc`
 return home. On macOS, Avalonia currently retains these control-key mappings so
 the behavior matches the Windows client.
+
+## Release and update contract
+
+`Directory.Build.props` is the native version source. A stable release tag must
+be exactly `v<version>`. The pinned GitHub Actions workflow tests native command
+policy, builds Windows x64 and macOS Intel/Apple Silicon on matching runners,
+validates executable formats and bundle metadata, and publishes one ZIP plus
+one SHA-256 manifest per runtime.
+
+The updater never runs `git pull`, changes the user's checkout, or requires a
+developer toolchain. It updates only the desktop release. The independently
+managed dashboard service and its persistent PTYs remain running during the
+desktop swap. macOS signing and notarization are still required before treating
+a tagged package as a broadly distributable trusted application.

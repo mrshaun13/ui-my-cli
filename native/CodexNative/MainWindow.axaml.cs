@@ -25,16 +25,19 @@ public sealed partial class MainWindow : Window
     private readonly DashboardApiClient _api = new();
     private readonly DashboardServiceManager _serviceManager = new();
     private readonly NativePlatformProfile _platform = NativePlatformProfile.Current;
+    private readonly NativeUpdateService _updateService = new();
     private readonly Dictionary<string, SessionTabState> _openTabs = [];
     private readonly Dictionary<string, TabItem> _previewTabs = [];
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _connectionPulseTimer;
     private readonly DispatcherTimer _sessionHoverAnimationTimer;
+    private readonly DispatcherTimer _updateCheckTimer;
     private readonly TranslateTransform _sessionHoverTopTransform = new();
     private readonly TranslateTransform _sessionHoverBottomTransform = new();
     private Grid? _hoveredSessionRow;
     private DashboardStatusFeed? _statusFeed;
     private CancellationTokenSource? _searchCancellation;
+    private CancellationTokenSource? _updateInstallCancellation;
     private Flyout? _newSessionFlyout;
     private NativeSettings _settings = NativeSettings.Default;
     private List<DashboardSession> _sessions = [];
@@ -59,6 +62,9 @@ public sealed partial class MainWindow : Window
     private bool _uiReady;
     private bool _workspaceReady;
     private bool _isDashboardConnected;
+    private bool _checkingForUpdate;
+    private bool _updateInProgress;
+    private NativeReleaseInfo? _availableUpdate;
     private int _refreshTick;
     private readonly DateTimeOffset _connectionPulseStartedAt = DateTimeOffset.UtcNow;
     private DateTimeOffset _sessionHoverAnimationStartedAt = DateTimeOffset.UtcNow;
@@ -110,6 +116,12 @@ public sealed partial class MainWindow : Window
             TimeSpan.FromMilliseconds(33),
             DispatcherPriority.Render,
             OnSessionHoverAnimationTick);
+        _updateCheckTimer = new DispatcherTimer(
+            TimeSpan.FromHours(6),
+            DispatcherPriority.Background,
+            async (_, _) => await CheckForUpdateAsync(reportCurrent: false));
+        UpdateButton.IsVisible = (_platform.Platform is NativePlatform.Windows or NativePlatform.MacOS)
+            && _updateService.CanSelfUpdate(_platform);
         SetSessionFiltersExpanded(false);
         UpdateHeaderConnectionIndicator();
         _connectionPulseTimer.Start();
@@ -192,7 +204,10 @@ public sealed partial class MainWindow : Window
         await RestoreWorkspaceAsync();
         _workspaceReady = true;
         await SaveWorkspaceAsync();
+        _updateService.CleanupPreviousInstall(_platform);
         _refreshTimer.Start();
+        _updateCheckTimer.Start();
+        _ = CheckForUpdateAsync(reportCurrent: false);
     }
 
     private void InitializeSelectors()
@@ -2467,6 +2482,147 @@ public sealed partial class MainWindow : Window
             await EnsureDashboardServiceAsync();
         }
         await RefreshAllAsync();
+        if (_availableUpdate is null) _ = CheckForUpdateAsync(reportCurrent: false);
+    }
+
+    private async void OnUpdateClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_updateInProgress)
+        {
+            _updateInstallCancellation?.Cancel();
+            return;
+        }
+        if (_availableUpdate is null)
+        {
+            await CheckForUpdateAsync(reportCurrent: true);
+            return;
+        }
+        await InstallAvailableUpdateAsync(_availableUpdate);
+    }
+
+    private async Task CheckForUpdateAsync(bool reportCurrent)
+    {
+        if (_checkingForUpdate || _updateInProgress || !UpdateButton.IsVisible) return;
+        _checkingForUpdate = true;
+        UpdateButton.IsEnabled = false;
+        UpdateButton.Content = "Checking…";
+        try
+        {
+            var release = await _updateService.CheckAsync(_platform);
+            _availableUpdate = release;
+            if (release is null)
+            {
+                UpdateButton.Content = "Check updates";
+                ToolTip.SetTip(UpdateButton, $"Codex Native {_updateService.CurrentVersion} is current");
+                if (reportCurrent) SetStatus($"Codex Native {_updateService.CurrentVersion} is up to date", RunningBrush);
+            }
+            else
+            {
+                UpdateButton.Content = $"Update {release.Version}";
+                ToolTip.SetTip(UpdateButton, $"Install {release.DisplayName} after active sessions finish");
+                SetStatus($"Codex Native {release.Version} is available", StartingBrush);
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateButton.Content = "Check updates";
+            NativeLog.Write($"Update check failed: {ex}");
+            if (reportCurrent) SetStatus($"Update check failed: {ex.Message}", ErrorBrush);
+        }
+        finally
+        {
+            _checkingForUpdate = false;
+            UpdateButton.IsEnabled = true;
+        }
+    }
+
+    private async Task InstallAvailableUpdateAsync(NativeReleaseInfo release)
+    {
+        _updateInProgress = true;
+        _updateInstallCancellation = new CancellationTokenSource();
+        var cancellationToken = _updateInstallCancellation.Token;
+        PreparedNativeUpdate? prepared = null;
+        UpdateButton.IsEnabled = true;
+        UpdateButton.Content = "Cancel update";
+        try
+        {
+            SetStatus($"Downloading verified Codex Native {release.Version} package…", StartingBrush);
+            var progress = new Progress<double>(value =>
+            {
+                UpdateButton.Content = $"Cancel · {value:P0}";
+                SetStatus($"Downloading Codex Native {release.Version} · {value:P0}", StartingBrush);
+            });
+            prepared = await _updateService.PrepareAsync(
+                release,
+                _platform,
+                progress,
+                cancellationToken);
+            await WaitForUpdateDrainAsync(cancellationToken);
+            await SaveWorkspaceAsync();
+            _updateService.LaunchInstaller(prepared, _platform).Dispose();
+            SetStatus($"Installing Codex Native {release.Version}; restarting…", RunningBrush);
+            _shutdownConfirmed = true;
+            Close();
+        }
+        catch (OperationCanceledException)
+        {
+            DiscardPreparedUpdate(prepared);
+            UpdateButton.Content = $"Update {release.Version}";
+            SetStatus("Native update canceled", StartingBrush);
+        }
+        catch (Exception ex)
+        {
+            DiscardPreparedUpdate(prepared);
+            NativeLog.Write($"Native update failed: {ex}");
+            UpdateButton.Content = $"Retry {release.Version}";
+            SetStatus($"Native update failed: {ex.Message}", ErrorBrush);
+        }
+        finally
+        {
+            _updateInstallCancellation.Dispose();
+            _updateInstallCancellation = null;
+            _updateInProgress = false;
+        }
+    }
+
+    private async Task WaitForUpdateDrainAsync(CancellationToken cancellationToken)
+    {
+        var consecutiveClearChecks = 0;
+        while (consecutiveClearChecks < 2)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sessions = await _api.GetSessionsAsync(cancellationToken);
+            var blockingSessions = NativeUpdatePolicy.CountBlockingSessions(
+                sessions.Select(session => (session.Status, session.IsHeadless)));
+            var localShells = _openTabs.Values.Count(state =>
+                state.Kind == TerminalSessionKind.LocalShell && state.IsRunning);
+            if (blockingSessions == 0 && localShells == 0)
+            {
+                consecutiveClearChecks++;
+                if (consecutiveClearChecks < 2)
+                {
+                    SetStatus("Sessions are drained · confirming update handoff…", StartingBrush);
+                    await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+                }
+                continue;
+            }
+
+            consecutiveClearChecks = 0;
+            var details = new List<string>();
+            if (blockingSessions > 0) details.Add($"{blockingSessions} active Codex session(s)");
+            if (localShells > 0) details.Add($"{localShells} local shell tab(s) to close");
+            UpdateButton.Content = "Cancel update";
+            SetStatus($"Update ready · waiting for {string.Join(" and ", details)}", StartingBrush);
+            await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+        }
+    }
+
+    private static void DiscardPreparedUpdate(PreparedNativeUpdate? prepared)
+    {
+        if (prepared is null) return;
+        try { Directory.Delete(prepared.StagingDirectory, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private async void OnThemeChanged(object? sender, SelectionChangedEventArgs e)
@@ -2804,8 +2960,10 @@ public sealed partial class MainWindow : Window
         _refreshTimer.Stop();
         _connectionPulseTimer.Stop();
         _sessionHoverAnimationTimer.Stop();
+        _updateCheckTimer.Stop();
         if (_statusFeed is not null) _ = _statusFeed.DisposeAsync();
         _searchCancellation?.Cancel();
+        _updateInstallCancellation?.Cancel();
         foreach (var state in _openTabs.Values.ToList())
         {
             CancelTerminalReconnect(state, suppress: true);
@@ -2813,6 +2971,7 @@ public sealed partial class MainWindow : Window
             state.Terminal.Kill();
         }
         _serviceManager.Dispose();
+        _updateService.Dispose();
         _api.Dispose();
     }
 

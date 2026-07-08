@@ -1,7 +1,17 @@
 using CodexNative.Core;
+using System.IO.Compression;
+using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 
 var failures = new List<string>();
 const string host = @"C:\Apps\CodexNative.TerminalHost.exe";
+
+if (args is ["--verify-release-artifacts", var artifactDirectory])
+{
+    await VerifyReleaseArtifactsAsync(artifactDirectory);
+    return 0;
+}
 
 Check("platform profiles select the correct terminal host and release runtime", () =>
 {
@@ -94,6 +104,136 @@ Check("dashboard repository locator finds a checkout above the app artifact", ()
         null,
         files.Contains);
     Equal("/Users/tester/ui-my-cli", found);
+});
+
+Check("native versions compare stable release tags", () =>
+{
+    Equal(new NativeVersion(1, 2, 3), NativeVersion.Parse("v1.2.3"));
+    Equal(true, NativeVersion.Parse("2.0.0") > NativeVersion.Parse("1.99.99"));
+    Equal(false, NativeVersion.TryParse("1.2.3-beta", out _));
+    Equal(false, NativeVersion.TryParse("1.2", out _));
+});
+
+Check("release downloads are restricted to GitHub HTTPS hosts", () =>
+{
+    Equal(true, GitHubReleaseClient.IsTrustedDownloadUri(
+        new Uri("https://release-assets.githubusercontent.com/example/package.zip")));
+    Equal(false, GitHubReleaseClient.IsTrustedDownloadUri(
+        new Uri("http://github.com/example/package.zip")));
+    Equal(false, GitHubReleaseClient.IsTrustedDownloadUri(
+        new Uri("https://github.com.evil.example/package.zip")));
+    Equal(false, GitHubReleaseClient.IsTrustedDownloadUri(
+        new Uri("https://github.com:8443/example/package.zip")));
+});
+
+Check("update drain blocks all active Codex work and local shells", () =>
+{
+    var sessions = new[]
+    {
+        (Status: "active", IsHeadless: false),
+        (Status: "active", IsHeadless: true),
+        (Status: "question", IsHeadless: false),
+    };
+    Equal(2, NativeUpdatePolicy.CountBlockingSessions(sessions));
+    Equal(false, NativeUpdatePolicy.CanInstall(sessions, hasRunningLocalShell: false));
+    Equal(false, NativeUpdatePolicy.CanInstall([], hasRunningLocalShell: true));
+    Equal(true, NativeUpdatePolicy.CanInstall([(Status: "finished", IsHeadless: false)], false));
+});
+
+Check("updater request preserves paths as structured arguments", () =>
+{
+    var request = new NativeInstallRequest(
+        123,
+        NativePlatform.MacOS,
+        "/Users/tester/Library/Application Support/CodexNative/updates/1/payload",
+        "/Applications/CodexNative.app");
+    Equal(request, NativeInstallRequest.Parse(request.ToArguments()));
+    Throws<ArgumentException>(() => NativeInstallRequest.Parse(
+        ["--parent-pid", "123", "--platform", "macos", "--source", "relative", "--target", "/Applications/CodexNative.app"]));
+    Equal(
+        "/Applications/CodexNative.app",
+        NativeInstallLayout.FindCurrentInstallDirectory(
+            NativePlatform.MacOS,
+            "/Applications/CodexNative.app/Contents/MacOS"));
+});
+
+await CheckAsync("GitHub release selection requires the matching runtime and checksum", async () =>
+{
+    const string json = """
+        {
+          "tag_name": "v1.2.0",
+          "name": "Codex Native 1.2.0",
+          "html_url": "https://github.com/mrshaun13/ui-my-cli/releases/tag/v1.2.0",
+          "draft": false,
+          "prerelease": false,
+          "assets": [
+            {"name":"CodexNative-osx-arm64.zip","browser_download_url":"https://github.com/mrshaun13/ui-my-cli/releases/download/v1.2.0/CodexNative-osx-arm64.zip","size":123},
+            {"name":"CodexNative-osx-arm64.zip.sha256","browser_download_url":"https://github.com/mrshaun13/ui-my-cli/releases/download/v1.2.0/CodexNative-osx-arm64.zip.sha256","size":99}
+          ]
+        }
+        """;
+    using var http = new HttpClient(new StaticHttpHandler(HttpStatusCode.OK, json));
+    using var client = new GitHubReleaseClient(http);
+    var release = await client.GetLatestAsync(new NativeVersion(1, 0, 0), "osx-arm64");
+    Equal(new NativeVersion(1, 2, 0), release!.Version);
+    Equal("CodexNative-osx-arm64.zip", release.Package.Name);
+    Equal("CodexNative-osx-arm64.zip.sha256", release.Checksum.Name);
+});
+
+await CheckAsync("missing GitHub release is treated as no available update", async () =>
+{
+    using var http = new HttpClient(new StaticHttpHandler(HttpStatusCode.NotFound, "{}"));
+    using var client = new GitHubReleaseClient(http);
+    Equal<NativeReleaseInfo?>(null, await client.GetLatestAsync(new NativeVersion(1, 0, 0), "win-x64"));
+});
+
+await CheckAsync("checksum verification rejects changed update bytes", async () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), $"codex-native-test-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    try
+    {
+        var archive = Path.Combine(root, "CodexNative-osx-arm64.zip");
+        var checksum = $"{archive}.sha256";
+        await File.WriteAllTextAsync(archive, "verified package");
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("verified package"))).ToLowerInvariant();
+        await File.WriteAllTextAsync(checksum, $"{digest}  {Path.GetFileName(archive)}\n");
+        await NativeUpdatePackage.VerifyChecksumAsync(archive, checksum, Path.GetFileName(archive));
+        await File.AppendAllTextAsync(archive, "changed");
+        await ThrowsAsync<InvalidDataException>(() =>
+            NativeUpdatePackage.VerifyChecksumAsync(archive, checksum, Path.GetFileName(archive)));
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
+Check("archive extraction rejects traversal and symbolic links", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), $"codex-native-test-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    try
+    {
+        var traversal = Path.Combine(root, "traversal.zip");
+        using (var archive = ZipFile.Open(traversal, ZipArchiveMode.Create))
+            archive.CreateEntry("../outside.txt");
+        Throws<InvalidDataException>(() =>
+            NativeUpdatePackage.ExtractVerifiedArchive(traversal, Path.Combine(root, "one")));
+
+        var symlink = Path.Combine(root, "symlink.zip");
+        using (var archive = ZipFile.Open(symlink, ZipArchiveMode.Create))
+        {
+            var entry = archive.CreateEntry("CodexNative.app/link");
+            entry.ExternalAttributes = 0xA000 << 16;
+        }
+        Throws<InvalidDataException>(() =>
+            NativeUpdatePackage.ExtractVerifiedArchive(symlink, Path.Combine(root, "two")));
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
 });
 
 Check("resume picker uses the console WSL host", () =>
@@ -332,6 +472,19 @@ void Check(string name, Action test)
     }
 }
 
+async Task CheckAsync(string name, Func<Task> test)
+{
+    try
+    {
+        await test();
+        Console.WriteLine($"PASS {name}");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"{name}: {ex.Message}");
+    }
+}
+
 static void Equal<T>(T expected, T actual)
 {
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
@@ -361,4 +514,72 @@ static void Throws<TException>(Action action) where TException : Exception
     }
 
     throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
+}
+
+static async Task ThrowsAsync<TException>(Func<Task> action) where TException : Exception
+{
+    try
+    {
+        await action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
+}
+
+static async Task VerifyReleaseArtifactsAsync(string artifactDirectory)
+{
+    foreach (var runtime in new[] { "win-x64", "osx-x64", "osx-arm64" })
+    {
+        var fileName = GitHubReleaseClient.PackageAssetName(runtime);
+        var archive = Path.Combine(artifactDirectory, fileName);
+        var checksum = $"{archive}.sha256";
+        await NativeUpdatePackage.VerifyChecksumAsync(archive, checksum, fileName);
+        var extraction = Path.Combine(
+            Path.GetTempPath(),
+            $"codex-native-artifact-{runtime}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(extraction);
+        try
+        {
+            NativeUpdatePackage.ExtractVerifiedArchive(archive, extraction);
+            var required = runtime == "win-x64"
+                ? new[]
+                {
+                    Path.Combine(extraction, "CodexNative.exe"),
+                    Path.Combine(extraction, "CodexNative.TerminalHost.exe"),
+                    Path.Combine(extraction, "CodexNative.Updater.exe"),
+                }
+                : new[]
+                {
+                    Path.Combine(extraction, "CodexNative.app", "Contents", "Info.plist"),
+                    Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "CodexNative"),
+                    Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "CodexNative.TerminalHost"),
+                    Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "CodexNative.Updater"),
+                };
+            foreach (var requiredFile in required)
+            {
+                if (!File.Exists(requiredFile))
+                    throw new InvalidDataException($"{fileName} is missing {requiredFile}.");
+            }
+        }
+        finally
+        {
+            Directory.Delete(extraction, recursive: true);
+        }
+        Console.WriteLine($"PASS verified release artifact {fileName}");
+    }
+}
+
+sealed class StaticHttpHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        });
 }

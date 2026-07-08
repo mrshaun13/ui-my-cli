@@ -20,11 +20,13 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - `npm run docs:check` — `node scripts/generate-docs.js --check`
 - `npm run test` — `npx playwright test`
 - `npm run test:smoke` — `npx playwright test tests/smoke.spec.js`
-- `npm run native:build` — `dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.TerminalHost/CodexNative.TerminalHost.csproj`
+- `npm run native:build` — `dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.TerminalHost/CodexNative.TerminalHost.csproj && dotnet build native/CodexNative.Updater/CodexNative.Updater.csproj`
 - `npm run native:test` — `dotnet run --project native/CodexNative.CommandTests/CodexNative.CommandTests.csproj`
+- `npm run native:verify-artifacts` — `dotnet run --project native/CodexNative.CommandTests/CodexNative.CommandTests.csproj -- --verify-release-artifacts native/artifacts/releases`
 - `npm run native:publish` — `npm run native:publish:win && npm run native:publish:mac`
 - `npm run native:publish:win` — `bash scripts/publish-native.sh win-x64`
 - `npm run native:publish:mac` — `bash scripts/publish-native.sh osx-x64 && bash scripts/publish-native.sh osx-arm64`
+- `npm run native:package` — `python3 scripts/package-native-release.py win-x64 osx-x64 osx-arm64`
 - `npm run prepare` — `husky`
 
 ## Dev Workflow
@@ -91,6 +93,7 @@ list". Archive behavior is provider-owned: Codex uses `codex archive` /
 - All server modules use CommonJS (`require` / `module.exports`).
 - The client uses ES modules with React 19 + Vite.
 - The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback.
+- Native desktop releases are versioned by `Directory.Build.props`; stable `vX.Y.Z` tags must match that version. The release workflow builds separate `win-x64`, `osx-x64`, and `osx-arm64` archives and matching SHA-256 manifests.
 - Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).
 - Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Native Codex titles are stored in Codex `state_*.sqlite`; external transcript-pipeline headless title and hide/restore metadata is stored in `~/.codex/ui-my-cli-dashboard.db`.
 - Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.

@@ -20,9 +20,10 @@ artifact="$root/native/artifacts/$rid"
 staging="$root/native/artifacts/.staging-$rid"
 app_project="$root/native/CodexNative/CodexNative.csproj"
 host_project="$root/native/CodexNative.TerminalHost/CodexNative.TerminalHost.csproj"
+updater_project="$root/native/CodexNative.Updater/CodexNative.Updater.csproj"
 
 rm -rf "$artifact" "$staging"
-mkdir -p "$staging/app" "$staging/host"
+mkdir -p "$staging/app" "$staging/host" "$staging/updater"
 
 publish_args=(
   -c Release
@@ -35,12 +36,14 @@ publish_args=(
 
 dotnet publish "$app_project" "${publish_args[@]}" -o "$staging/app"
 dotnet publish "$host_project" "${publish_args[@]}" -o "$staging/host"
+dotnet publish "$updater_project" "${publish_args[@]}" -o "$staging/updater"
 
 if [[ "$rid" == osx-* ]]; then
   contents="$artifact/CodexNative.app/Contents"
   mkdir -p "$contents/MacOS" "$contents/Resources"
   install -m 0755 "$staging/app/CodexNative" "$contents/MacOS/CodexNative"
   install -m 0755 "$staging/host/CodexNative.TerminalHost" "$contents/MacOS/CodexNative.TerminalHost"
+  install -m 0755 "$staging/updater/CodexNative.Updater" "$contents/MacOS/CodexNative.Updater"
   install -m 0644 "$root/native/CodexNative/Assets/codex-native-icon.png" "$contents/Resources/codex-native-icon.png"
 
   version="$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' "$root/Directory.Build.props" | head -1)"
@@ -64,6 +67,7 @@ else
   mkdir -p "$artifact"
   install -m 0755 "$staging/app/CodexNative.exe" "$artifact/CodexNative.exe"
   install -m 0755 "$staging/host/CodexNative.TerminalHost.exe" "$artifact/CodexNative.TerminalHost.exe"
+  install -m 0755 "$staging/updater/CodexNative.Updater.exe" "$artifact/CodexNative.Updater.exe"
   find "$staging/app" -maxdepth 1 -type f -name '*.pdb' -exec install -m 0644 {} "$artifact" \;
   find "$staging/host" -maxdepth 1 -type f -name '*.pdb' -exec install -m 0644 {} "$artifact" \;
 fi

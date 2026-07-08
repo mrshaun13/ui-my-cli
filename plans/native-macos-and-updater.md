@@ -28,7 +28,7 @@ native client automatically.
    separate updater process that waits for the UI process to exit, swaps the
    installation, and restarts it.
 6. The update button may check and download while sessions are running, but it
-   may not begin installation while any non-headless Codex session reports the
+   may not begin installation while any Codex session reports the
    canonical `active` status. It should display the wait state and proceed
    automatically once the status feed/API confirms the drain.
 7. Release packaging must emit Windows x64 plus macOS x64 and arm64 artifacts.

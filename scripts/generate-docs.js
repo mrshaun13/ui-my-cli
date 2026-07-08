@@ -241,6 +241,16 @@ function collect() {
     'Validated Node.js and login-shell discovery without user-controlled shell interpolation.';
   fileDescs['native/CodexNative.Core/DashboardRepositoryLocator.cs'] =
     'Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths.';
+  fileDescs['native/CodexNative.Core/GitHubReleaseClient.cs'] =
+    'Selects a newer stable GitHub Release and its exact platform archive/checksum through trusted HTTPS URLs.';
+  fileDescs['native/CodexNative.Core/NativeUpdatePackage.cs'] =
+    'Downloads bounded release assets, verifies SHA-256, and rejects traversal, links, or incomplete native payloads.';
+  fileDescs['native/CodexNative.Core/NativeInstallRequest.cs'] =
+    'Validated structured update handoff arguments and installed-app layout resolution.';
+  fileDescs['native/CodexNative/NativeUpdateService.cs'] =
+    'Native release check, verified staging, and external updater launch orchestration.';
+  fileDescs['native/CodexNative.Updater/Program.cs'] =
+    'Out-of-process atomic installation, rollback, and native-app restart helper.';
   fileDescs['native/CodexNative/DashboardStatusFeed.cs'] =
     'Reconnecting Codex status-feed client for push-driven native session updates and rekey events.';
   fileDescs['native/CodexNative/AnalyticsControls.cs'] =

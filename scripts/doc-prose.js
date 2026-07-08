@@ -35,6 +35,7 @@ module.exports = {
     '**Needs-your-input filter** — one click to show only agents waiting for a reply',
     '**Repo filter pills** — filter sessions by project; selection persists across reloads',
     '**Persistent native terminals** — Codex PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback',
+    '**Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for all active Codex sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically',
     '**Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider',
     '**Archive / restore** — hide sessions from the list without deleting them; ' +
       'restore from the collapsible drawer at the bottom of the sidebar',
@@ -101,7 +102,7 @@ module.exports = {
     'Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. ' +
     'The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. ' +
     'The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. ' +
-    'The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Windows keeps Codex and project files in WSL2; macOS uses the local Node service and Codex state. Direct login-shell tabs run in validated project paths and end when their tab or the application closes.',
+    'The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Windows keeps Codex and project files in WSL2; macOS uses the local Node service and Codex state. Direct login-shell tabs run in validated project paths and end when their tab or the application closes. Native updates consume platform-specific GitHub Release archives, verify their SHA-256 manifests, stage them outside the installation, wait for active work to drain, and hand replacement/restart to an external helper with rollback.',
 
   data_flow: [
     'Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  Codex provider adapter  →  WebSocket push  →  React client',
@@ -121,6 +122,7 @@ module.exports = {
     'All server modules use CommonJS (`require` / `module.exports`).',
     'The client uses ES modules with React 19 + Vite.',
     'The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback.',
+    'Native desktop releases are versioned by `Directory.Build.props`; stable `vX.Y.Z` tags must match that version. The release workflow builds separate `win-x64`, `osx-x64`, and `osx-arm64` archives and matching SHA-256 manifests.',
     'Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).',
     'Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Native Codex titles are stored in Codex `state_*.sqlite`; external transcript-pipeline headless title and hide/restore metadata is stored in `~/.codex/ui-my-cli-dashboard.db`.',
     'Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.',

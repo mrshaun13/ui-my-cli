@@ -15,6 +15,7 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - **Needs-your-input filter** — one click to show only agents waiting for a reply
 - **Repo filter pills** — filter sessions by project; selection persists across reloads
 - **Persistent native terminals** — Codex PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback
+- **Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for all active Codex sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
 - **Archive / restore** — hide sessions from the list without deleting them; restore from the collapsible drawer at the bottom of the sidebar
 - **Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), token usage, tool call breakdown, model distribution, and Codex stats cohort switching, shown when no session is selected
@@ -192,6 +193,11 @@ native/
   native/CodexNative.Core/NativePlatform.cs        Explicit Windows, macOS, and Linux native runtime profile and artifact naming.
   native/CodexNative.Core/ExecutableResolver.cs    Validated Node.js and login-shell discovery without user-controlled shell interpolation.
   native/CodexNative.Core/DashboardRepositoryLocator.cs Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths.
+  native/CodexNative.Core/GitHubReleaseClient.cs   Selects a newer stable GitHub Release and its exact platform archive/checksum through trusted HTTPS URLs.
+  native/CodexNative.Core/NativeUpdatePackage.cs   Downloads bounded release assets, verifies SHA-256, and rejects traversal, links, or incomplete native payloads.
+  native/CodexNative.Core/NativeInstallRequest.cs  Validated structured update handoff arguments and installed-app layout resolution.
+  native/CodexNative/NativeUpdateService.cs        Native release check, verified staging, and external updater launch orchestration.
+  native/CodexNative.Updater/Program.cs            Out-of-process atomic installation, rollback, and native-app restart helper.
   native/CodexNative/DashboardStatusFeed.cs        Reconnecting Codex status-feed client for push-driven native session updates and rekey events.
   native/CodexNative/AnalyticsControls.cs          Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition.
   native/CodexNative/SessionPreviewControl.cs      Rich native session summary with conversation history, context composition, model changes, and Codex subagent timelines.

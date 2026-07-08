@@ -268,6 +268,10 @@
         <TextBlock Grid.Column="5" x:Name="EnvSummaryText" Foreground="{DynamicResource SecondaryBrush}"
                    VerticalAlignment="Center" Text="Loading MCP · skills · plugins…" />
 
+        <Button Grid.Column="6" x:Name="UpdateButton" Content="Check updates"
+                IsVisible="False" HorizontalAlignment="Right" Margin="8,0"
+                Click="OnUpdateClicked" Padding="12,5"
+                ToolTip.Tip="Check GitHub Releases for a newer native app" />
         <Button Grid.Column="7" x:Name="SidebarToggleButton" Content="☰" Click="OnSidebarToggleClicked"
                 ToolTip.Tip="Show or hide session sidebar" Padding="10,5" Margin="0,0,8,0" />
         <Button Grid.Column="8" x:Name="RefreshButton" Content="Refresh" Click="OnRefreshClicked"
