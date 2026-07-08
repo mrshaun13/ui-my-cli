@@ -55,7 +55,8 @@ public sealed record NativePaneLayout(
     double Width,
     double InspectorHeight,
     List<NativePaneTabLayout>? Tabs = null,
-    string? ActiveTabKey = null)
+    string? ActiveTabKey = null,
+    bool InspectorCollapsed = false)
 {
     [JsonIgnore]
     public IReadOnlyList<NativePaneTabLayout> SavedTabs => Tabs ?? [];

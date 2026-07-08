@@ -89,6 +89,11 @@
       <Setter Property="Background" Value="{DynamicResource TabActiveBrush}" />
       <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
+    <Style Selector="TabItem.session-launcher">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource TabDividerBrush}" />
+    </Style>
     <Style Selector="Button:pointerover">
       <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
       <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
@@ -670,8 +675,9 @@
         </TabItem>
       </TabControl>
             <Button x:Name="PrimaryPaneAddButton" Content="+"
-                    Width="28" Height="42" Padding="0" FontSize="18" Opacity="0.55"
+                    Width="28" Height="42" Padding="0" FontSize="20" Opacity="0.55"
                     HorizontalAlignment="Right" VerticalAlignment="Center"
+                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                     ToolTip.Tip="Add terminal pane" ZIndex="12" />
           </Grid>
         </Grid>
