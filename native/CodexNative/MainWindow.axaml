@@ -268,6 +268,10 @@
         <TextBlock Grid.Column="5" x:Name="EnvSummaryText" Foreground="{DynamicResource SecondaryBrush}"
                    VerticalAlignment="Center" Text="Loading MCP · skills · plugins…" />
 
+        <Button Grid.Column="6" x:Name="UpdateButton" Content="Check updates"
+                IsVisible="False" HorizontalAlignment="Right" Margin="8,0"
+                Click="OnUpdateClicked" Padding="12,5"
+                ToolTip.Tip="Check GitHub Releases for a newer native app" />
         <Button Grid.Column="7" x:Name="SidebarToggleButton" Content="☰" Click="OnSidebarToggleClicked"
                 ToolTip.Tip="Show or hide session sidebar" Padding="10,5" Margin="0,0,8,0" />
         <Button Grid.Column="8" x:Name="RefreshButton" Content="Refresh" Click="OnRefreshClicked"
@@ -279,14 +283,14 @@
     <Grid Grid.Row="1" x:Name="MainContentGrid" ColumnDefinitions="310,5,*">
       <Border Grid.Column="0" x:Name="SidebarBorder" Background="{DynamicResource SurfaceBrush}"
               BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
-        <Grid RowDefinitions="Auto,Auto,Auto,Auto,*">
+        <Grid RowDefinitions="Auto,Auto,Auto,*">
           <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="12,12,12,8">
             <StackPanel>
               <TextBlock Text="SESSIONS" FontWeight="Bold" Foreground="{DynamicResource PrimaryBrush}" />
               <TextBlock x:Name="SessionCountText" Text="Connecting…" FontSize="11"
                          Foreground="{DynamicResource SecondaryBrush}" />
             </StackPanel>
-            <Button Grid.Column="1" x:Name="NewSessionButton" Content="＋" ToolTip.Tip="New Codex or Ubuntu session (Ctrl+Shift+N)" Click="OnNewSessionClicked"
+            <Button Grid.Column="1" x:Name="NewSessionButton" Content="＋" ToolTip.Tip="New Codex or local shell session (Ctrl+Shift+N)" Click="OnNewSessionClicked"
                     FontSize="18" Padding="8,2" />
           </Grid>
 
@@ -306,7 +310,7 @@
                 <Grid x:Name="SessionFiltersHeaderGrid" ColumnDefinitions="Auto,*,Auto">
                   <TextBlock Text="FILTERS" FontSize="11" FontWeight="Bold"
                              Foreground="{DynamicResource PrimaryBrush}" VerticalAlignment="Center" />
-                  <TextBlock Grid.Column="1" Text="project · age · visibility" FontSize="10"
+                  <TextBlock Grid.Column="1" x:Name="SessionFiltersSummaryText" Text="All projects · active sessions" FontSize="10"
                              Foreground="{DynamicResource MutedBrush}" Margin="8,0"
                              TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                   <TextBlock Grid.Column="2" x:Name="SessionFiltersChevron" Text="⌄" FontSize="13"
@@ -317,47 +321,55 @@
               <Border x:Name="SessionFiltersPanel" IsVisible="False"
                       BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
                       Padding="0,6,0,8">
-                <StackPanel Spacing="4">
-                  <Grid ColumnDefinitions="Auto,Auto,*">
-                    <ComboBox Grid.Column="0" x:Name="RepoComboBox" Width="128"
-                              SelectionChanged="OnRepoFilterChanged" />
-                    <ComboBox Grid.Column="1" x:Name="ColdDaysComboBox" Width="82" Margin="2,0,0,0"
+                <StackPanel Spacing="7" Margin="8,2,8,0">
+                  <TextBlock Text="PROJECT" FontSize="9" FontWeight="Bold"
+                             Foreground="{DynamicResource MutedBrush}" />
+                  <ComboBox x:Name="RepoComboBox" HorizontalAlignment="Stretch"
+                            SelectionChanged="OnRepoFilterChanged"
+                            AutomationProperties.Name="Project filter"
+                            ToolTip.Tip="Show all sessions or sessions from one project" />
+
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <StackPanel>
+                      <TextBlock Text="OLDER-SESSION GROUP" FontSize="9" FontWeight="Bold"
+                                 Foreground="{DynamicResource MutedBrush}" />
+                      <TextBlock Text="Keep stale idle work below recent sessions" FontSize="9"
+                                 Foreground="{DynamicResource MutedBrush}" />
+                    </StackPanel>
+                    <ComboBox Grid.Column="1" x:Name="ColdDaysComboBox" Width="88"
                               SelectionChanged="OnColdDaysChanged"
                               AutomationProperties.Name="Older-session threshold"
                               ToolTip.Tip="Group idle sessions older than this threshold at the bottom" />
                   </Grid>
 
-                  <Grid ColumnDefinitions="Auto,Auto,Auto,*">
-                    <CheckBox Grid.Column="0" x:Name="ShowHeadlessCheckBox" MinWidth="0" Margin="0"
+                  <WrapPanel Orientation="Horizontal">
+                    <CheckBox x:Name="ShowHeadlessCheckBox" MinWidth="0" Margin="0"
                               Padding="3,2" MinHeight="30" FontSize="11"
                               AutomationProperties.Name="Headless"
                               IsCheckedChanged="OnNavigationFilterChanged">
                       <TextBlock Text="Headless" TextWrapping="NoWrap" />
                     </CheckBox>
-                    <CheckBox Grid.Column="1" x:Name="ArchivedCheckBox" MinWidth="0" Margin="2,0,0,0"
+                    <CheckBox x:Name="ArchivedCheckBox" MinWidth="0" Margin="5,0,0,0"
                               Padding="3,2" MinHeight="30" FontSize="11"
                               AutomationProperties.Name="Archive"
                               IsCheckedChanged="OnNavigationFilterChanged">
-                      <TextBlock Text="Archive" TextWrapping="NoWrap" />
+                      <TextBlock Text="Include archive" TextWrapping="NoWrap" />
                     </CheckBox>
-                    <CheckBox Grid.Column="2" x:Name="NeedsInputCheckBox" MinWidth="0" Margin="2,0,0,0"
+                    <CheckBox x:Name="NeedsInputCheckBox" MinWidth="0" Margin="5,0,0,0"
                               Padding="3,2" MinHeight="30" FontSize="11"
                               AutomationProperties.Name="Waiting"
                               IsCheckedChanged="OnFilterChanged">
-                      <TextBlock Text="Waiting" TextWrapping="NoWrap" />
+                      <TextBlock Text="Waiting for me" TextWrapping="NoWrap" />
                     </CheckBox>
-                  </Grid>
+                  </WrapPanel>
+                  <Button Content="Reset filters" HorizontalAlignment="Left" Padding="8,3"
+                          Click="OnResetFiltersClicked" />
                 </StackPanel>
               </Border>
             </StackPanel>
           </Border>
 
-          <ScrollViewer Grid.Row="3" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Disabled"
-                        Margin="12,0,12,7" MaxHeight="68">
-            <WrapPanel x:Name="RepoChipsPanel" Orientation="Horizontal" />
-          </ScrollViewer>
-
-          <Grid Grid.Row="4" x:Name="SessionsListHost" ClipToBounds="True">
+          <Grid Grid.Row="3" x:Name="SessionsListHost" ClipToBounds="True">
             <ListBox x:Name="SessionsList" SelectionChanged="OnSessionSelected"
                      Background="Transparent" BorderThickness="0" Padding="0,0,0,10">
               <ListBox.Styles>
@@ -415,7 +427,7 @@
               BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
         <Grid RowDefinitions="Auto,*,Auto">
           <Button Grid.Row="0" x:Name="CompactNewSessionButton" Content="＋" FontSize="18" Padding="5,3" Margin="6,8,6,6"
-                  ToolTip.Tip="New Codex or Ubuntu session (Ctrl+Shift+N)" Click="OnNewSessionClicked" />
+                  ToolTip.Tip="New Codex or local shell session (Ctrl+Shift+N)" Click="OnNewSessionClicked" />
           <ListBox Grid.Row="1" x:Name="CompactSessionsList" SelectionChanged="OnCompactSessionSelected"
                    Background="Transparent" BorderThickness="0" Padding="3,0">
             <ListBox.ItemTemplate>
@@ -507,17 +519,37 @@
                 </Grid>
               </Border>
 
+              <Border Background="{DynamicResource ElevatedBrush}" BorderBrush="{DynamicResource AccentBrush}"
+                      BorderThickness="2" CornerRadius="7" Padding="16">
+                <StackPanel Spacing="10">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <StackPanel>
+                      <TextBlock Text="TOKEN &amp; CREDIT ROLLUP" FontWeight="Bold" FontSize="16"
+                                 Foreground="{DynamicResource AccentBrush}" />
+                      <TextBlock x:Name="UsageWindowDescriptionText"
+                                 Text="Measured token usage with documented Codex credit estimates"
+                                 Foreground="{DynamicResource SecondaryBrush}" FontSize="11" />
+                    </StackPanel>
+                    <ComboBox Grid.Column="1" x:Name="AnalyticsWindowComboBox" Width="125"
+                              AutomationProperties.Name="Usage rollup window"
+                              SelectionChanged="OnAnalyticsWindowChanged" />
+                  </Grid>
+                  <WrapPanel x:Name="UsageSummaryPanel" Orientation="Horizontal" />
+                  <TextBlock x:Name="UsagePricingNoteText" TextWrapping="Wrap"
+                             Foreground="{DynamicResource SecondaryBrush}" FontSize="10" />
+                </StackPanel>
+              </Border>
+
               <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
                       BorderThickness="1" CornerRadius="6" Padding="14">
                 <StackPanel Spacing="9">
-                  <Grid ColumnDefinitions="*,Auto">
+                  <Grid ColumnDefinitions="*">
                     <StackPanel>
                       <TextBlock Text="TOKEN ACTIVITY" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
-                      <TextBlock Text="Input and output by hour · weekday/hour intensity below · hover for exact values"
+                      <TextBlock x:Name="TokenActivityDescriptionText"
+                                 Text="Input and output by local clock hour · weekday/hour intensity below · hover for exact values"
                                  Foreground="{DynamicResource SecondaryBrush}" FontSize="11" />
                     </StackPanel>
-                    <ComboBox Grid.Column="1" x:Name="AnalyticsWindowComboBox" Width="110"
-                              SelectionChanged="OnAnalyticsWindowChanged" />
                   </Grid>
                   <local:TokenActivityChart x:Name="TokenActivityGraph" Height="180" />
                   <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="14">
@@ -651,7 +683,7 @@
                  VerticalAlignment="Center" Margin="0,0,8,0" />
         <TextBlock Grid.Column="1" x:Name="StatusText" Text="Starting native dashboard…"
                    Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center" />
-        <TextBlock Grid.Column="2" x:Name="TerminalPathText" Text="Terminal path: native view → persistent WSL2 PTY → Codex"
+        <TextBlock Grid.Column="2" x:Name="TerminalPathText" Text="Terminal path: native view → persistent PTY → Codex"
                    Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" />
       </Grid>
     </Border>

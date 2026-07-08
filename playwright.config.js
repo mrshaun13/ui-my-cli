@@ -20,10 +20,13 @@ const PORT = process.env.PORT || 7575;
 
 export default defineConfig({
   testDir: './tests',
-  fullyParallel: true,
+  // The suite targets one persistent PM2 service and exercises shared PTY
+  // state. Parallel workers race those resources and create false terminal and
+  // navigation failures, so local and CI validation use the same serial model.
+  fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  workers: 1,
   reporter: [
     ['list'],
     ['json', { outputFile: 'test-results/results.json' }],

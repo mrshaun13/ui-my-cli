@@ -28,6 +28,19 @@ public sealed record NativeSettings(
 
     private static NativeSettings CreateDefault()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            var unixHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var dashboardDirectory = DashboardRepositoryLocator.Find(
+                AppContext.BaseDirectory,
+                unixHome,
+                Environment.GetEnvironmentVariable("UI_MY_CLI_HOME"));
+            return new NativeSettings(
+                "Ubuntu",
+                unixHome,
+                DashboardWorkingDirectory: dashboardDirectory);
+        }
+
         var windowsUser = Environment.UserName;
         var wslUser = windowsUser.Length is > 0 and <= 32
             && windowsUser.All(character => char.IsAsciiLetterOrDigit(character)

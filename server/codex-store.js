@@ -13,6 +13,13 @@ const Database = require('better-sqlite3');
 const { resolveCodexHome, resolveStateDbPath, findRolloutPath } = require('./codex-paths');
 const dashboardStore = require('./dashboard-store');
 const transcriptHeadless = require('./transcript-headless-store');
+const { buildUsageRollups, pricingMetadata } = require('./codex-usage-rollups');
+const { estimateCredits } = require('./codex-pricing');
+const {
+  emptyTokenWindows,
+  emptyTokenHeatmap,
+  addTokenActivity,
+} = require('./codex-token-activity');
 
 const USER_SOURCES = new Set(['cli', 'vscode']);
 const DEFAULT_CONTEXT = 200000;
@@ -408,6 +415,8 @@ function readRollout(thread) {
           createdAt,
           total: event.payload.info?.total_token_usage || null,
           last: event.payload.info?.last_token_usage || null,
+          model: result.currentModel,
+          reasoningEffort: result.currentReasoningEffort,
           modelContextWindow: Number(event.payload.info?.model_context_window || 0),
           rateLimits: event.payload.rate_limits || null,
         });
@@ -606,6 +615,47 @@ function tokenTelemetry(rollout, thread) {
   };
 }
 
+function usageRecordsForThread(thread, rollout, tokens = tokenTelemetry(rollout, thread)) {
+  const session = {
+    id: thread.id,
+    title: thread.title || thread.id.slice(0, 8),
+    model: rollout.currentModel || thread.model || 'codex',
+    reasoningEffort: rollout.currentReasoningEffort || thread.reasoning_effort || 'unknown',
+  };
+  const project = projectName(thread.cwd);
+  const records = (rollout.tokenEvents || [])
+    .filter(event => event.last)
+    .map(event => ({
+      timestamp: event.createdAt || thread.updated_at || thread.created_at || 0,
+      usage: { ...normalizeTokenUsage(event.last), calls: 1 },
+      model: event.model || session.model,
+      reasoningEffort: event.reasoningEffort || session.reasoningEffort,
+      project,
+      session,
+    }));
+  if (records.length === 0 && tokens.totalTokens > 0) {
+    records.push({
+      timestamp: thread.updated_at || thread.created_at || 0,
+      usage: tokens,
+      model: session.model,
+      reasoningEffort: session.reasoningEffort,
+      project,
+      session,
+    });
+  }
+  return records;
+}
+
+function sessionPricing(rollout, thread, tokens) {
+  const totals = buildUsageRollups(usageRecordsForThread(thread, rollout, tokens)).all.totals;
+  return {
+    estimatedCredits: totals.estimatedCredits,
+    pricedTokens: totals.pricedTokens,
+    unpricedTokens: totals.unpricedTokens,
+    pricingCoverage: totals.pricingCoverage,
+  };
+}
+
 function runtimePolicy(thread, rollout = null) {
   const threadSandbox = thread?.sandbox_policy ? safeJson(thread.sandbox_policy) : null;
   return {
@@ -662,13 +712,24 @@ function accessProfile(thread, rollout = null) {
 }
 
 function getSessionPreview(id) {
-  if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.getSessionPreview(id);
+  if (transcriptHeadless.isTranscriptHeadlessId(id)) {
+    const preview = transcriptHeadless.getSessionPreview(id);
+    if (!preview) return null;
+    const pricing = estimateCredits(preview, preview.model);
+    const coverageDenominator = pricing.pricedTokens + pricing.unpricedTokens;
+    return {
+      ...preview,
+      ...pricing,
+      pricingCoverage: coverageDenominator > 0 ? pricing.pricedTokens / coverageDenominator : 0,
+    };
+  }
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) return null;
   const rollout = readRollout(thread);
   const session = normalizeThread(thread, null, rollout);
   const durationSec = Math.max(0, (thread.updated_at || 0) - (thread.created_at || 0));
   const tokens = tokenTelemetry(rollout, thread);
+  const pricing = sessionPricing(rollout, thread, tokens);
   const access = accessProfile(thread, rollout);
 
   return {
@@ -697,6 +758,7 @@ function getSessionPreview(id) {
       .map(event => event.agent_thread_id)
       .filter(Boolean)).size,
     ...tokens,
+    ...pricing,
     chatThread: rollout.turns.slice(-5),
     rolloutPath: rollout.path,
     sandboxPolicy: access?.rawSandboxType || thread.sandbox_policy,
@@ -1003,6 +1065,7 @@ function stats(options = {}) {
   const modelMap = {};
   const tokensByHour = emptyTokenWindows();
   const tokenHeatmap = emptyTokenHeatmap();
+  const usageRecords = [];
   const recentPrompts = [];
   let latestRateLimits = null;
   let latestRateLimitAt = 0;
@@ -1052,6 +1115,7 @@ function stats(options = {}) {
     modelEntry.totalTokens += tokens.totalTokens;
     modelEntry.sessions++;
     modelEntry.calls += tokens.calls || 1;
+    usageRecords.push(...usageRecordsForThread(thread, rollout, tokens));
     for (const event of rollout.tokenEvents || []) {
       if (event.last) addTokenActivity(tokensByHour, tokenHeatmap, event.createdAt, normalizeTokenUsage(event.last));
     }
@@ -1151,6 +1215,19 @@ function stats(options = {}) {
       latestRateLimitAt = session.lastActivityAt || 0;
     }
     addModelUsage(session.model || 'codex', session.reasoningEffort || 'unknown', tokens);
+    usageRecords.push({
+      timestamp: session.lastActivityAt || session.createdAt || 0,
+      usage: tokens,
+      model: session.model || 'codex',
+      reasoningEffort: session.reasoningEffort || 'unknown',
+      project: session.project || 'transcript-pipeline',
+      session: {
+        id: session.id,
+        title: dashboardStore.getTitle(session.id) || session.title || session.id,
+        model: session.model || 'codex',
+        reasoningEffort: session.reasoningEffort || 'unknown',
+      },
+    });
     if (tokens.totalTokens) addTokenActivity(tokensByHour, tokenHeatmap, session.lastActivityAt || session.createdAt || 0, tokens);
     if (session.firstUserPrompt) {
       recentPrompts.push({
@@ -1190,6 +1267,8 @@ function stats(options = {}) {
     activityByHour: { b24: new Array(24).fill(0), b48: new Array(24).fill(0), b7d: [] },
     tokensByHour,
     tokenHeatmap,
+    usageRollups: buildUsageRollups(usageRecords, now),
+    pricing: pricingMetadata(),
     models: Object.values(modelMap).sort((a, b) => b.totalTokens - a.totalTokens),
     recentPrompts: recentPrompts.sort((a, b) => b.timestamp - a.timestamp).slice(0, 10),
     mcpServers: codexMcpServers(),
@@ -1227,49 +1306,6 @@ function stats(options = {}) {
   };
   statsResultCache.set(statsMode, { fingerprint, value: result });
   return result;
-}
-
-function emptyTokenWindows() {
-  const make = () => ({ input: new Array(24).fill(0), output: new Array(24).fill(0) });
-  return { '1d': make(), '2d': make(), '7d': make(), '14d': make(), '30d': make(), all: make() };
-}
-
-function emptyTokenHeatmap() {
-  return Array.from({ length: 7 }, () =>
-    Array.from({ length: 24 }, () => ({
-      windows: { '1d': 0, '7d': 0, '14d': 0, '30d': 0 },
-    }))
-  );
-}
-
-function addTokenActivity(tokensByHour, heatmap, epochSec, usage) {
-  if (!epochSec || !usage) return;
-  const inputTokens = typeof usage === 'number' ? 0 : (usage.inputTokens || 0) + (usage.cacheReadTokens || 0);
-  const outputTokens = typeof usage === 'number' ? usage : usage.outputTokens || usage.totalTokens || 0;
-  const totalTokens = typeof usage === 'number' ? usage : usage.totalTokens || inputTokens + outputTokens;
-  if (!inputTokens && !outputTokens && !totalTokens) return;
-  const now = Math.floor(Date.now() / 1000);
-  const age = now - epochSec;
-  const date = new Date(epochSec * 1000);
-  const hour = date.getHours();
-  const day = (date.getDay() + 6) % 7; // Monday = 0
-  const windows = [
-    ['1d', 86400],
-    ['2d', 172800],
-    ['7d', 604800],
-    ['14d', 1209600],
-    ['30d', 2592000],
-  ];
-  for (const [key, seconds] of windows) {
-    if (age <= seconds) {
-      tokensByHour[key].input[hour] += inputTokens;
-      tokensByHour[key].output[hour] += outputTokens;
-      heatmap[day][hour].windows[key === '2d' ? '1d' : key] =
-        (heatmap[day][hour].windows[key === '2d' ? '1d' : key] || 0) + totalTokens;
-    }
-  }
-  tokensByHour.all.input[hour] += inputTokens;
-  tokensByHour.all.output[hour] += outputTokens;
 }
 
 function sourceBreakdown(threads) {

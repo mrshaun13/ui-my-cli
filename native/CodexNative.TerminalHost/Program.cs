@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using CodexNative.Core;
 
-namespace CodexNative.WslHost;
+namespace CodexNative.TerminalHost;
 
 internal static class Program
 {
@@ -13,6 +13,11 @@ internal static class Program
             {
                 HostLog.Write($"Starting persistent terminal bridge to {new Uri(endpoint).Authority}.");
                 return TerminalBridge.RunAsync(new Uri(endpoint)).GetAwaiter().GetResult();
+            }
+            if (!OperatingSystem.IsWindows())
+            {
+                throw new PlatformNotSupportedException(
+                    "WSL launch modes are available only in the Windows build.");
             }
             var request = NativeLaunchBuilder.ParseHostArguments(args);
             var spec = NativeLaunchBuilder.BuildWslSpec(request, Environment.SystemDirectory);
@@ -39,8 +44,8 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            HostLog.Write($"WSL host failed: {ex}");
-            Console.Error.WriteLine($"CodexNative WSL host failed: {ex.Message}");
+            HostLog.Write($"Terminal host failed: {ex}");
+            Console.Error.WriteLine($"CodexNative terminal host failed: {ex.Message}");
             return 1;
         }
     }
@@ -85,15 +90,16 @@ internal static class Program
 
 internal static class HostLog
 {
-    private static readonly string Path = System.IO.Path.Combine(
-        AppContext.BaseDirectory,
-        "codex-native-wsl-host.log");
-
     public static void Write(string message)
     {
         try
         {
-            File.AppendAllText(Path, $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}");
+            var directory = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CodexNative");
+            Directory.CreateDirectory(directory);
+            var path = System.IO.Path.Combine(directory, "terminal-host.log");
+            File.AppendAllText(path, $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}");
         }
         catch
         {

@@ -71,6 +71,8 @@ public sealed class DashboardStats
     public List<SessionRanking> TopSessionsByDuration { get; set; } = [];
     public List<SessionRanking> TopSessionsByUserMsgs { get; set; } = [];
     public List<SessionRanking> TopSessionsByTokens { get; set; } = [];
+    public Dictionary<string, UsageRollup> UsageRollups { get; set; } = [];
+    public PricingMetadata Pricing { get; set; } = new();
     public string CodexVersion { get; set; } = string.Empty;
     public RateLimitInfo? RateLimits { get; set; }
     public StatsFilterInfo StatsFilters { get; set; } = new();
@@ -85,6 +87,7 @@ public sealed class StatsFilterInfo
 public sealed class DashboardStatus
 {
     public bool Ok { get; set; }
+    public int ApiVersion { get; set; }
     public int ActivePtys { get; set; }
     public long Uptime { get; set; }
     public List<ProviderStatus> Providers { get; set; } = [];
@@ -103,6 +106,53 @@ public sealed class TokenWindow
 {
     public List<long> Input { get; set; } = [];
     public List<long> Output { get; set; } = [];
+}
+
+public sealed class UsageRollup
+{
+    public string Window { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public UsageTotals Totals { get; set; } = new();
+    public List<UsageBreakdown> Models { get; set; } = [];
+    public List<UsageBreakdown> Projects { get; set; } = [];
+    public List<UsageBreakdown> Sessions { get; set; } = [];
+}
+
+public class UsageTotals
+{
+    public long InputTokens { get; set; }
+    public long TotalInputTokens { get; set; }
+    public long CachedInputTokens { get; set; }
+    public long OutputTokens { get; set; }
+    public long VisibleOutputTokens { get; set; }
+    public long ReasoningOutputTokens { get; set; }
+    public long UnclassifiedTokens { get; set; }
+    public long TotalTokens { get; set; }
+    public long Calls { get; set; }
+    public double EstimatedCredits { get; set; }
+    public long PricedTokens { get; set; }
+    public long UnpricedTokens { get; set; }
+    public double PricingCoverage { get; set; }
+}
+
+public sealed class UsageBreakdown : UsageTotals
+{
+    public string Key { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Id { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string Project { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+    public string ReasoningEffort { get; set; } = string.Empty;
+}
+
+public sealed class PricingMetadata
+{
+    public string Source { get; set; } = string.Empty;
+    public string Version { get; set; } = string.Empty;
+    public string Unit { get; set; } = "credits";
+    public string ReasoningBilling { get; set; } = string.Empty;
+    public string SpeedBilling { get; set; } = string.Empty;
 }
 
 public sealed class HeatmapCell
@@ -127,6 +177,10 @@ public sealed class SessionRanking
     public long CacheWriteTokens { get; set; }
     public long UnclassifiedTokens { get; set; }
     public long TotalTokens { get; set; }
+    public double EstimatedCredits { get; set; }
+    public long PricedTokens { get; set; }
+    public long UnpricedTokens { get; set; }
+    public double PricingCoverage { get; set; }
     public long Calls { get; set; }
 }
 
@@ -271,6 +325,10 @@ public sealed class SessionPreviewData : DashboardSession
     public long ReasoningOutputTokens { get; set; }
     public long UnclassifiedTokens { get; set; }
     public long TotalTokens { get; set; }
+    public double EstimatedCredits { get; set; }
+    public long PricedTokens { get; set; }
+    public long UnpricedTokens { get; set; }
+    public double PricingCoverage { get; set; }
     public int Calls { get; set; }
     public List<PreviewTool> TopTools { get; set; } = [];
     public List<ModelSwitch> ModelSwitches { get; set; } = [];

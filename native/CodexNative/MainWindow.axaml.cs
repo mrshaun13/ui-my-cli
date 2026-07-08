@@ -24,16 +24,20 @@ public sealed partial class MainWindow : Window
     private readonly NativeSettingsStore _settingsStore = new();
     private readonly DashboardApiClient _api = new();
     private readonly DashboardServiceManager _serviceManager = new();
+    private readonly NativePlatformProfile _platform = NativePlatformProfile.Current;
+    private readonly NativeUpdateService _updateService = new();
     private readonly Dictionary<string, SessionTabState> _openTabs = [];
     private readonly Dictionary<string, TabItem> _previewTabs = [];
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _connectionPulseTimer;
     private readonly DispatcherTimer _sessionHoverAnimationTimer;
+    private readonly DispatcherTimer _updateCheckTimer;
     private readonly TranslateTransform _sessionHoverTopTransform = new();
     private readonly TranslateTransform _sessionHoverBottomTransform = new();
     private Grid? _hoveredSessionRow;
     private DashboardStatusFeed? _statusFeed;
     private CancellationTokenSource? _searchCancellation;
+    private CancellationTokenSource? _updateInstallCancellation;
     private Flyout? _newSessionFlyout;
     private NativeSettings _settings = NativeSettings.Default;
     private List<DashboardSession> _sessions = [];
@@ -46,18 +50,19 @@ public sealed partial class MainWindow : Window
     private Color _sessionDividerAccent = Color.Parse(DashboardTheme.All[0].Accent);
     private Color _sessionDividerSecondary = Color.Parse(DashboardTheme.All[0].Secondary);
     private List<DashboardSession>? _searchResults;
-    private readonly HashSet<string> _activeRepoPaths = new(StringComparer.Ordinal);
     private readonly HashSet<string> _hiddenTokenCategories = new(StringComparer.Ordinal);
     private bool _refreshing;
     private bool _initializingSelectors;
     private bool _initializingNavigation;
     private bool _initializingAnalytics;
-    private bool _renderingRepoChips;
     private bool _shutdownConfirmed;
     private bool _closePromptOpen;
     private bool _uiReady;
     private bool _workspaceReady;
     private bool _isDashboardConnected;
+    private bool _checkingForUpdate;
+    private bool _updateInProgress;
+    private NativeReleaseInfo? _availableUpdate;
     private int _refreshTick;
     private readonly DateTimeOffset _connectionPulseStartedAt = DateTimeOffset.UtcNow;
     private DateTimeOffset _sessionHoverAnimationStartedAt = DateTimeOffset.UtcNow;
@@ -65,6 +70,11 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        TerminalPathText.Text = _platform.UsesWsl
+            ? "Terminal path: native view → persistent WSL2 PTY → Codex"
+            : $"Terminal path: native view → persistent {_platform.DisplayName} PTY → Codex";
+        ToolTip.SetTip(NewSessionButton, $"New Codex or {_platform.LocalShellLabel} session (Ctrl+Shift+N)");
+        ToolTip.SetTip(CompactNewSessionButton, $"New Codex or {_platform.LocalShellLabel} session (Ctrl+Shift+N)");
         AutomationProperties.SetName(DashboardTab, "Dashboard overview");
         CompactSessionsList.ContainerPrepared += OnCompactSessionContainerPrepared;
         _uiReady = true;
@@ -104,6 +114,12 @@ public sealed partial class MainWindow : Window
             TimeSpan.FromMilliseconds(33),
             DispatcherPriority.Render,
             OnSessionHoverAnimationTick);
+        _updateCheckTimer = new DispatcherTimer(
+            TimeSpan.FromHours(6),
+            DispatcherPriority.Background,
+            async (_, _) => await CheckForUpdateAsync(reportCurrent: false));
+        UpdateButton.IsVisible = (_platform.Platform is NativePlatform.Windows or NativePlatform.MacOS)
+            && _updateService.CanSelfUpdate(_platform);
         SetSessionFiltersExpanded(false);
         UpdateHeaderConnectionIndicator();
         _connectionPulseTimer.Start();
@@ -186,7 +202,10 @@ public sealed partial class MainWindow : Window
         await RestoreWorkspaceAsync();
         _workspaceReady = true;
         await SaveWorkspaceAsync();
+        _updateService.CleanupPreviousInstall(_platform);
         _refreshTimer.Start();
+        _updateCheckTimer.Start();
+        _ = CheckForUpdateAsync(reportCurrent: false);
     }
 
     private void InitializeSelectors()
@@ -234,19 +253,41 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var hostExecutable = Path.Combine(AppContext.BaseDirectory, "CodexNative.WslHost.exe");
-            _api.UsePrivateService();
-            _serviceManager.EnsureStarted(hostExecutable, _settings.Distribution, _settings.DashboardWorkingDirectory);
-            for (var attempt = 0; attempt < 20; attempt++)
+            var hostExecutable = Path.Combine(AppContext.BaseDirectory, _platform.TerminalHostFileName);
+            foreach (var port in DashboardServicePorts.PrivateCandidates)
             {
-                await Task.Delay(500);
-                if (await _api.IsAvailableAsync())
+                _api.UsePrivateService(port);
+                _serviceManager.EnsureStarted(
+                    _platform.Platform,
+                    hostExecutable,
+                    _settings.Distribution,
+                    _settings.DashboardWorkingDirectory,
+                    Environment.GetEnvironmentVariable("NODE_BIN"),
+                    port);
+                var exited = false;
+                for (var attempt = 0; attempt < 20; attempt++)
                 {
-                    SetStatus("Started ui-my-cli data service · persistent terminals enabled", RunningBrush);
-                    return;
+                    await Task.Delay(500);
+                    if (await _api.IsAvailableAsync())
+                    {
+                        SetStatus(
+                            $"Started ui-my-cli data service on {port} · persistent terminals enabled",
+                            RunningBrush);
+                        return;
+                    }
+                    if (!_serviceManager.TryGetExitCode(out var exitCode)) continue;
+                    NativeLog.Write(
+                        $"Dashboard service candidate port {port} exited with code {exitCode}; trying the next private port.");
+                    exited = true;
+                    break;
                 }
+                if (exited) continue;
+                throw new TimeoutException(
+                    $"The native dashboard data service did not answer on port {port}. See {NativeLog.FilePath}");
             }
-            throw new TimeoutException("The native dashboard data service did not answer on port 7577.");
+            throw new InvalidOperationException(
+                $"No private dashboard port from {DashboardServicePorts.FirstPrivate} through " +
+                $"{DashboardServicePorts.LastPrivate} could start the data service. See {NativeLog.FilePath}");
         }
         catch (Exception ex)
         {
@@ -384,7 +425,7 @@ public sealed partial class MainWindow : Window
             RenderStats(_stats);
             RenderProviderStatus(_dashboardStatus);
             if (sessionsChanged) UpdateOpenTabStatuses();
-            SetStatus($"Live · {_sessions.Count} sessions · persistent WSL2 terminals", RunningBrush);
+            SetStatus($"Live · {_sessions.Count} sessions · persistent {_platform.DisplayName} terminals", RunningBrush);
         }
         catch (Exception ex)
         {
@@ -438,66 +479,25 @@ public sealed partial class MainWindow : Window
 
     private void UpdateRepoFilter()
     {
-        var selectedPath = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir ?? _settings.SelectedRepo;
+        var selectedPath = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir
+            ?? _settings.SelectedRepo
+            ?? _settings.SelectedRepos?.FirstOrDefault();
         var filters = new List<RepoFilter> { new("All projects", null) };
-        filters.AddRange(_repos.Select(repo => new RepoFilter(repo.Project, repo.WorkingDir)));
-        RepoComboBox.ItemsSource = filters;
-        RepoComboBox.SelectedItem = filters.FirstOrDefault(filter => filter.WorkingDir == selectedPath) ?? filters[0];
-        if (_activeRepoPaths.Count == 0 && _settings.SavedRepoPaths.Count > 0)
+        filters.AddRange(_repos.Select(repo => new RepoFilter(
+            $"{repo.Project} ({_sessions.Count(session => session.WorkingDir == repo.WorkingDir):N0})",
+            repo.WorkingDir)));
+        var wasInitializing = _initializingNavigation;
+        _initializingNavigation = true;
+        try
         {
-            foreach (var path in _settings.SavedRepoPaths.Where(path => _repos.Any(repo => repo.WorkingDir == path)))
-                _activeRepoPaths.Add(path);
+            RepoComboBox.ItemsSource = filters;
+            RepoComboBox.SelectedItem = filters.FirstOrDefault(filter => filter.WorkingDir == selectedPath) ?? filters[0];
         }
-        RenderRepoChips();
-    }
-
-    private void RenderRepoChips()
-    {
-        _renderingRepoChips = true;
-        RepoChipsPanel.Children.Clear();
-        if (_repos.Count > 1)
+        finally
         {
-            var all = new ToggleButton
-            {
-                Content = "All",
-                IsChecked = _activeRepoPaths.Count == 0,
-                Padding = new Thickness(8, 3),
-                Margin = new Thickness(0, 0, 5, 5),
-            };
-            all.Click += async (_, _) =>
-            {
-                if (_renderingRepoChips) return;
-                _activeRepoPaths.Clear();
-                RenderRepoChips();
-                ApplySessionFilter();
-                await SaveWorkspaceAsync();
-            };
-            RepoChipsPanel.Children.Add(all);
+            _initializingNavigation = wasInitializing;
         }
-        foreach (var repo in _repos)
-        {
-            var count = _sessions.Count(session => session.WorkingDir == repo.WorkingDir);
-            var chip = new ToggleButton
-            {
-                Content = $"{repo.Project} ({count})",
-                IsChecked = _activeRepoPaths.Contains(repo.WorkingDir),
-                Tag = repo.WorkingDir,
-                Padding = new Thickness(8, 3),
-                Margin = new Thickness(0, 0, 5, 5),
-                MaxWidth = 190,
-            };
-            chip.Click += async (_, _) =>
-            {
-                if (_renderingRepoChips || chip.Tag is not string path) return;
-                if (chip.IsChecked == true) _activeRepoPaths.Add(path);
-                else _activeRepoPaths.Remove(path);
-                RenderRepoChips();
-                ApplySessionFilter();
-                await SaveWorkspaceAsync();
-            };
-            RepoChipsPanel.Children.Add(chip);
-        }
-        _renderingRepoChips = false;
+        UpdateSessionFilterSummary();
     }
 
     private void ApplySessionFilter()
@@ -512,10 +512,9 @@ public sealed partial class MainWindow : Window
         {
             filtered = filtered.Where(session => !session.IsHeadless);
         }
-        if (_activeRepoPaths.Count > 0 && _searchResults is null)
-        {
-            filtered = filtered.Where(session => _activeRepoPaths.Contains(session.WorkingDir));
-        }
+        var selectedRepo = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir;
+        if (!string.IsNullOrWhiteSpace(selectedRepo))
+            filtered = filtered.Where(session => session.WorkingDir == selectedRepo);
         if (NeedsInputCheckBox.IsChecked == true)
         {
             filtered = filtered.Where(session => session.Status == "question");
@@ -542,6 +541,20 @@ public sealed partial class MainWindow : Window
         var olderCount = visible.Count(session => SessionAgeGrouping.IsCold(
             session.Status, session.LastActivityAt, now, _settings.ColdDays));
         SessionCountText.Text = $"{visible.Count} of {sourceCount} · {olderCount} older than {_settings.ColdDays}d";
+        UpdateSessionFilterSummary();
+    }
+
+    private void UpdateSessionFilterSummary()
+    {
+        var parts = new List<string>
+        {
+            (RepoComboBox.SelectedItem as RepoFilter)?.Label ?? "All projects",
+            $"> {_settings.ColdDays}d grouped",
+        };
+        if (ShowHeadlessCheckBox.IsChecked == true) parts.Add("headless");
+        if (ArchivedCheckBox.IsChecked == true) parts.Add("archive");
+        if (NeedsInputCheckBox.IsChecked == true) parts.Add("waiting");
+        SessionFiltersSummaryText.Text = string.Join(" · ", parts);
     }
 
     private static bool Contains(string? value, string query) =>
@@ -612,7 +625,9 @@ public sealed partial class MainWindow : Window
             ActiveSessionId = active?.Session?.Id,
             SidebarCollapsed = !SidebarBorder.IsVisible,
             SelectedRepo = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir,
-            SelectedRepos = _activeRepoPaths.Order(StringComparer.Ordinal).ToList(),
+            SelectedRepos = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir is string selectedRepo
+                ? [selectedRepo]
+                : [],
             ShowHeadless = ShowHeadlessCheckBox.IsChecked == true,
             IncludeArchived = ArchivedCheckBox.IsChecked == true,
             SearchQuery = SearchTextBox.Text ?? string.Empty,
@@ -680,24 +695,28 @@ public sealed partial class MainWindow : Window
 
     private void RenderStats(DashboardStats stats)
     {
-        var totalTokens = stats.Models.Sum(model => model.TotalTokens);
-        var totalCalls = stats.Models.Sum(model => model.Calls);
+        var rollup = SelectedUsageRollup(stats);
+        var totals = rollup?.Totals ?? new UsageTotals();
         StatsSummaryText.Text =
-            $"{stats.Activity.H24:N0} active in 24h   ·   {stats.Activity.Total:N0} sessions   ·   " +
-            $"{FormatNumber(totalTokens)} tokens   ·   {FormatNumber(totalCalls)} model calls   ·   " +
+            $"{rollup?.Label ?? "Usage unavailable"}: {FormatNumber(totals.TotalTokens)} tokens   ·   " +
+            $"{CreditEstimate(totals)}   ·   {stats.Activity.H24:N0} active in 24h   ·   " +
             $"{stats.TotalSubagents:N0} subagents   ·   {CohortLabel(stats.StatsFilters.StatsMode)} cohort";
         StatsCohortPanel.IsVisible = stats.StatsFilters.TranscriptHeadlessCount > 0;
 
+        RenderUsageSummary(rollup, stats.Pricing);
+
         PopulateMetricRows(
             ProjectsPanel,
-            stats.Projects.OrderByDescending(project => project.Messages).Take(5)
-                .Select(project => (project.Name, (long)project.Messages, $"{project.Sessions:N0} sessions · {FormatDuration(project.DurationSec)}")));
+            (rollup?.Projects ?? []).Take(8)
+                .Select(project => (project.Name, project.TotalTokens,
+                    $"{FormatNumber(project.TotalTokens)} tokens · {CreditEstimate(project)}")),
+            "No token_count telemetry for projects in this window.");
         ProjectComboGraph.MessagesBrush = Brush.Parse("#38BDF8");
         ProjectComboGraph.DurationBrush = StartingBrush;
         ProjectComboGraph.SessionsBrush = ResourceBrush("AccentBrush");
         ProjectComboGraph.GridBrush = ResourceBrush("BorderBrush");
         ProjectComboGraph.SetData(stats.Projects.OrderByDescending(project => project.Messages).Take(10).ToList());
-        PopulateModelRows(stats.Models.OrderByDescending(model => model.TotalTokens).Take(10));
+        PopulateModelRows((rollup?.Models ?? []).Take(10));
         PopulateMetricRows(
             ToolsPanel,
             stats.Tools.Interactive.OrderByDescending(tool => tool.Calls).Take(12)
@@ -726,22 +745,87 @@ public sealed partial class MainWindow : Window
         RenderRateLimits(_rateLimits);
 
         var window = _settings.AnalyticsWindow;
-        if (!stats.TokensByHour.TryGetValue(window, out var tokenWindow))
-            stats.TokensByHour.TryGetValue("7d", out tokenWindow);
+        stats.TokensByHour.TryGetValue(window, out var tokenWindow);
         TokenActivityGraph.InputBrush = Brush.Parse("#38BDF8");
         TokenActivityGraph.OutputBrush = ResourceBrush("AccentBrush");
         TokenActivityGraph.GridBrush = ResourceBrush("BorderBrush");
         TokenActivityGraph.SetData(tokenWindow?.Input, tokenWindow?.Output);
+        TokenActivityDescriptionText.Text =
+            $"{rollup?.Label ?? window} · input and output aggregated by local clock hour · weekday/hour intensity below";
         if (ResourceBrush("AccentBrush") is SolidColorBrush accent) TokenHeatmapGraph.AccentColor = accent.Color;
         TokenHeatmapGraph.EmptyBrush = ResourceBrush("ElevatedBrush");
         TokenHeatmapGraph.SetData(stats.TokenHeatmap
             .Select(row => (IReadOnlyList<long>)row.Select(cell =>
-                cell.Windows.TryGetValue(window == "all" ? "30d" : window, out var value) ? value : 0).ToList())
+                cell.Windows.TryGetValue(window, out var value) ? value : 0).ToList())
             .ToList());
 
         PopulateLeaderboard(DurationLeadersPanel, stats.TopSessionsByDuration, entry => entry.DurationSec, entry => entry.DurationStr);
         PopulateLeaderboard(MessageLeadersPanel, stats.TopSessionsByUserMsgs, entry => entry.UserMsgCount, entry => $"{entry.UserMsgCount:N0} messages");
-        PopulateTokenLeaderboard(stats.TopSessionsByTokens);
+        PopulateTokenLeaderboard((rollup?.Sessions ?? []).Take(10));
+    }
+
+    private UsageRollup? SelectedUsageRollup(DashboardStats stats)
+    {
+        if (stats.UsageRollups.TryGetValue(_settings.AnalyticsWindow, out var selected)) return selected;
+        return null;
+    }
+
+    private void RenderUsageSummary(UsageRollup? rollup, PricingMetadata pricing)
+    {
+        if (rollup is null)
+        {
+            UsageWindowDescriptionText.Text =
+                $"Usage data unavailable for {_settings.AnalyticsWindow}; dashboard API v{DashboardApiClient.RequiredApiVersion} is required";
+            UsageSummaryPanel.Children.Clear();
+            AddEmptyState(UsageSummaryPanel, "The connected service returned an incomplete analytics payload.");
+            UsagePricingNoteText.Text = "Restart ui-my-cli with the current code before evaluating token or credit data.";
+            return;
+        }
+        var totals = rollup.Totals;
+        UsageWindowDescriptionText.Text =
+            $"{rollup.Label} · exact local telemetry where Codex reports token_count events";
+        UsageSummaryPanel.Children.Clear();
+        AddUsageSummaryMetric("FRESH INPUT", FormatNumber(totals.InputTokens), "full input rate");
+        AddUsageSummaryMetric("CACHED INPUT", FormatNumber(totals.CachedInputTokens), "discounted input rate");
+        AddUsageSummaryMetric("TOTAL INPUT", FormatNumber(totals.TotalInputTokens), "fresh + cached");
+        AddUsageSummaryMetric("TOTAL OUTPUT", FormatNumber(totals.OutputTokens), "includes reasoning");
+        AddUsageSummaryMetric("REASONING", FormatNumber(totals.ReasoningOutputTokens), "part of output; no multiplier");
+        AddUsageSummaryMetric("TOTAL TOKENS", FormatNumber(totals.TotalTokens), $"{totals.Calls:N0} model calls");
+        AddUsageSummaryMetric("EST. CREDITS", CreditValue(totals), PricingCoverageLabel(totals));
+
+        var sourceVersion = string.IsNullOrWhiteSpace(pricing.Version) ? "published rate card" : $"rate card {pricing.Version}";
+        UsagePricingNoteText.Text = totals.UnpricedTokens > 0
+            ? $"Credit estimate is partial: {FormatNumber(totals.UnpricedTokens)} tokens use models absent from the public {sourceVersion}. " +
+              "Reasoning tokens are already included in output tokens and use the output rate; reasoning effort has no separate published multiplier. " +
+              "Estimate assumes Standard mode because stored telemetry does not identify Fast mode."
+            : $"Credit estimate uses the Codex {sourceVersion}. Reasoning tokens are already included in output tokens and use the output rate; " +
+              "reasoning effort has no separate published multiplier. Estimate assumes Standard mode because stored telemetry does not identify Fast mode.";
+        ToolTip.SetTip(UsagePricingNoteText, pricing.Source);
+    }
+
+    private void AddUsageSummaryMetric(string label, string value, string detail)
+    {
+        UsageSummaryPanel.Children.Add(new Border
+        {
+            Width = 155,
+            MinHeight = 76,
+            Margin = new Thickness(0, 0, 8, 8),
+            Padding = new Thickness(10, 8),
+            Background = ResourceBrush("SurfaceBrush"),
+            BorderBrush = ResourceBrush("BorderBrightBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Child = new StackPanel
+            {
+                Spacing = 2,
+                Children =
+                {
+                    new TextBlock { Text = value, FontSize = 19, FontWeight = FontWeight.Bold, Foreground = ResourceBrush("PrimaryBrush") },
+                    new TextBlock { Text = label, FontSize = 9, FontWeight = FontWeight.Bold, Foreground = ResourceBrush("AccentBrush") },
+                    new TextBlock { Text = detail, FontSize = 9, Foreground = ResourceBrush("MutedBrush"), TextWrapping = TextWrapping.Wrap },
+                },
+            },
+        });
     }
 
     private void RenderLatestPrompt()
@@ -765,10 +849,18 @@ public sealed partial class MainWindow : Window
         _ => "combined",
     };
 
-    private void PopulateMetricRows(Panel panel, IEnumerable<(string Label, long Value, string Detail)> rows)
+    private void PopulateMetricRows(
+        Panel panel,
+        IEnumerable<(string Label, long Value, string Detail)> rows,
+        string? emptyMessage = null)
     {
         panel.Children.Clear();
         var materialized = rows.ToList();
+        if (materialized.Count == 0 && !string.IsNullOrWhiteSpace(emptyMessage))
+        {
+            AddEmptyState(panel, emptyMessage);
+            return;
+        }
         var maximum = Math.Max(1, materialized.Select(row => row.Value).DefaultIfEmpty().Max());
         foreach (var row in materialized)
         {
@@ -794,10 +886,16 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void PopulateModelRows(IEnumerable<ModelStats> models)
+    private void PopulateModelRows(IEnumerable<UsageBreakdown> models)
     {
         ModelsPanel.Children.Clear();
-        foreach (var model in models)
+        var rows = models.ToList();
+        if (rows.Count == 0)
+        {
+            AddEmptyState(ModelsPanel, $"No model token_count telemetry in {SelectedWindowLabel()}.");
+            return;
+        }
+        foreach (var model in rows)
         {
             var bar = new StackedTokenBar { Height = 7 };
             bar.SegmentBrushes = TokenCategoryBrushes();
@@ -807,7 +905,7 @@ public sealed partial class MainWindow : Window
                 model.ReasoningOutputTokens,
                 model.InputTokens,
                 model.CachedInputTokens,
-                model.CacheWriteTokens,
+                0,
                 model.UnclassifiedTokens);
             bar.SetData(values);
             var visibleTotal = values.Sum();
@@ -825,7 +923,7 @@ public sealed partial class MainWindow : Window
                     bar,
                     new TextBlock
                     {
-                        Text = $"{FormatNumber(visibleTotal)} visible · {FormatNumber(model.TotalTokens)} total · {model.Calls:N0} calls · {model.Sessions:N0} sessions",
+                        Text = $"{FormatNumber(visibleTotal)} visible · {FormatNumber(model.TotalTokens)} total · {CreditEstimate(model)} · {model.Calls:N0} calls",
                         Foreground = ResourceBrush("SecondaryBrush"),
                         FontSize = 10,
                     },
@@ -856,10 +954,15 @@ public sealed partial class MainWindow : Window
         Brush.Parse("#8B5CF6"), Brush.Parse("#EAB308"), ResourceBrush("MutedBrush"),
     ];
 
-    private void PopulateTokenLeaderboard(IEnumerable<SessionRanking> entries)
+    private void PopulateTokenLeaderboard(IEnumerable<UsageBreakdown> entries)
     {
         TokenLeadersPanel.Children.Clear();
         var rows = entries.Take(10).ToList();
+        if (rows.Count == 0)
+        {
+            AddEmptyState(TokenLeadersPanel, $"No session token_count telemetry in {SelectedWindowLabel()}.");
+            return;
+        }
         foreach (var entry in rows)
         {
             var values = TokenCategoryValues(
@@ -867,7 +970,7 @@ public sealed partial class MainWindow : Window
                 entry.ReasoningOutputTokens,
                 entry.InputTokens,
                 entry.CachedInputTokens,
-                entry.CacheWriteTokens,
+                0,
                 entry.UnclassifiedTokens);
             var bar = new StackedTokenBar { Height = 7 };
             bar.SegmentBrushes = TokenCategoryBrushes();
@@ -891,7 +994,7 @@ public sealed partial class MainWindow : Window
                             Children =
                             {
                                 new TextBlock { Text = entry.Title, Foreground = ResourceBrush("PrimaryBrush"), TextTrimming = TextTrimming.CharacterEllipsis },
-                                LeaderValue($"{FormatNumber(visibleTotal)} tokens"),
+                                LeaderValue($"{FormatNumber(visibleTotal)} · {CreditEstimate(entry)}"),
                             },
                         },
                         bar,
@@ -912,6 +1015,25 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private string SelectedWindowLabel() => _settings.AnalyticsWindow switch
+    {
+        "1d" => "the last 24 hours",
+        "2d" => "the last 48 hours",
+        "7d" => "the last 7 days",
+        "14d" => "the last 14 days",
+        "30d" => "the last 30 days",
+        "all" => "all recorded time",
+        _ => "the selected window",
+    };
+
+    private void AddEmptyState(Panel panel, string text) => panel.Children.Add(new TextBlock
+    {
+        Text = text,
+        Foreground = ResourceBrush("SecondaryBrush"),
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(2, 8),
+    });
+
     private void OnProjectSeriesToggled(object? sender, RoutedEventArgs e)
     {
         if (!_uiReady) return;
@@ -927,8 +1049,9 @@ public sealed partial class MainWindow : Window
         if (toggle.IsChecked == true) _hiddenTokenCategories.Remove(category);
         else _hiddenTokenCategories.Add(category);
         if (_stats is null) return;
-        PopulateModelRows(_stats.Models.OrderByDescending(model => model.TotalTokens).Take(10));
-        PopulateTokenLeaderboard(_stats.TopSessionsByTokens);
+        var rollup = SelectedUsageRollup(_stats);
+        PopulateModelRows((rollup?.Models ?? []).Take(10));
+        PopulateTokenLeaderboard((rollup?.Sessions ?? []).Take(10));
     }
 
     private void PopulateLeaderboard(
@@ -992,11 +1115,16 @@ public sealed partial class MainWindow : Window
     {
         var codex = status.Providers.FirstOrDefault(provider => provider.Id == "codex");
         ProviderHealthBar.Value = codex?.Available == true ? 100 : 0;
-        ProviderStatusText.Text = codex is null
+        var summary = codex is null
             ? $"Codex provider not reported · {status.ActivePtys:N0} persistent terminals"
             : $"{(codex.Available ? "Available" : "Unavailable")} · {codex.Version ?? "version unknown"} · " +
               $"{status.ActivePtys:N0} persistent terminal{(status.ActivePtys == 1 ? string.Empty : "s")} · " +
               $"service up {FormatDuration(status.Uptime)}";
+        var error = codex?.Available == false && !string.IsNullOrWhiteSpace(codex.Error)
+            ? codex.Error.Trim()
+            : null;
+        ProviderStatusText.Text = error is null ? summary : $"{summary}\n{error}";
+        ToolTip.SetTip(ProviderStatusText, error);
     }
 
     private void RenderRateLimits(RateLimitInfo? rateLimits)
@@ -1119,15 +1247,15 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task OpenUbuntuSessionAsync(string workingDirectory)
+    private async Task OpenLocalShellSessionAsync(string workingDirectory)
     {
         try
         {
             var key = $"ubuntu:{Guid.NewGuid():N}";
             var project = workingDirectory.TrimEnd('/').Split('/').LastOrDefault() ?? workingDirectory;
-            var title = $"{_settings.Distribution} · {project}";
+            var title = $"{_platform.LocalShellLabel} · {project}";
             var state = CreateTerminalTab(
-                key, title, workingDirectory, null, TerminalSessionKind.Ubuntu);
+                key, title, workingDirectory, null, TerminalSessionKind.LocalShell);
             _openTabs.Add(key, state);
             WorkspaceTabs.Items.Add(state.Tab);
             state.IsAttached = true;
@@ -1137,7 +1265,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus($"Ubuntu session failed: {ex.Message}", ErrorBrush);
+            SetStatus($"{_platform.LocalShellLabel} session failed: {ex.Message}", ErrorBrush);
         }
     }
 
@@ -1148,7 +1276,7 @@ public sealed partial class MainWindow : Window
         DashboardSession? session,
         TerminalSessionKind kind)
     {
-        var isUbuntu = kind == TerminalSessionKind.Ubuntu;
+        var isLocalShell = kind == TerminalSessionKind.LocalShell;
         var textSize = DashboardTextSize.Find(_settings.TextSizeId);
         var tabFontSize = TabHeaderFontSize(textSize);
         var terminal = new TerminalControl
@@ -1235,8 +1363,8 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(restoreOverlay, "Restoring Codex conversation");
         AutomationProperties.SetLiveSetting(restoreOverlay, AutomationLiveSetting.Polite);
 
-        var contextText = MakeDetailText(isUbuntu
-            ? $"Interactive login shell in {_settings.Distribution}."
+        var contextText = MakeDetailText(isLocalShell
+            ? $"Interactive login shell on {_platform.DisplayName}."
             : "Context data will load after the terminal opens.");
         var contextBar = new ProgressBar { Minimum = 0, Maximum = 100, Height = 7, Margin = new Thickness(0, 5, 0, 7) };
         var contextDonut = new ContextDonutControl
@@ -1250,12 +1378,12 @@ public sealed partial class MainWindow : Window
                 StartingBrush, ErrorBrush, Brush.Parse("#334155")
             ],
         };
-        contextBar.IsVisible = !isUbuntu;
-        contextDonut.IsVisible = !isUbuntu;
-        var configText = MakeDetailText(isUbuntu
+        contextBar.IsVisible = !isLocalShell;
+        contextDonut.IsVisible = !isLocalShell;
+        var configText = MakeDetailText(isLocalShell
             ? workingDirectory
             : session is null ? "New session configuration is managed by Codex." : "Loading model, permissions, rules, and skills…");
-        var promptText = MakeDetailText(isUbuntu
+        var promptText = MakeDetailText(isLocalShell
             ? "Run Linux commands directly. Type exit or close the tab to end this shell."
             : session?.LastUserPrompt ?? "The terminal is ready for a new prompt.");
 
@@ -1272,7 +1400,7 @@ public sealed partial class MainWindow : Window
             (TextBlock)configColumn.Children[0],
             (TextBlock)promptColumn.Children[0],
         };
-        if (isUbuntu)
+        if (isLocalShell)
         {
             detailHeadings[0].Text = "SHELL";
             detailHeadings[1].Text = "WORKING DIRECTORY";
@@ -1284,8 +1412,8 @@ public sealed partial class MainWindow : Window
         var archiveButton = new Button { Content = "Archive", Padding = new Thickness(10, 4), IsVisible = session is not null };
         var summaryButton = new Button { Content = "Summary", Padding = new Thickness(10, 4), IsVisible = session is not null };
         var stopButton = new Button { Content = "Stop", Padding = new Thickness(10, 4) };
-        ToolTip.SetTip(stopButton, isUbuntu
-            ? "Stop the Ubuntu shell and remove this tab"
+        ToolTip.SetTip(stopButton, isLocalShell
+            ? $"Stop the {_platform.LocalShellLabel} and remove this tab"
             : "Stop the Codex process and remove this tab");
         var actions = new WrapPanel
         {
@@ -1577,26 +1705,28 @@ public sealed partial class MainWindow : Window
         }
         try
         {
-            var hostExecutable = Path.Combine(AppContext.BaseDirectory, "CodexNative.WslHost.exe");
+            var hostExecutable = Path.Combine(AppContext.BaseDirectory, _platform.TerminalHostFileName);
             var spec = state.Kind switch
             {
                 TerminalSessionKind.Codex => NativeLaunchBuilder.ServerTerminal(
                     hostExecutable,
                     _api.TerminalWebSocketUri(state.Key).AbsoluteUri),
-                TerminalSessionKind.Ubuntu => NativeLaunchBuilder.UbuntuShell(
+                TerminalSessionKind.LocalShell => NativeLaunchBuilder.LocalShell(
+                    _platform.Platform,
                     hostExecutable,
                     _settings.Distribution,
-                    state.WorkingDirectory),
+                    state.WorkingDirectory,
+                    Environment.GetEnvironmentVariable("SHELL")),
                 _ => throw new ArgumentOutOfRangeException(nameof(state)),
             };
             state.StatusGlyph.Foreground = StartingBrush;
             state.StopButton.Content = "Stop";
             SetStatus(
-                state.Kind == TerminalSessionKind.Ubuntu
-                    ? $"Starting {_settings.Distribution} login shell in {state.WorkingDirectory}…"
-                    : $"Attaching {state.TitleBlock.Text} to persistent WSL2 terminal…",
+                state.Kind == TerminalSessionKind.LocalShell
+                    ? $"Starting {_platform.LocalShellLabel} in {state.WorkingDirectory}…"
+                    : $"Attaching {state.TitleBlock.Text} to persistent {_platform.DisplayName} terminal…",
                 StartingBrush);
-            await state.Terminal.LaunchProcess(null, spec.Process, spec.Arguments.ToArray());
+            await state.Terminal.LaunchProcess(spec.WorkingDirectory, spec.Process, spec.Arguments.ToArray());
             state.IsLaunched = true;
             state.IsRunning = true;
             state.ReconnectAttempt = 0;
@@ -1604,8 +1734,8 @@ public sealed partial class MainWindow : Window
             state.StatusGlyph.Foreground = RunningBrush;
             state.Terminal.Focus();
             SetStatus(
-                state.Kind == TerminalSessionKind.Ubuntu
-                    ? $"{_settings.Distribution} shell ready · host PID {state.Terminal.Pid} · {state.WorkingDirectory}"
+                state.Kind == TerminalSessionKind.LocalShell
+                    ? $"{_platform.LocalShellLabel} ready · host PID {state.Terminal.Pid} · {state.WorkingDirectory}"
                     : reconnecting
                         ? $"Reconnected {state.TitleBlock.Text} · bridge PID {state.Terminal.Pid}"
                         : $"Connected · bridge PID {state.Terminal.Pid} · server PTY survives app exit",
@@ -1656,7 +1786,7 @@ public sealed partial class MainWindow : Window
 
     private async Task DetachTabAsync(SessionTabState state)
     {
-        if (state.Kind == TerminalSessionKind.Ubuntu)
+        if (state.Kind == TerminalSessionKind.LocalShell)
         {
             await StopAndRemoveTabAsync(state);
             return;
@@ -1666,7 +1796,7 @@ public sealed partial class MainWindow : Window
         WorkspaceTabs.Items.Remove(state.Tab);
         state.IsAttached = false;
         WorkspaceTabs.SelectedItem = DashboardTab;
-        SetStatus($"Detached {state.TitleBlock.Text} · persistent WSL2 process continues", RunningBrush);
+        SetStatus($"Detached {state.TitleBlock.Text} · persistent {_platform.DisplayName} process continues", RunningBrush);
         await SaveWorkspaceAsync();
     }
 
@@ -1892,7 +2022,7 @@ public sealed partial class MainWindow : Window
             state.TitleBlock.Text = state.RenameBox.Text?.Trim() ?? state.TitleBlock.Text;
             AutomationProperties.SetName(
                 state.Tab,
-                state.TitleBlock.Text ?? (state.Kind == TerminalSessionKind.Ubuntu ? "Ubuntu session" : "New Codex session"));
+                state.TitleBlock.Text ?? (state.Kind == TerminalSessionKind.LocalShell ? _platform.LocalShellLabel : "New Codex session"));
             return;
         }
         var title = state.RenameBox.Text?.Trim();
@@ -1955,7 +2085,7 @@ public sealed partial class MainWindow : Window
         {
             state.IsRunning = false;
             state.IsLaunched = false;
-            if (state.Kind == TerminalSessionKind.Ubuntu)
+            if (state.Kind == TerminalSessionKind.LocalShell)
             {
                 state.StatusGlyph.Foreground = args.ExitCode == 0 ? StartingBrush : ErrorBrush;
                 if (_shutdownConfirmed || state.SuppressReconnect || !state.IsAttached) return;
@@ -2169,7 +2299,7 @@ public sealed partial class MainWindow : Window
         var search = new TextBox
         {
             Width = 380,
-            PlaceholderText = "Filter projects or WSL paths…",
+            PlaceholderText = "Filter projects or paths…",
         };
         AutomationProperties.SetName(search, "Filter projects for the new session");
         var options = new StackPanel { Spacing = 4 };
@@ -2200,14 +2330,14 @@ public sealed partial class MainWindow : Window
                 };
                 AutomationProperties.SetName(
                     button,
-                    selectedKind == TerminalSessionKind.Ubuntu
-                        ? $"Start new Ubuntu session in {label}"
+                    selectedKind == TerminalSessionKind.LocalShell
+                        ? $"Start new {_platform.LocalShellLabel} session in {label}"
                         : $"Start new Codex session in {label}");
                 button.Click += async (_, _) =>
                 {
                     _newSessionFlyout?.Hide();
-                    if (selectedKind == TerminalSessionKind.Ubuntu)
-                        await OpenUbuntuSessionAsync(repo.WorkingDir);
+                    if (selectedKind == TerminalSessionKind.LocalShell)
+                        await OpenLocalShellSessionAsync(repo.WorkingDir);
                     else
                         await OpenNewSessionAsync(repo.WorkingDir);
                 };
@@ -2223,15 +2353,15 @@ public sealed partial class MainWindow : Window
             Padding = new Thickness(12, 8),
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
-        var ubuntuChoice = new Button
+        var localShellChoice = new Button
         {
-            Content = "Ubuntu session",
+            Content = _platform.LocalShellLabel,
             Padding = new Thickness(12, 8),
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
-        Grid.SetColumn(ubuntuChoice, 1);
+        Grid.SetColumn(localShellChoice, 1);
         AutomationProperties.SetName(codexChoice, "Choose Codex session");
-        AutomationProperties.SetName(ubuntuChoice, "Choose Ubuntu shell session");
+        AutomationProperties.SetName(localShellChoice, $"Choose {_platform.LocalShellLabel} session");
         var choiceHelp = new TextBlock
         {
             Foreground = ResourceBrush("SecondaryBrush"),
@@ -2243,13 +2373,13 @@ public sealed partial class MainWindow : Window
             var codexSelected = selectedKind == TerminalSessionKind.Codex;
             codexChoice.Background = ResourceBrush(codexSelected ? "HoverBrush" : "ElevatedBrush");
             codexChoice.BorderBrush = ResourceBrush(codexSelected ? "AccentBrush" : "BorderBrush");
-            ubuntuChoice.Background = ResourceBrush(codexSelected ? "ElevatedBrush" : "HoverBrush");
-            ubuntuChoice.BorderBrush = ResourceBrush(codexSelected ? "BorderBrush" : "AccentBrush");
+            localShellChoice.Background = ResourceBrush(codexSelected ? "ElevatedBrush" : "HoverBrush");
+            localShellChoice.BorderBrush = ResourceBrush(codexSelected ? "BorderBrush" : "AccentBrush");
             AutomationProperties.SetItemStatus(codexChoice, codexSelected ? "Selected" : "Not selected");
-            AutomationProperties.SetItemStatus(ubuntuChoice, codexSelected ? "Not selected" : "Selected");
+            AutomationProperties.SetItemStatus(localShellChoice, codexSelected ? "Not selected" : "Selected");
             choiceHelp.Text = codexSelected
                 ? "Start or register a persistent Codex CLI session in the selected project."
-                : $"Start a direct {_settings.Distribution} login shell in the selected project. Closing its tab ends the shell.";
+                : $"Start a direct {_platform.LocalShellLabel} in the selected project. Closing its tab ends the shell.";
         }
         codexChoice.Click += (_, _) =>
         {
@@ -2257,9 +2387,9 @@ public sealed partial class MainWindow : Window
             RenderChoice();
             RenderOptions();
         };
-        ubuntuChoice.Click += (_, _) =>
+        localShellChoice.Click += (_, _) =>
         {
-            selectedKind = TerminalSessionKind.Ubuntu;
+            selectedKind = TerminalSessionKind.LocalShell;
             RenderChoice();
             RenderOptions();
         };
@@ -2270,7 +2400,7 @@ public sealed partial class MainWindow : Window
         {
             ColumnDefinitions = new ColumnDefinitions("*,*"),
             ColumnSpacing = 8,
-            Children = { codexChoice, ubuntuChoice },
+            Children = { codexChoice, localShellChoice },
         };
         var content = new StackPanel
         {
@@ -2351,6 +2481,9 @@ public sealed partial class MainWindow : Window
     private async void OnRepoFilterChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_initializingNavigation) return;
+        _searchResults = null;
+        if (!string.IsNullOrWhiteSpace(SearchTextBox.Text)) await RefreshSearchAsync();
+        else ApplySessionFilter();
         await SaveWorkspaceAsync();
     }
 
@@ -2380,6 +2513,23 @@ public sealed partial class MainWindow : Window
         var values = new[] { 1, 3, 7, 14, 30 };
         _settings = _settings with { ColdDays = values[ColdDaysComboBox.SelectedIndex] };
         ApplySessionFilter();
+        await SaveWorkspaceAsync();
+    }
+
+    private async void OnResetFiltersClicked(object? sender, RoutedEventArgs e)
+    {
+        _initializingNavigation = true;
+        RepoComboBox.SelectedIndex = 0;
+        ColdDaysComboBox.SelectedIndex = 1;
+        ShowHeadlessCheckBox.IsChecked = false;
+        ArchivedCheckBox.IsChecked = false;
+        NeedsInputCheckBox.IsChecked = false;
+        _initializingNavigation = false;
+        _settings = _settings with { ColdDays = 3 };
+        _archivedSessions = [];
+        _searchResults = null;
+        if (!string.IsNullOrWhiteSpace(SearchTextBox.Text)) await RefreshSearchAsync();
+        else ApplySessionFilter();
         await SaveWorkspaceAsync();
     }
 
@@ -2454,6 +2604,147 @@ public sealed partial class MainWindow : Window
             await EnsureDashboardServiceAsync();
         }
         await RefreshAllAsync();
+        if (_availableUpdate is null) _ = CheckForUpdateAsync(reportCurrent: false);
+    }
+
+    private async void OnUpdateClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_updateInProgress)
+        {
+            _updateInstallCancellation?.Cancel();
+            return;
+        }
+        if (_availableUpdate is null)
+        {
+            await CheckForUpdateAsync(reportCurrent: true);
+            return;
+        }
+        await InstallAvailableUpdateAsync(_availableUpdate);
+    }
+
+    private async Task CheckForUpdateAsync(bool reportCurrent)
+    {
+        if (_checkingForUpdate || _updateInProgress || !UpdateButton.IsVisible) return;
+        _checkingForUpdate = true;
+        UpdateButton.IsEnabled = false;
+        UpdateButton.Content = "Checking…";
+        try
+        {
+            var release = await _updateService.CheckAsync(_platform);
+            _availableUpdate = release;
+            if (release is null)
+            {
+                UpdateButton.Content = "Check updates";
+                ToolTip.SetTip(UpdateButton, $"Codex Native {_updateService.CurrentVersion} is current");
+                if (reportCurrent) SetStatus($"Codex Native {_updateService.CurrentVersion} is up to date", RunningBrush);
+            }
+            else
+            {
+                UpdateButton.Content = $"Update {release.Version}";
+                ToolTip.SetTip(UpdateButton, $"Install {release.DisplayName} after active sessions finish");
+                SetStatus($"Codex Native {release.Version} is available", StartingBrush);
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateButton.Content = "Check updates";
+            NativeLog.Write($"Update check failed: {ex}");
+            if (reportCurrent) SetStatus($"Update check failed: {ex.Message}", ErrorBrush);
+        }
+        finally
+        {
+            _checkingForUpdate = false;
+            UpdateButton.IsEnabled = true;
+        }
+    }
+
+    private async Task InstallAvailableUpdateAsync(NativeReleaseInfo release)
+    {
+        _updateInProgress = true;
+        _updateInstallCancellation = new CancellationTokenSource();
+        var cancellationToken = _updateInstallCancellation.Token;
+        PreparedNativeUpdate? prepared = null;
+        UpdateButton.IsEnabled = true;
+        UpdateButton.Content = "Cancel update";
+        try
+        {
+            SetStatus($"Downloading verified Codex Native {release.Version} package…", StartingBrush);
+            var progress = new Progress<double>(value =>
+            {
+                UpdateButton.Content = $"Cancel · {value:P0}";
+                SetStatus($"Downloading Codex Native {release.Version} · {value:P0}", StartingBrush);
+            });
+            prepared = await _updateService.PrepareAsync(
+                release,
+                _platform,
+                progress,
+                cancellationToken);
+            await WaitForUpdateDrainAsync(cancellationToken);
+            await SaveWorkspaceAsync();
+            _updateService.LaunchInstaller(prepared, _platform).Dispose();
+            SetStatus($"Installing Codex Native {release.Version}; restarting…", RunningBrush);
+            _shutdownConfirmed = true;
+            Close();
+        }
+        catch (OperationCanceledException)
+        {
+            DiscardPreparedUpdate(prepared);
+            UpdateButton.Content = $"Update {release.Version}";
+            SetStatus("Native update canceled", StartingBrush);
+        }
+        catch (Exception ex)
+        {
+            DiscardPreparedUpdate(prepared);
+            NativeLog.Write($"Native update failed: {ex}");
+            UpdateButton.Content = $"Retry {release.Version}";
+            SetStatus($"Native update failed: {ex.Message}", ErrorBrush);
+        }
+        finally
+        {
+            _updateInstallCancellation.Dispose();
+            _updateInstallCancellation = null;
+            _updateInProgress = false;
+        }
+    }
+
+    private async Task WaitForUpdateDrainAsync(CancellationToken cancellationToken)
+    {
+        var consecutiveClearChecks = 0;
+        while (consecutiveClearChecks < 2)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sessions = await _api.GetSessionsAsync(cancellationToken);
+            var blockingSessions = NativeUpdatePolicy.CountBlockingSessions(
+                sessions.Select(session => (session.Status, session.IsHeadless)));
+            var localShells = _openTabs.Values.Count(state =>
+                state.Kind == TerminalSessionKind.LocalShell && state.IsRunning);
+            if (blockingSessions == 0 && localShells == 0)
+            {
+                consecutiveClearChecks++;
+                if (consecutiveClearChecks < 2)
+                {
+                    SetStatus("Sessions are drained · confirming update handoff…", StartingBrush);
+                    await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+                }
+                continue;
+            }
+
+            consecutiveClearChecks = 0;
+            var details = new List<string>();
+            if (blockingSessions > 0) details.Add($"{blockingSessions} active Codex session(s)");
+            if (localShells > 0) details.Add($"{localShells} local shell tab(s) to close");
+            UpdateButton.Content = "Cancel update";
+            SetStatus($"Update ready · waiting for {string.Join(" and ", details)}", StartingBrush);
+            await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+        }
+    }
+
+    private static void DiscardPreparedUpdate(PreparedNativeUpdate? prepared)
+    {
+        if (prepared is null) return;
+        try { Directory.Delete(prepared.StagingDirectory, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private async void OnThemeChanged(object? sender, SelectionChangedEventArgs e)
@@ -2734,6 +3025,31 @@ public sealed partial class MainWindow : Window
         _ => value.ToString("N0"),
     };
 
+    private static string CreditValue(UsageTotals usage)
+    {
+        if (usage.TotalTokens <= 0) return "0";
+        if (usage.PricedTokens <= 0) return "—";
+        return $"~{usage.EstimatedCredits:0.###}";
+    }
+
+    private static string CreditEstimate(UsageTotals usage)
+    {
+        if (usage.TotalTokens <= 0) return "0 credits";
+        if (usage.PricedTokens <= 0) return "credit rate unavailable";
+        var estimate = $"~{usage.EstimatedCredits:0.###} credits";
+        return usage.PricingCoverage >= 0.9995
+            ? estimate
+            : $"{estimate} partial";
+    }
+
+    private static string PricingCoverageLabel(UsageTotals usage)
+    {
+        if (usage.TotalTokens <= 0) return "no token usage";
+        return usage.PricedTokens <= 0
+            ? "0% priced · model rate unpublished"
+            : $"{usage.PricingCoverage:P0} pricing coverage";
+    }
+
     private static string FormatDuration(long seconds)
     {
         var duration = TimeSpan.FromSeconds(Math.Max(0, seconds));
@@ -2791,8 +3107,10 @@ public sealed partial class MainWindow : Window
         _refreshTimer.Stop();
         _connectionPulseTimer.Stop();
         _sessionHoverAnimationTimer.Stop();
+        _updateCheckTimer.Stop();
         if (_statusFeed is not null) _ = _statusFeed.DisposeAsync();
         _searchCancellation?.Cancel();
+        _updateInstallCancellation?.Cancel();
         foreach (var state in _openTabs.Values.ToList())
         {
             CancelTerminalReconnect(state, suppress: true);
@@ -2800,6 +3118,7 @@ public sealed partial class MainWindow : Window
             state.Terminal.Kill();
         }
         _serviceManager.Dispose();
+        _updateService.Dispose();
         _api.Dispose();
     }
 
@@ -2974,7 +3293,7 @@ public sealed partial class MainWindow : Window
     private enum TerminalSessionKind
     {
         Codex,
-        Ubuntu,
+        LocalShell,
     }
 
     private sealed class SessionTabState(

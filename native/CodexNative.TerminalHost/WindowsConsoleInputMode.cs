@@ -2,7 +2,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using CodexNative.Core;
 
-namespace CodexNative.WslHost;
+namespace CodexNative.TerminalHost;
 
 /// <summary>
 /// Temporarily puts the ConPTY child console into raw VT-input mode.

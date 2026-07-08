@@ -3,11 +3,9 @@
  */
 
 const { execFileSync } = require('child_process');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
 const codex = require('../../codex-store');
 const { resolveCodexHome, resolveStateDbPath, resolveSessionsDir } = require('../../codex-paths');
+const { resolveCodexExecutable } = require('./executable');
 
 const metadata = {
   id: 'codex',
@@ -20,9 +18,7 @@ const metadata = {
 };
 
 function codexExecutable() {
-  if (process.env.CODEX_BIN) return process.env.CODEX_BIN;
-  const userInstall = path.join(os.homedir(), '.local', 'bin', 'codex');
-  return fs.existsSync(userInstall) ? userInstall : 'codex';
+  return resolveCodexExecutable();
 }
 
 function buildCommand(sessionId) {

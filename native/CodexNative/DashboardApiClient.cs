@@ -1,12 +1,14 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using CodexNative.Core;
 
 namespace CodexNative;
 
 public sealed class DashboardApiClient : IDisposable
 {
+    public const int RequiredApiVersion = DashboardApiCompatibility.RequiredVersion;
+    private static readonly string[] RequiredUsageWindows = ["1d", "2d", "7d", "14d", "30d", "all"];
     private static readonly Uri SharedService = new("http://127.0.0.1:7575/api/");
-    private static readonly Uri PrivateService = new("http://127.0.0.1:7577/api/");
     private readonly HttpClient _http = new()
     {
         Timeout = TimeSpan.FromSeconds(30),
@@ -31,15 +33,22 @@ public sealed class DashboardApiClient : IDisposable
             _service = SharedService;
             return true;
         }
-        if (await ProbeAsync(PrivateService, TimeSpan.FromSeconds(4), cancellationToken))
+        foreach (var port in DashboardServicePorts.PrivateCandidates)
         {
-            _service = PrivateService;
+            var candidate = PrivateService(port);
+            if (!await ProbeAsync(candidate, TimeSpan.FromMilliseconds(400), cancellationToken)) continue;
+            _service = candidate;
             return true;
         }
         return false;
     }
 
-    public void UsePrivateService() => _service = PrivateService;
+    public void UsePrivateService(int port)
+    {
+        if (!DashboardServicePorts.IsPrivateCandidate(port))
+            throw new ArgumentOutOfRangeException(nameof(port));
+        _service = PrivateService(port);
+    }
 
     public Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default) =>
         ProbeAsync(_service, TimeSpan.FromSeconds(2), cancellationToken);
@@ -54,7 +63,10 @@ public sealed class DashboardApiClient : IDisposable
         try
         {
             using var response = await _http.GetAsync(new Uri(service, "status"), timeout.Token);
-            return response.IsSuccessStatusCode;
+            if (!response.IsSuccessStatusCode) return false;
+            var status = await response.Content.ReadFromJsonAsync<DashboardStatus>(JsonOptions, timeout.Token);
+            if (status is not { Ok: true }) return false;
+            return DashboardApiCompatibility.IsCompatible(status.ApiVersion);
         }
         catch (HttpRequestException)
         {
@@ -75,8 +87,28 @@ public sealed class DashboardApiClient : IDisposable
     public Task<List<DashboardRepo>> GetReposAsync(CancellationToken cancellationToken = default) =>
         GetCodexAsync<List<DashboardRepo>>("repos", cancellationToken);
 
-    public Task<DashboardStats> GetStatsAsync(string statsMode = "combined", CancellationToken cancellationToken = default) =>
-        GetCodexAsync<DashboardStats>($"stats?statsMode={Uri.EscapeDataString(statsMode)}", cancellationToken);
+    public async Task<DashboardStats> GetStatsAsync(
+        string statsMode = "combined",
+        CancellationToken cancellationToken = default)
+    {
+        var stats = await GetCodexAsync<DashboardStats>(
+            $"stats?statsMode={Uri.EscapeDataString(statsMode)}",
+            cancellationToken);
+        var missingWindows = RequiredUsageWindows
+            .Where(window => !stats.UsageRollups.ContainsKey(window)
+                || !stats.TokensByHour.ContainsKey(window)
+                || stats.TokenHeatmap.Count != 7
+                || stats.TokenHeatmap.Any(row => row.Count != 24
+                    || row.Any(cell => !cell.Windows.ContainsKey(window))))
+            .ToList();
+        if (missingWindows.Count > 0)
+        {
+            throw new InvalidDataException(
+                $"Dashboard API v{RequiredApiVersion} returned an incomplete analytics payload. " +
+                $"Missing windows: {string.Join(", ", missingWindows)}.");
+        }
+        return stats;
+    }
 
     public async Task<DashboardStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -157,6 +189,8 @@ public sealed class DashboardApiClient : IDisposable
     }
 
     private Uri CodexUri(string path) => new(_service, $"codex/{path}");
+
+    private static Uri PrivateService(int port) => new($"http://127.0.0.1:{port}/api/");
 
     private async Task<T> GetCodexAsync<T>(string path, CancellationToken cancellationToken)
     {

@@ -4,8 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>CodexNative.WslHost</AssemblyName>
-    <RootNamespace>CodexNative.WslHost</RootNamespace>
+    <AssemblyName>CodexNative.Updater</AssemblyName>
+    <RootNamespace>CodexNative.Updater</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
