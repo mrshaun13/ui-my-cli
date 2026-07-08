@@ -7,6 +7,7 @@ namespace CodexNative;
 public sealed class DashboardApiClient : IDisposable
 {
     public const int RequiredApiVersion = DashboardApiCompatibility.RequiredVersion;
+    private static readonly string[] RequiredUsageWindows = ["1d", "2d", "7d", "14d", "30d", "all"];
     private static readonly Uri SharedService = new("http://127.0.0.1:7575/api/");
     private static readonly Uri PrivateService = new("http://127.0.0.1:7577/api/");
     private readonly HttpClient _http = new()
@@ -59,9 +60,6 @@ public sealed class DashboardApiClient : IDisposable
             if (!response.IsSuccessStatusCode) return false;
             var status = await response.Content.ReadFromJsonAsync<DashboardStatus>(JsonOptions, timeout.Token);
             if (status is not { Ok: true }) return false;
-            // Services published before API versioning have this exact v1 shape
-            // but deserialize the missing field as zero. Accept that legacy
-            // representation without weakening future exact-version checks.
             return DashboardApiCompatibility.IsCompatible(status.ApiVersion);
         }
         catch (HttpRequestException)
@@ -83,8 +81,28 @@ public sealed class DashboardApiClient : IDisposable
     public Task<List<DashboardRepo>> GetReposAsync(CancellationToken cancellationToken = default) =>
         GetCodexAsync<List<DashboardRepo>>("repos", cancellationToken);
 
-    public Task<DashboardStats> GetStatsAsync(string statsMode = "combined", CancellationToken cancellationToken = default) =>
-        GetCodexAsync<DashboardStats>($"stats?statsMode={Uri.EscapeDataString(statsMode)}", cancellationToken);
+    public async Task<DashboardStats> GetStatsAsync(
+        string statsMode = "combined",
+        CancellationToken cancellationToken = default)
+    {
+        var stats = await GetCodexAsync<DashboardStats>(
+            $"stats?statsMode={Uri.EscapeDataString(statsMode)}",
+            cancellationToken);
+        var missingWindows = RequiredUsageWindows
+            .Where(window => !stats.UsageRollups.ContainsKey(window)
+                || !stats.TokensByHour.ContainsKey(window)
+                || stats.TokenHeatmap.Count != 7
+                || stats.TokenHeatmap.Any(row => row.Count != 24
+                    || row.Any(cell => !cell.Windows.ContainsKey(window))))
+            .ToList();
+        if (missingWindows.Count > 0)
+        {
+            throw new InvalidDataException(
+                $"Dashboard API v{RequiredApiVersion} returned an incomplete analytics payload. " +
+                $"Missing windows: {string.Join(", ", missingWindows)}.");
+        }
+        return stats;
+    }
 
     public async Task<DashboardStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {

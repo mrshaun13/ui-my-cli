@@ -28,7 +28,10 @@ const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, 
 const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./providers');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
-const API_VERSION = 1;
+// v2 adds the complete native analytics contract: usageRollups, pricing,
+// six token windows, and matching heatmap windows. Native clients must not
+// silently reuse a pre-v2 process and render missing telemetry as zero.
+const API_VERSION = 2;
 const IS_DEV = process.env.NODE_ENV !== 'production';
 const CLIENT_DIST = path.resolve(__dirname, '..', 'client', 'dist');
 

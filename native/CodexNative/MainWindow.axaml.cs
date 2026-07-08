@@ -687,7 +687,7 @@ public sealed partial class MainWindow : Window
         var rollup = SelectedUsageRollup(stats);
         var totals = rollup?.Totals ?? new UsageTotals();
         StatsSummaryText.Text =
-            $"{rollup?.Label ?? "Selected window"}: {FormatNumber(totals.TotalTokens)} tokens   ·   " +
+            $"{rollup?.Label ?? "Usage unavailable"}: {FormatNumber(totals.TotalTokens)} tokens   ·   " +
             $"{CreditEstimate(totals)}   ·   {stats.Activity.H24:N0} active in 24h   ·   " +
             $"{stats.TotalSubagents:N0} subagents   ·   {CohortLabel(stats.StatsFilters.StatsMode)} cohort";
         StatsCohortPanel.IsVisible = stats.StatsFilters.TranscriptHeadlessCount > 0;
@@ -698,7 +698,8 @@ public sealed partial class MainWindow : Window
             ProjectsPanel,
             (rollup?.Projects ?? []).Take(8)
                 .Select(project => (project.Name, project.TotalTokens,
-                    $"{FormatNumber(project.TotalTokens)} tokens · {CreditEstimate(project)}")));
+                    $"{FormatNumber(project.TotalTokens)} tokens · {CreditEstimate(project)}")),
+            "No token_count telemetry for projects in this window.");
         ProjectComboGraph.MessagesBrush = Brush.Parse("#38BDF8");
         ProjectComboGraph.DurationBrush = StartingBrush;
         ProjectComboGraph.SessionsBrush = ResourceBrush("AccentBrush");
@@ -733,17 +734,18 @@ public sealed partial class MainWindow : Window
         RenderRateLimits(_rateLimits);
 
         var window = _settings.AnalyticsWindow;
-        if (!stats.TokensByHour.TryGetValue(window, out var tokenWindow))
-            stats.TokensByHour.TryGetValue("7d", out tokenWindow);
+        stats.TokensByHour.TryGetValue(window, out var tokenWindow);
         TokenActivityGraph.InputBrush = Brush.Parse("#38BDF8");
         TokenActivityGraph.OutputBrush = ResourceBrush("AccentBrush");
         TokenActivityGraph.GridBrush = ResourceBrush("BorderBrush");
         TokenActivityGraph.SetData(tokenWindow?.Input, tokenWindow?.Output);
+        TokenActivityDescriptionText.Text =
+            $"{rollup?.Label ?? window} · input and output aggregated by local clock hour · weekday/hour intensity below";
         if (ResourceBrush("AccentBrush") is SolidColorBrush accent) TokenHeatmapGraph.AccentColor = accent.Color;
         TokenHeatmapGraph.EmptyBrush = ResourceBrush("ElevatedBrush");
         TokenHeatmapGraph.SetData(stats.TokenHeatmap
             .Select(row => (IReadOnlyList<long>)row.Select(cell =>
-                cell.Windows.TryGetValue(window == "all" ? "30d" : window, out var value) ? value : 0).ToList())
+                cell.Windows.TryGetValue(window, out var value) ? value : 0).ToList())
             .ToList());
 
         PopulateLeaderboard(DurationLeadersPanel, stats.TopSessionsByDuration, entry => entry.DurationSec, entry => entry.DurationStr);
@@ -754,15 +756,23 @@ public sealed partial class MainWindow : Window
     private UsageRollup? SelectedUsageRollup(DashboardStats stats)
     {
         if (stats.UsageRollups.TryGetValue(_settings.AnalyticsWindow, out var selected)) return selected;
-        if (stats.UsageRollups.TryGetValue("7d", out var sevenDays)) return sevenDays;
-        return stats.UsageRollups.Values.FirstOrDefault();
+        return null;
     }
 
     private void RenderUsageSummary(UsageRollup? rollup, PricingMetadata pricing)
     {
-        var totals = rollup?.Totals ?? new UsageTotals();
+        if (rollup is null)
+        {
+            UsageWindowDescriptionText.Text =
+                $"Usage data unavailable for {_settings.AnalyticsWindow}; dashboard API v{DashboardApiClient.RequiredApiVersion} is required";
+            UsageSummaryPanel.Children.Clear();
+            AddEmptyState(UsageSummaryPanel, "The connected service returned an incomplete analytics payload.");
+            UsagePricingNoteText.Text = "Restart ui-my-cli with the current code before evaluating token or credit data.";
+            return;
+        }
+        var totals = rollup.Totals;
         UsageWindowDescriptionText.Text =
-            $"{rollup?.Label ?? "Selected window"} · exact local telemetry where Codex reports token_count events";
+            $"{rollup.Label} · exact local telemetry where Codex reports token_count events";
         UsageSummaryPanel.Children.Clear();
         AddUsageSummaryMetric("FRESH INPUT", FormatNumber(totals.InputTokens), "full input rate");
         AddUsageSummaryMetric("CACHED INPUT", FormatNumber(totals.CachedInputTokens), "discounted input rate");
@@ -828,10 +838,18 @@ public sealed partial class MainWindow : Window
         _ => "combined",
     };
 
-    private void PopulateMetricRows(Panel panel, IEnumerable<(string Label, long Value, string Detail)> rows)
+    private void PopulateMetricRows(
+        Panel panel,
+        IEnumerable<(string Label, long Value, string Detail)> rows,
+        string? emptyMessage = null)
     {
         panel.Children.Clear();
         var materialized = rows.ToList();
+        if (materialized.Count == 0 && !string.IsNullOrWhiteSpace(emptyMessage))
+        {
+            AddEmptyState(panel, emptyMessage);
+            return;
+        }
         var maximum = Math.Max(1, materialized.Select(row => row.Value).DefaultIfEmpty().Max());
         foreach (var row in materialized)
         {
@@ -860,7 +878,13 @@ public sealed partial class MainWindow : Window
     private void PopulateModelRows(IEnumerable<UsageBreakdown> models)
     {
         ModelsPanel.Children.Clear();
-        foreach (var model in models)
+        var rows = models.ToList();
+        if (rows.Count == 0)
+        {
+            AddEmptyState(ModelsPanel, $"No model token_count telemetry in {SelectedWindowLabel()}.");
+            return;
+        }
+        foreach (var model in rows)
         {
             var bar = new StackedTokenBar { Height = 7 };
             bar.SegmentBrushes = TokenCategoryBrushes();
@@ -923,6 +947,11 @@ public sealed partial class MainWindow : Window
     {
         TokenLeadersPanel.Children.Clear();
         var rows = entries.Take(10).ToList();
+        if (rows.Count == 0)
+        {
+            AddEmptyState(TokenLeadersPanel, $"No session token_count telemetry in {SelectedWindowLabel()}.");
+            return;
+        }
         foreach (var entry in rows)
         {
             var values = TokenCategoryValues(
@@ -974,6 +1003,25 @@ public sealed partial class MainWindow : Window
             TokenLeadersPanel.Children.Add(button);
         }
     }
+
+    private string SelectedWindowLabel() => _settings.AnalyticsWindow switch
+    {
+        "1d" => "the last 24 hours",
+        "2d" => "the last 48 hours",
+        "7d" => "the last 7 days",
+        "14d" => "the last 14 days",
+        "30d" => "the last 30 days",
+        "all" => "all recorded time",
+        _ => "the selected window",
+    };
+
+    private void AddEmptyState(Panel panel, string text) => panel.Children.Add(new TextBlock
+    {
+        Text = text,
+        Foreground = ResourceBrush("SecondaryBrush"),
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(2, 8),
+    });
 
     private void OnProjectSeriesToggled(object? sender, RoutedEventArgs e)
     {

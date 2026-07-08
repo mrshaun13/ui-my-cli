@@ -166,6 +166,7 @@ function collect() {
   const dbPathSrc   = read('server/db-path.js');
   const codexPathSrc = read('server/codex-paths.js');
   const codexStoreSrc = read('server/codex-store.js');
+  const codexTokenActivitySrc = read('server/codex-token-activity.js');
   const dashboardStoreSrc = read('server/dashboard-store.js');
   const transcriptHeadlessStoreSrc = read('server/transcript-headless-store.js');
   const providerIndexSrc = read('server/providers/index.js');
@@ -185,6 +186,7 @@ function collect() {
     { name: 'server/db-path.js',    src: dbPathSrc   },
     { name: 'server/codex-paths.js', src: codexPathSrc },
     { name: 'server/codex-store.js', src: codexStoreSrc },
+    { name: 'server/codex-token-activity.js', src: codexTokenActivitySrc },
     { name: 'server/dashboard-store.js', src: dashboardStoreSrc },
     { name: 'server/transcript-headless-store.js', src: transcriptHeadlessStoreSrc },
     { name: 'server/providers/index.js', src: providerIndexSrc },
@@ -244,7 +246,9 @@ function collect() {
   fileDescs['native/CodexNative.Core/DashboardRepositoryLocator.cs'] =
     'Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths.';
   fileDescs['native/CodexNative.Core/DashboardApiCompatibility.cs'] =
-    'Explicit native-client/server API compatibility policy, including the legacy unversioned v1 service shape.';
+    'Exact native-client/server API compatibility policy that rejects stale services with incomplete analytics contracts.';
+  fileDescs['native/CodexNative.Core/TokenChartMath.cs'] =
+    'Shared-scale chart math that keeps native input/output token comparisons proportional.';
   fileDescs['native/CodexNative.Core/GitHubReleaseClient.cs'] =
     'Selects a newer stable GitHub Release and its exact platform archive/checksum through trusted HTTPS URLs.';
   fileDescs['native/CodexNative.Core/NativeUpdatePackage.cs'] =

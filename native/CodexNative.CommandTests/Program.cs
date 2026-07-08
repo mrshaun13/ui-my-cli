@@ -118,11 +118,18 @@ Check("dashboard repository locator finds a checkout above the app artifact", ()
     Equal("/Users/tester/ui-my-cli", found);
 });
 
-Check("dashboard API v1 accepts legacy unversioned services only", () =>
+Check("dashboard API v2 rejects legacy analytics contracts", () =>
 {
-    Equal(true, DashboardApiCompatibility.IsCompatible(0));
-    Equal(true, DashboardApiCompatibility.IsCompatible(1));
-    Equal(false, DashboardApiCompatibility.IsCompatible(2));
+    Equal(false, DashboardApiCompatibility.IsCompatible(0));
+    Equal(false, DashboardApiCompatibility.IsCompatible(1));
+    Equal(true, DashboardApiCompatibility.IsCompatible(2));
+    Equal(false, DashboardApiCompatibility.IsCompatible(3));
+});
+
+Check("token activity input and output share one truthful chart scale", () =>
+{
+    Equal(1_000d, TokenChartMath.CommonMaximum([1_000d, 500d], [10d, 5d]));
+    Equal(1d, TokenChartMath.CommonMaximum([], []));
 });
 
 Check("native versions compare stable release tags", () =>

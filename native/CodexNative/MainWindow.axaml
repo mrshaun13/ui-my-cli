@@ -546,7 +546,8 @@
                   <Grid ColumnDefinitions="*">
                     <StackPanel>
                       <TextBlock Text="TOKEN ACTIVITY" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
-                      <TextBlock Text="Input and output by hour · weekday/hour intensity below · hover for exact values"
+                      <TextBlock x:Name="TokenActivityDescriptionText"
+                                 Text="Input and output by local clock hour · weekday/hour intensity below · hover for exact values"
                                  Foreground="{DynamicResource SecondaryBrush}" FontSize="11" />
                     </StackPanel>
                   </Grid>

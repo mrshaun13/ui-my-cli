@@ -28,3 +28,16 @@ functional or ready for end-user distribution.
 - The next macOS follow-up must branch from the merged baseline, fix the
   evidence-backed runtime failures, bump the native version, update this
   changelog, and provide real-Mac validation before claiming macOS support.
+- Fixed a native analytics regression where the desktop client reused a stale
+  unversioned service on port 7575, interpreted missing rollup fields as zero,
+  and left credit/model/session summaries empty. Dashboard API v2 now requires
+  the complete analytics contract and starts the current private service when
+  an older shared service is present.
+- Fixed the 48-hour heatmap bucket, which previously wrote two-day activity into
+  the one-day bucket and left the selected two-day heatmap empty. All six window
+  selectors now have exact hourly, heatmap, rollup, model, project, and session
+  data contracts.
+- Token activity input and output now use one common vertical scale instead of
+  separate maxima that visually exaggerated the smaller series. Legitimately
+  empty windows show an explicit no-telemetry message instead of an unexplained
+  blank panel.

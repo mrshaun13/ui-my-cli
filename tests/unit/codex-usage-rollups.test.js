@@ -28,7 +28,7 @@ test('unknown model aliases remain unpriced instead of inheriting a guessed rate
   });
 });
 
-test('rollups separate 24-hour and seven-day model, project, and session totals', () => {
+test('rollups expose every selectable window with model, project, and session totals', () => {
   const now = 2_000_000;
   const usage = (total, input, cached, output) => ({
     totalTokens: total,
@@ -61,7 +61,12 @@ test('rollups separate 24-hour and seven-day model, project, and session totals'
 
   assert.equal(result['1d'].totals.totalTokens, 100);
   assert.equal(result['1d'].projects.length, 1);
+  assert.equal(result['2d'].totals.totalTokens, 100);
   assert.equal(result['7d'].totals.totalTokens, 300);
+  assert.equal(result['14d'].totals.totalTokens, 300);
+  assert.equal(result['30d'].totals.totalTokens, 300);
+  assert.equal(result.all.totals.totalTokens, 300);
+  assert.deepEqual(Object.keys(result), ['1d', '2d', '7d', '14d', '30d', 'all']);
   assert.deepEqual(result['7d'].models.map(row => row.model), ['gpt-5.4', 'gpt-5.5']);
   assert.deepEqual(result['7d'].projects.map(row => row.name), ['beta', 'alpha']);
   assert.deepEqual(result['7d'].sessions.map(row => row.id), ['two', 'one']);

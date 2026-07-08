@@ -15,6 +15,11 @@ const dashboardStore = require('./dashboard-store');
 const transcriptHeadless = require('./transcript-headless-store');
 const { buildUsageRollups, pricingMetadata } = require('./codex-usage-rollups');
 const { estimateCredits } = require('./codex-pricing');
+const {
+  emptyTokenWindows,
+  emptyTokenHeatmap,
+  addTokenActivity,
+} = require('./codex-token-activity');
 
 const USER_SOURCES = new Set(['cli', 'vscode']);
 const DEFAULT_CONTEXT = 200000;
@@ -1301,49 +1306,6 @@ function stats(options = {}) {
   };
   statsResultCache.set(statsMode, { fingerprint, value: result });
   return result;
-}
-
-function emptyTokenWindows() {
-  const make = () => ({ input: new Array(24).fill(0), output: new Array(24).fill(0) });
-  return { '1d': make(), '2d': make(), '7d': make(), '14d': make(), '30d': make(), all: make() };
-}
-
-function emptyTokenHeatmap() {
-  return Array.from({ length: 7 }, () =>
-    Array.from({ length: 24 }, () => ({
-      windows: { '1d': 0, '7d': 0, '14d': 0, '30d': 0 },
-    }))
-  );
-}
-
-function addTokenActivity(tokensByHour, heatmap, epochSec, usage) {
-  if (!epochSec || !usage) return;
-  const inputTokens = typeof usage === 'number' ? 0 : (usage.inputTokens || 0) + (usage.cacheReadTokens || 0);
-  const outputTokens = typeof usage === 'number' ? usage : usage.outputTokens || usage.totalTokens || 0;
-  const totalTokens = typeof usage === 'number' ? usage : usage.totalTokens || inputTokens + outputTokens;
-  if (!inputTokens && !outputTokens && !totalTokens) return;
-  const now = Math.floor(Date.now() / 1000);
-  const age = now - epochSec;
-  const date = new Date(epochSec * 1000);
-  const hour = date.getHours();
-  const day = (date.getDay() + 6) % 7; // Monday = 0
-  const windows = [
-    ['1d', 86400],
-    ['2d', 172800],
-    ['7d', 604800],
-    ['14d', 1209600],
-    ['30d', 2592000],
-  ];
-  for (const [key, seconds] of windows) {
-    if (age <= seconds) {
-      tokensByHour[key].input[hour] += inputTokens;
-      tokensByHour[key].output[hour] += outputTokens;
-      heatmap[day][hour].windows[key === '2d' ? '1d' : key] =
-        (heatmap[day][hour].windows[key === '2d' ? '1d' : key] || 0) + totalTokens;
-    }
-  }
-  tokensByHour.all.input[hour] += inputTokens;
-  tokensByHour.all.output[hour] += outputTokens;
 }
 
 function sourceBreakdown(threads) {

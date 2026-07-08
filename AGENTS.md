@@ -185,6 +185,7 @@ E2E tests use **Playwright** (Chromium only) and run against the **live PM2-mana
 - **After server code changes**, run `npm run pm2:restart` (not just `npm run build`). PM2 keeps the old process in memory.
 - **Port override:** Set `PORT=XXXX` before running tests if the server is on a non-default port. The Playwright config and helpers both read `process.env.PORT`.
 - **Chromium only.** Firefox and WebKit are not installed. The Playwright config has a single `chromium` project. Run `npx playwright install` to add other browsers.
+- **Serial live-service tests.** Playwright intentionally uses one worker locally and in CI because the suite shares one PM2 service and persistent PTY state; parallel workers can race terminal and navigation assertions.
 
 ### Writing New Tests
 

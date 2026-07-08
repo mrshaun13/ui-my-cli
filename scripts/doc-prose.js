@@ -277,6 +277,8 @@ module.exports = {
         'The Playwright config and helpers both read `process.env.PORT`.',
       '**Chromium only.** Firefox and WebKit are not installed. The Playwright config has a ' +
         'single `chromium` project. Run `npx playwright install` to add other browsers.',
+      '**Serial live-service tests.** Playwright intentionally uses one worker locally and in CI because ' +
+        'the suite shares one PM2 service and persistent PTY state; parallel workers can race terminal and navigation assertions.',
     ],
 
     writing_tests: [
