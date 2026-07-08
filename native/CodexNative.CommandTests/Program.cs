@@ -106,6 +106,13 @@ Check("dashboard repository locator finds a checkout above the app artifact", ()
     Equal("/Users/tester/ui-my-cli", found);
 });
 
+Check("dashboard API v1 accepts legacy unversioned services only", () =>
+{
+    Equal(true, DashboardApiCompatibility.IsCompatible(0));
+    Equal(true, DashboardApiCompatibility.IsCompatible(1));
+    Equal(false, DashboardApiCompatibility.IsCompatible(2));
+});
+
 Check("native versions compare stable release tags", () =>
 {
     Equal(new NativeVersion(1, 2, 3), NativeVersion.Parse("v1.2.3"));
@@ -563,6 +570,13 @@ static async Task VerifyReleaseArtifactsAsync(string artifactDirectory)
             {
                 if (!File.Exists(requiredFile))
                     throw new InvalidDataException($"{fileName} is missing {requiredFile}.");
+            }
+            if (runtime.StartsWith("osx-", StringComparison.Ordinal))
+            {
+                var plist = await File.ReadAllTextAsync(required[0]);
+                var expectedArchitecture = runtime == "osx-x64" ? "x86_64" : "arm64";
+                if (!plist.Contains($"<string>{expectedArchitecture}</string>", StringComparison.Ordinal))
+                    throw new InvalidDataException($"{fileName} plist does not declare {expectedArchitecture}.");
             }
         }
         finally

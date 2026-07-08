@@ -193,6 +193,7 @@ native/
   native/CodexNative.Core/NativePlatform.cs        Explicit Windows, macOS, and Linux native runtime profile and artifact naming.
   native/CodexNative.Core/ExecutableResolver.cs    Validated Node.js and login-shell discovery without user-controlled shell interpolation.
   native/CodexNative.Core/DashboardRepositoryLocator.cs Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths.
+  native/CodexNative.Core/DashboardApiCompatibility.cs Explicit native-client/server API compatibility policy, including the legacy unversioned v1 service shape.
   native/CodexNative.Core/GitHubReleaseClient.cs   Selects a newer stable GitHub Release and its exact platform archive/checksum through trusted HTTPS URLs.
   native/CodexNative.Core/NativeUpdatePackage.cs   Downloads bounded release assets, verifies SHA-256, and rejects traversal, links, or incomplete native payloads.
   native/CodexNative.Core/NativeInstallRequest.cs  Validated structured update handoff arguments and installed-app layout resolution.

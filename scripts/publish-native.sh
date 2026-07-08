@@ -48,6 +48,9 @@ if [[ "$rid" == osx-* ]]; then
 
   version="$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' "$root/Directory.Build.props" | head -1)"
   arch="${rid#osx-}"
+  if [[ "$arch" == "x64" ]]; then
+    arch="x86_64"
+  fi
   sed -e "s/@VERSION@/$version/g" -e "s/@ARCH@/$arch/g" \
     "$root/native/CodexNative/Assets/Info.plist.in" > "$contents/Info.plist"
 

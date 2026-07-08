@@ -1,11 +1,12 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using CodexNative.Core;
 
 namespace CodexNative;
 
 public sealed class DashboardApiClient : IDisposable
 {
-    public const int RequiredApiVersion = 1;
+    public const int RequiredApiVersion = DashboardApiCompatibility.RequiredVersion;
     private static readonly Uri SharedService = new("http://127.0.0.1:7575/api/");
     private static readonly Uri PrivateService = new("http://127.0.0.1:7577/api/");
     private readonly HttpClient _http = new()
@@ -57,7 +58,11 @@ public sealed class DashboardApiClient : IDisposable
             using var response = await _http.GetAsync(new Uri(service, "status"), timeout.Token);
             if (!response.IsSuccessStatusCode) return false;
             var status = await response.Content.ReadFromJsonAsync<DashboardStatus>(JsonOptions, timeout.Token);
-            return status is { Ok: true, ApiVersion: >= RequiredApiVersion };
+            if (status is not { Ok: true }) return false;
+            // Services published before API versioning have this exact v1 shape
+            // but deserialize the missing field as zero. Accept that legacy
+            // representation without weakening future exact-version checks.
+            return DashboardApiCompatibility.IsCompatible(status.ApiVersion);
         }
         catch (HttpRequestException)
         {

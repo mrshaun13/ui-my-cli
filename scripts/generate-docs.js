@@ -241,6 +241,8 @@ function collect() {
     'Validated Node.js and login-shell discovery without user-controlled shell interpolation.';
   fileDescs['native/CodexNative.Core/DashboardRepositoryLocator.cs'] =
     'Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths.';
+  fileDescs['native/CodexNative.Core/DashboardApiCompatibility.cs'] =
+    'Explicit native-client/server API compatibility policy, including the legacy unversioned v1 service shape.';
   fileDescs['native/CodexNative.Core/GitHubReleaseClient.cs'] =
     'Selects a newer stable GitHub Release and its exact platform archive/checksum through trusted HTTPS URLs.';
   fileDescs['native/CodexNative.Core/NativeUpdatePackage.cs'] =
