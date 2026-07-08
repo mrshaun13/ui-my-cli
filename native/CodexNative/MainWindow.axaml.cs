@@ -269,8 +269,14 @@ public sealed partial class MainWindow : Window
                     SetStatus("Started ui-my-cli data service · persistent terminals enabled", RunningBrush);
                     return;
                 }
+                if (_serviceManager.TryGetExitCode(out var exitCode))
+                {
+                    throw new InvalidOperationException(
+                        $"The dashboard data service exited with code {exitCode}. See {NativeLog.FilePath}");
+                }
             }
-            throw new TimeoutException("The native dashboard data service did not answer on port 7577.");
+            throw new TimeoutException(
+                $"The native dashboard data service did not answer on port 7577. See {NativeLog.FilePath}");
         }
         catch (Exception ex)
         {
@@ -1050,11 +1056,16 @@ public sealed partial class MainWindow : Window
     {
         var codex = status.Providers.FirstOrDefault(provider => provider.Id == "codex");
         ProviderHealthBar.Value = codex?.Available == true ? 100 : 0;
-        ProviderStatusText.Text = codex is null
+        var summary = codex is null
             ? $"Codex provider not reported · {status.ActivePtys:N0} persistent terminals"
             : $"{(codex.Available ? "Available" : "Unavailable")} · {codex.Version ?? "version unknown"} · " +
               $"{status.ActivePtys:N0} persistent terminal{(status.ActivePtys == 1 ? string.Empty : "s")} · " +
               $"service up {FormatDuration(status.Uptime)}";
+        var error = codex?.Available == false && !string.IsNullOrWhiteSpace(codex.Error)
+            ? codex.Error.Trim()
+            : null;
+        ProviderStatusText.Text = error is null ? summary : $"{summary}\n{error}";
+        ToolTip.SetTip(ProviderStatusText, error);
     }
 
     private void RenderRateLimits(RateLimitInfo? rateLimits)

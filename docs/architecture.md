@@ -33,6 +33,7 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | `server/transcript-headless-store.js` | Read-only adapter for transcript-pipeline headless session ledgers. |
 | `server/providers/index.js` | Provider registry for local headless-agent adapters. |
 | `server/providers/codex/index.js` | Codex provider adapter wiring local Codex state into the dashboard contract. |
+| `server/providers/codex/executable.js` | Resolves Codex for desktop processes that do not inherit a login-shell PATH. |
 | `server/providers/devin/index.js` | Devin provider adapter wiring legacy Devin CLI state into the dashboard contract. |
 | `server/providers/devin/paths.js` | Resolves Devin-related database paths across platforms. |
 

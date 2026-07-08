@@ -4,6 +4,11 @@ Codex Native is a browser-free Avalonia frontend for the local Codex CLI. It
 keeps the dashboard service as the authoritative owner of persistent PTYs, so
 the browser and desktop clients can reconnect to the same live sessions.
 
+The native frontend is currently a development preview, not a standalone
+desktop distribution. Its package contains the Avalonia UI and terminal/update
+helpers; it does not contain the Node.js dashboard service, npm dependencies,
+or Codex state. A prepared local ui-my-cli checkout remains required.
+
 ```text
 Windows: Avalonia PTY -> terminal host -> WebSocket -> persistent WSL2 PTY -> Codex
 macOS:   Avalonia PTY -> terminal host -> WebSocket -> persistent local PTY -> Codex
@@ -58,6 +63,25 @@ common home-directory locations. If the checkout is elsewhere, set
 `DashboardWorkingDirectory` in the app settings file under the platform's local
 application-data `CodexNative` directory.
 
+Finder does not inherit a login-shell PATH. The private service therefore looks
+for Codex through `CODEX_BIN`, `~/.local/bin`, the inherited PATH, Homebrew's
+standard paths, and installed nvm versions.
+
+Prepare that checkout before launching the native app:
+
+```bash
+npm install
+npm run build
+codex --version
+ls ~/.codex/state_*.sqlite
+```
+
+Run Codex once if the state database does not exist. When the app starts its
+private service, backend stdout and stderr are written to
+`~/Library/Application Support/CodexNative/codex-native.log`. The Codex service
+card also displays the provider error instead of reducing it to
+`Unavailable · version unknown`.
+
 ## Build and package
 
 Install the .NET 10 SDK, then run from the repository root:
@@ -89,8 +113,10 @@ On Windows, keep `CodexNative.TerminalHost.exe` beside `CodexNative.exe` and run
 
 On macOS, copy the matching `CodexNative.app` to `Applications` or run it from
 the artifact directory. An unsigned local development build may require an
-explicit Open action in Finder. Do not remove quarantine from downloaded
-release builds as a substitute for signing and notarization.
+explicit Open action in Finder. A downloaded unsigned build can be rejected as
+damaged because Gatekeeper applies quarantine to the archive. Do not remove
+quarantine from downloaded release builds as a substitute for signing and
+notarization; use a locally built development app until signed artifacts exist.
 
 Desktop shortcuts are `Ctrl+K` search, `Ctrl+Shift+N` new Codex or local-shell
 session, `Ctrl+R` refresh, `Ctrl+W` detach/close the selected tab, and `Esc`

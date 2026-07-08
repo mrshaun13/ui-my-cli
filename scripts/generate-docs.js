@@ -170,6 +170,7 @@ function collect() {
   const transcriptHeadlessStoreSrc = read('server/transcript-headless-store.js');
   const providerIndexSrc = read('server/providers/index.js');
   const providerCodexSrc = read('server/providers/codex/index.js');
+  const providerCodexExecutableSrc = read('server/providers/codex/executable.js');
   const providerDevinSrc = read('server/providers/devin/index.js');
   const providerDevinPathsSrc = read('server/providers/devin/paths.js');
 
@@ -188,6 +189,7 @@ function collect() {
     { name: 'server/transcript-headless-store.js', src: transcriptHeadlessStoreSrc },
     { name: 'server/providers/index.js', src: providerIndexSrc },
     { name: 'server/providers/codex/index.js', src: providerCodexSrc },
+    { name: 'server/providers/codex/executable.js', src: providerCodexExecutableSrc },
     { name: 'server/providers/devin/index.js', src: providerDevinSrc },
     { name: 'server/providers/devin/paths.js', src: providerDevinPathsSrc },
   ];
