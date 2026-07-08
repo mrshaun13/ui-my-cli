@@ -69,7 +69,7 @@ Check("direct resume accepts only UUID session IDs", () =>
     var request = NativeLaunchBuilder.ParseHostArguments(spec.Arguments);
     var wsl = NativeLaunchBuilder.BuildWslSpec(request, @"C:\Windows\System32");
     Equal(
-        $"export TERM=xterm-256color COLORTERM=truecolor; exec $HOME/.local/bin/codex resume {id}",
+        $"export TERM=xterm-256color COLORTERM=truecolor; codex_bin=\"${{CODEX_BIN:-}}\"; if [ -z \"$codex_bin\" ] && [ -x \"$HOME/.local/bin/codex\" ]; then codex_bin=\"$HOME/.local/bin/codex\"; fi; if [ -z \"$codex_bin\" ]; then codex_bin=\"$(command -v codex || true)\"; fi; if [ -z \"$codex_bin\" ]; then echo 'Codex executable was not found in CODEX_BIN, ~/.local/bin, or PATH.' >&2; exit 127; fi; exec \"$codex_bin\" resume {id}",
         wsl.Arguments[^1]);
     Throws<ArgumentException>(() =>
         NativeLaunchBuilder.ResumeSession(host, "Ubuntu", "/home/tester", "$(bad)"));
