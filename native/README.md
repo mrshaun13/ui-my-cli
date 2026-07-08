@@ -9,6 +9,20 @@ desktop distribution. Its package contains the Avalonia UI and terminal/update
 helpers; it does not contain the Node.js dashboard service, npm dependencies,
 or Codex state. A prepared local ui-my-cli checkout remains required.
 
+## Current macOS status
+
+The macOS client is intentionally shipping in this merged baseline with known
+unresolved bugs. A real Apple Silicon test confirmed that a locally built app
+can launch, but the tested build did not load the user's real Codex sessions
+and reported the Codex provider as unavailable. Backend/session discovery,
+terminal behavior, and the native updater still require diagnosis and complete
+real-Mac validation. These fixes belong in a version-bumped follow-up PR based
+on the merged baseline.
+
+Downloaded packages are also unsigned and unnotarized, so Gatekeeper can report
+the app as damaged. Until a follow-up release closes these gaps, macOS support
+must be treated as experimental and not fully functional.
+
 ```text
 Windows: Avalonia PTY -> terminal host -> WebSocket -> persistent WSL2 PTY -> Codex
 macOS:   Avalonia PTY -> terminal host -> WebSocket -> persistent local PTY -> Codex
