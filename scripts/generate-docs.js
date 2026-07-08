@@ -247,6 +247,8 @@ function collect() {
     'Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths.';
   fileDescs['native/CodexNative.Core/DashboardApiCompatibility.cs'] =
     'Exact native-client/server API compatibility policy that rejects stale services with incomplete analytics contracts.';
+  fileDescs['native/CodexNative.Core/DashboardServicePorts.cs'] =
+    'Bounded private-service port policy used to bypass incompatible or orphaned loopback services safely.';
   fileDescs['native/CodexNative.Core/TokenChartMath.cs'] =
     'Shared-scale chart math that keeps native input/output token comparisons proportional.';
   fileDescs['native/CodexNative.Core/GitHubReleaseClient.cs'] =
@@ -399,6 +401,14 @@ npm run native:publish
 Self-contained artifacts are published under \`native/artifacts/win-x64/\`,
 \`native/artifacts/osx-x64/\`, and \`native/artifacts/osx-arm64/\`. See
 \`native/README.md\` for platform prerequisites and packaging details.
+
+Versioned release downloads are published in
+[GitHub Releases](https://github.com/mrshaun13/ui-my-cli/releases) as
+\`CodexNative-v<version>-win-x64.zip\`,
+\`CodexNative-v<version>-osx-x64.zip\`, and
+\`CodexNative-v<version>-osx-arm64.zip\`, each with a SHA-256 manifest. Pull
+request workflow artifacts use the same unambiguous names but are temporary
+validation outputs rather than stable releases.
 
 ### Development Mode (hot reload)
 

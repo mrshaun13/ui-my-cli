@@ -13,6 +13,12 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish this main-branch build as the stable version from Directory.Build.props
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,6 +30,8 @@ concurrency:
 jobs:
   source-validation:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.native-version.outputs.version }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
@@ -33,6 +41,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - id: native-version
+        name: Read native version
+        run: echo "version=$(node scripts/check-native-version.mjs --print)" >> "$GITHUB_OUTPUT"
       - run: node scripts/check-native-version.mjs "${GITHUB_REF_NAME:-}"
         if: startsWith(github.ref, 'refs/tags/')
       - run: node scripts/check-native-version.mjs
@@ -89,33 +100,69 @@ jobs:
       - run: python3 scripts/package-native-release.py "${{ matrix.rid }}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: native-release-${{ matrix.rid }}
+          name: CodexNative-v${{ needs.source-validation.outputs.version }}-${{ matrix.rid }}
           path: |
-            native/artifacts/releases/CodexNative-${{ matrix.rid }}.zip
-            native/artifacts/releases/CodexNative-${{ matrix.rid }}.zip.sha256
+            native/artifacts/releases/CodexNative-v${{ needs.source-validation.outputs.version }}-${{ matrix.rid }}.zip
+            native/artifacts/releases/CodexNative-v${{ needs.source-validation.outputs.version }}-${{ matrix.rid }}.zip.sha256
           if-no-files-found: error
           retention-days: 14
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    if: >-
+      startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release && github.ref == 'refs/heads/main')
+    needs: [source-validation, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: native-release-*
+          pattern: CodexNative-v${{ needs.source-validation.outputs.version }}-*
           path: release-assets
           merge-multiple: true
+      - name: Create legacy updater aliases
+        env:
+          NATIVE_VERSION: ${{ needs.source-validation.outputs.version }}
+        run: |
+          for rid in win-x64 osx-x64 osx-arm64; do
+            versioned="release-assets/CodexNative-v${NATIVE_VERSION}-${rid}.zip"
+            legacy="release-assets/CodexNative-${rid}.zip"
+            cp -- "${versioned}" "${legacy}"
+            (
+              cd release-assets
+              sha256sum "CodexNative-${rid}.zip" > "CodexNative-${rid}.zip.sha256"
+            )
+          done
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "${GITHUB_REF_NAME}"
-          release-assets/CodexNative-*.zip
-          release-assets/CodexNative-*.zip.sha256
-          --repo "${GITHUB_REPOSITORY}"
-          --verify-tag
-          --generate-notes
-          --title "Codex Native ${GITHUB_REF_NAME#v}"
+          NATIVE_VERSION: ${{ needs.source-validation.outputs.version }}
+        run: |
+          release_tag="v${NATIVE_VERSION}"
+          if [[ "${GITHUB_REF}" == refs/tags/* && "${GITHUB_REF_NAME}" != "${release_tag}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match native version ${release_tag}." >&2
+            exit 1
+          fi
+          if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${release_tag} already exists; refusing to replace published binaries." >&2
+            exit 1
+          fi
+          release_ref=(--target "${GITHUB_SHA}")
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            release_ref=(--verify-tag)
+          fi
+          gh release create "${release_tag}" \
+            release-assets/CodexNative-v${NATIVE_VERSION}-*.zip \
+            release-assets/CodexNative-v${NATIVE_VERSION}-*.zip.sha256 \
+            release-assets/CodexNative-win-x64.zip \
+            release-assets/CodexNative-win-x64.zip.sha256 \
+            release-assets/CodexNative-osx-x64.zip \
+            release-assets/CodexNative-osx-x64.zip.sha256 \
+            release-assets/CodexNative-osx-arm64.zip \
+            release-assets/CodexNative-osx-arm64.zip.sha256 \
+            --repo "${GITHUB_REPOSITORY}" \
+            "${release_ref[@]}" \
+            --generate-notes \
+            --latest \
+            --title "Codex Native ${NATIVE_VERSION}"

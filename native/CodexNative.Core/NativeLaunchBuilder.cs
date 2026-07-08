@@ -13,7 +13,8 @@ public sealed record WslHostRequest(
     NativeLaunchMode Mode,
     string Distribution,
     string? WorkingDirectory = null,
-    string? SessionId = null);
+    string? SessionId = null,
+    int? Port = null);
 
 public sealed record NativeLaunchSpec(
     string Process,
@@ -65,20 +66,30 @@ public static class NativeLaunchBuilder
     public static NativeLaunchSpec DashboardService(
         string hostExecutable,
         string distribution,
-        string workingDirectory) =>
+        string workingDirectory,
+        int port = DashboardServicePorts.FirstPrivate) =>
         BuildHostSpec(
             hostExecutable,
-            new WslHostRequest(NativeLaunchMode.DashboardService, distribution, workingDirectory));
+            new WslHostRequest(
+                NativeLaunchMode.DashboardService,
+                distribution,
+                workingDirectory,
+                Port: port));
 
     public static NativeLaunchSpec DashboardService(
         NativePlatform platform,
         string hostExecutable,
         string distribution,
         string workingDirectory,
-        string? nodeExecutable = null)
+        string? nodeExecutable = null,
+        int port = DashboardServicePorts.FirstPrivate)
     {
         if (platform == NativePlatform.Windows)
-            return DashboardService(hostExecutable, distribution, workingDirectory);
+            return DashboardService(hostExecutable, distribution, workingDirectory, port);
+        if (!DashboardServicePorts.IsPrivateCandidate(port))
+            throw new ArgumentOutOfRangeException(
+                nameof(port),
+                $"Dashboard service port must be between {DashboardServicePorts.FirstPrivate} and {DashboardServicePorts.LastPrivate}.");
         if (!IsValidLinuxPath(workingDirectory))
             throw new ArgumentException(
                 "Dashboard working directory must be an absolute path without control characters.",
@@ -94,7 +105,7 @@ public static class NativeLaunchBuilder
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["NODE_ENV"] = "production",
-                ["PORT"] = "7577",
+                ["PORT"] = port.ToString(System.Globalization.CultureInfo.InvariantCulture),
             });
     }
 
@@ -137,6 +148,7 @@ public static class NativeLaunchBuilder
         string? distribution = null;
         string? workingDirectory = null;
         string? sessionId = null;
+        int? port = null;
         NativeLaunchMode? mode = null;
 
         for (var index = 0; index < arguments.Count; index++)
@@ -170,6 +182,11 @@ public static class NativeLaunchBuilder
                 case "--session-id":
                     sessionId = value;
                     break;
+                case "--port":
+                    if (!int.TryParse(value, out var parsedPort))
+                        throw new ArgumentException("Dashboard service port must be an integer.", nameof(arguments));
+                    port = parsedPort;
+                    break;
                 default:
                     throw new ArgumentException($"Unknown host argument '{name}'.", nameof(arguments));
             }
@@ -179,7 +196,8 @@ public static class NativeLaunchBuilder
             mode ?? throw new ArgumentException("Missing --mode.", nameof(arguments)),
             distribution ?? throw new ArgumentException("Missing --distribution.", nameof(arguments)),
             workingDirectory,
-            sessionId));
+            sessionId,
+            port));
     }
 
     public static NativeLaunchSpec BuildWslSpec(WslHostRequest request, string windowsSystemDirectory)
@@ -229,7 +247,7 @@ public static class NativeLaunchBuilder
             NativeLaunchMode.NewSession => codexNewSession,
             NativeLaunchMode.ResumeSession => codexResumeSession,
             NativeLaunchMode.DashboardService =>
-                "export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT=7577; exec node server/index.js",
+                $"export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT={request.Port}; exec node server/index.js",
             _ => throw new ArgumentOutOfRangeException(nameof(request)),
         });
 
@@ -287,6 +305,12 @@ public static class NativeLaunchBuilder
             arguments.Add(request.SessionId);
         }
 
+        if (request.Port is not null)
+        {
+            arguments.Add("--port");
+            arguments.Add(request.Port.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
         return new NativeLaunchSpec(hostExecutable, arguments);
     }
 
@@ -314,6 +338,20 @@ public static class NativeLaunchBuilder
             && !IsValidSessionId(request.SessionId ?? string.Empty))
         {
             throw new ArgumentException("Codex session ID must be a UUID.", nameof(request));
+        }
+
+        if (request.Mode == NativeLaunchMode.DashboardService)
+        {
+            if (request.Port is not { } port || !DashboardServicePorts.IsPrivateCandidate(port))
+            {
+                throw new ArgumentException(
+                    $"Dashboard service port must be between {DashboardServicePorts.FirstPrivate} and {DashboardServicePorts.LastPrivate}.",
+                    nameof(request));
+            }
+        }
+        else if (request.Port is not null)
+        {
+            throw new ArgumentException("Only dashboard service requests may specify a port.", nameof(request));
         }
 
         return request;

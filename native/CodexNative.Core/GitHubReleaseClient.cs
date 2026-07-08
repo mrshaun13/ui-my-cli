@@ -68,7 +68,7 @@ public sealed class GitHubReleaseClient : IDisposable
         var version = NativeVersion.Parse(tag);
         if (version <= currentVersion) return null;
 
-        var packageName = PackageAssetName(runtimeIdentifier);
+        var packageName = PackageAssetName(runtimeIdentifier, version);
         var checksumName = $"{packageName}.sha256";
         NativeReleaseAsset? package = null;
         NativeReleaseAsset? checksum = null;
@@ -102,10 +102,10 @@ public sealed class GitHubReleaseClient : IDisposable
         return new NativeReleaseInfo(version, tag, displayName, releasePage, package, checksum);
     }
 
-    public static string PackageAssetName(string runtimeIdentifier)
+    public static string PackageAssetName(string runtimeIdentifier, NativeVersion version)
     {
         ValidateRuntimeIdentifier(runtimeIdentifier);
-        return $"CodexNative-{runtimeIdentifier}.zip";
+        return $"CodexNative-v{version}-{runtimeIdentifier}.zip";
     }
 
     public static bool IsTrustedDownloadUri(Uri uri) =>

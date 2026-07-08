@@ -27,7 +27,8 @@ public sealed class DashboardServiceManager : IDisposable
         string hostExecutable,
         string distribution,
         string dashboardDirectory,
-        string? nodeExecutable = null)
+        string? nodeExecutable = null,
+        int port = DashboardServicePorts.FirstPrivate)
     {
         if (_process is { HasExited: false })
         {
@@ -39,7 +40,8 @@ public sealed class DashboardServiceManager : IDisposable
             hostExecutable,
             distribution,
             dashboardDirectory,
-            nodeExecutable);
+            nodeExecutable,
+            port);
         var startInfo = new ProcessStartInfo
         {
             FileName = spec.Process,
@@ -88,7 +90,7 @@ public sealed class DashboardServiceManager : IDisposable
         };
 
         NativeLog.Write(
-            $"Starting dashboard service with '{spec.Process}' in '{startInfo.WorkingDirectory}'.");
+            $"Starting dashboard service on port {port} with '{spec.Process}' in '{startInfo.WorkingDirectory}'.");
         try
         {
             if (!process.Start())

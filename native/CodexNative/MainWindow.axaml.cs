@@ -254,29 +254,40 @@ public sealed partial class MainWindow : Window
         try
         {
             var hostExecutable = Path.Combine(AppContext.BaseDirectory, _platform.TerminalHostFileName);
-            _api.UsePrivateService();
-            _serviceManager.EnsureStarted(
-                _platform.Platform,
-                hostExecutable,
-                _settings.Distribution,
-                _settings.DashboardWorkingDirectory,
-                Environment.GetEnvironmentVariable("NODE_BIN"));
-            for (var attempt = 0; attempt < 20; attempt++)
+            foreach (var port in DashboardServicePorts.PrivateCandidates)
             {
-                await Task.Delay(500);
-                if (await _api.IsAvailableAsync())
+                _api.UsePrivateService(port);
+                _serviceManager.EnsureStarted(
+                    _platform.Platform,
+                    hostExecutable,
+                    _settings.Distribution,
+                    _settings.DashboardWorkingDirectory,
+                    Environment.GetEnvironmentVariable("NODE_BIN"),
+                    port);
+                var exited = false;
+                for (var attempt = 0; attempt < 20; attempt++)
                 {
-                    SetStatus("Started ui-my-cli data service · persistent terminals enabled", RunningBrush);
-                    return;
+                    await Task.Delay(500);
+                    if (await _api.IsAvailableAsync())
+                    {
+                        SetStatus(
+                            $"Started ui-my-cli data service on {port} · persistent terminals enabled",
+                            RunningBrush);
+                        return;
+                    }
+                    if (!_serviceManager.TryGetExitCode(out var exitCode)) continue;
+                    NativeLog.Write(
+                        $"Dashboard service candidate port {port} exited with code {exitCode}; trying the next private port.");
+                    exited = true;
+                    break;
                 }
-                if (_serviceManager.TryGetExitCode(out var exitCode))
-                {
-                    throw new InvalidOperationException(
-                        $"The dashboard data service exited with code {exitCode}. See {NativeLog.FilePath}");
-                }
+                if (exited) continue;
+                throw new TimeoutException(
+                    $"The native dashboard data service did not answer on port {port}. See {NativeLog.FilePath}");
             }
-            throw new TimeoutException(
-                $"The native dashboard data service did not answer on port 7577. See {NativeLog.FilePath}");
+            throw new InvalidOperationException(
+                $"No private dashboard port from {DashboardServicePorts.FirstPrivate} through " +
+                $"{DashboardServicePorts.LastPrivate} could start the data service. See {NativeLog.FilePath}");
         }
         catch (Exception ex)
         {

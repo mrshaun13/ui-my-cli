@@ -75,6 +75,25 @@ Check("macOS dashboard service uses structured process settings", () =>
     SequenceEqual(new[] { "server/index.js" }, spec.Arguments);
     Equal("production", spec.Environment!["NODE_ENV"]);
     Equal("7577", spec.Environment["PORT"]);
+
+    var alternate = NativeLaunchBuilder.DashboardService(
+        NativePlatform.MacOS,
+        host,
+        "Ubuntu",
+        "/Users/tester/ui-my-cli",
+        "/opt/homebrew/bin/node",
+        7584);
+    Equal("7584", alternate.Environment!["PORT"]);
+});
+
+Check("private dashboard ports are bounded and ordered", () =>
+{
+    Equal(7577, DashboardServicePorts.PrivateCandidates.First());
+    Equal(7596, DashboardServicePorts.PrivateCandidates.Last());
+    Equal(20, DashboardServicePorts.PrivateCandidates.Count);
+    Equal(true, DashboardServicePorts.IsPrivateCandidate(7584));
+    Equal(false, DashboardServicePorts.IsPrivateCandidate(7576));
+    Equal(false, DashboardServicePorts.IsPrivateCandidate(7597));
 });
 
 Check("node resolver prefers an explicit executable then PATH", () =>
@@ -193,8 +212,8 @@ await CheckAsync("GitHub release selection requires the matching runtime and che
           "draft": false,
           "prerelease": false,
           "assets": [
-            {"name":"CodexNative-osx-arm64.zip","browser_download_url":"https://github.com/mrshaun13/ui-my-cli/releases/download/v1.2.0/CodexNative-osx-arm64.zip","size":123},
-            {"name":"CodexNative-osx-arm64.zip.sha256","browser_download_url":"https://github.com/mrshaun13/ui-my-cli/releases/download/v1.2.0/CodexNative-osx-arm64.zip.sha256","size":99}
+            {"name":"CodexNative-v1.2.0-osx-arm64.zip","browser_download_url":"https://github.com/mrshaun13/ui-my-cli/releases/download/v1.2.0/CodexNative-v1.2.0-osx-arm64.zip","size":123},
+            {"name":"CodexNative-v1.2.0-osx-arm64.zip.sha256","browser_download_url":"https://github.com/mrshaun13/ui-my-cli/releases/download/v1.2.0/CodexNative-v1.2.0-osx-arm64.zip.sha256","size":99}
           ]
         }
         """;
@@ -202,8 +221,8 @@ await CheckAsync("GitHub release selection requires the matching runtime and che
     using var client = new GitHubReleaseClient(http);
     var release = await client.GetLatestAsync(new NativeVersion(1, 0, 0), "osx-arm64");
     Equal(new NativeVersion(1, 2, 0), release!.Version);
-    Equal("CodexNative-osx-arm64.zip", release.Package.Name);
-    Equal("CodexNative-osx-arm64.zip.sha256", release.Checksum.Name);
+    Equal("CodexNative-v1.2.0-osx-arm64.zip", release.Package.Name);
+    Equal("CodexNative-v1.2.0-osx-arm64.zip.sha256", release.Checksum.Name);
 });
 
 await CheckAsync("missing GitHub release is treated as no available update", async () =>
@@ -219,7 +238,7 @@ await CheckAsync("checksum verification rejects changed update bytes", async () 
     Directory.CreateDirectory(root);
     try
     {
-        var archive = Path.Combine(root, "CodexNative-osx-arm64.zip");
+        var archive = Path.Combine(root, "CodexNative-v1.2.0-osx-arm64.zip");
         var checksum = $"{archive}.sha256";
         await File.WriteAllTextAsync(archive, "verified package");
         var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("verified package"))).ToLowerInvariant();
@@ -346,17 +365,22 @@ Check("distribution and path validation reject command injection", () =>
 
 Check("dashboard service is launched inside its validated WSL directory", () =>
 {
-    var hostSpec = NativeLaunchBuilder.DashboardService(host, "Ubuntu", "/home/tester/ui-my-cli");
+    var hostSpec = NativeLaunchBuilder.DashboardService(host, "Ubuntu", "/home/tester/ui-my-cli", 7584);
     var request = NativeLaunchBuilder.ParseHostArguments(hostSpec.Arguments);
+    Equal(7584, request.Port);
     var wsl = NativeLaunchBuilder.BuildWslSpec(request, @"C:\Windows\System32");
     SequenceEqual(
         new[]
         {
             "--distribution", "Ubuntu", "--cd", "/home/tester/ui-my-cli",
             "--exec", "/bin/bash", "-lc",
-            "export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT=7577; exec node server/index.js",
+            "export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT=7584; exec node server/index.js",
         },
         wsl.Arguments);
+    Throws<ArgumentException>(() =>
+        NativeLaunchBuilder.DashboardService(host, "Ubuntu", "/home/tester/ui-my-cli", 7597));
+    Throws<ArgumentException>(() => NativeLaunchBuilder.ParseHostArguments(
+        ["--distribution", "Ubuntu", "--mode", "dashboard-service", "--working-directory", "/home/tester", "--port", "not-a-port"]));
 });
 
 Check("server terminal bridge accepts only loopback WebSocket endpoints", () =>
@@ -558,9 +582,15 @@ static async Task ThrowsAsync<TException>(Func<Task> action) where TException : 
 
 static async Task VerifyReleaseArtifactsAsync(string artifactDirectory)
 {
+    var assemblyVersion = typeof(NativeVersion).Assembly.GetName().Version
+        ?? throw new InvalidOperationException("Native core assembly has no version.");
+    var nativeVersion = new NativeVersion(
+        assemblyVersion.Major,
+        assemblyVersion.Minor,
+        assemblyVersion.Build);
     foreach (var runtime in new[] { "win-x64", "osx-x64", "osx-arm64" })
     {
-        var fileName = GitHubReleaseClient.PackageAssetName(runtime);
+        var fileName = GitHubReleaseClient.PackageAssetName(runtime, nativeVersion);
         var archive = Path.Combine(artifactDirectory, fileName);
         var checksum = $"{archive}.sha256";
         await NativeUpdatePackage.VerifyChecksumAsync(archive, checksum, fileName);

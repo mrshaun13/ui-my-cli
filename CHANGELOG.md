@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Native desktop 1.1.0 development preview
+### Native desktop 1.1.1 development preview
 
 This preview is being merged as the shared development baseline so that the
 Windows/macOS frontend, updater, packaging, and diagnostics are available for
@@ -41,3 +41,13 @@ functional or ready for end-user distribution.
   separate maxima that visually exaggerated the smaller series. Legitimately
   empty windows show an explicit no-telemetry message instead of an unexplained
   blank panel.
+- Fixed native startup when an incompatible or orphaned private data service
+  already occupies port 7577. The client now discovers compatible services and
+  retries validated private ports 7577 through 7596 instead of repeatedly
+  launching into the same collision and exiting with code 1.
+- Native CI artifacts and updater archives now include the exact native version
+  and runtime, for example `CodexNative-v1.1.1-win-x64.zip`. Matching tags or an
+  explicit main-branch workflow dispatch publish immutable ZIP/checksum pairs
+  to GitHub Releases for normal repository downloads. Releases retain
+  versionless compatibility aliases so the pre-1.1.1 updater can migrate to the
+  versioned contract.

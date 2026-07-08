@@ -8,12 +8,22 @@ import os
 from pathlib import Path
 import sys
 import zipfile
+import re
 
 
 SUPPORTED_RIDS = {"win-x64", "osx-x64", "osx-arm64"}
 ROOT = Path(__file__).resolve().parent.parent
 ARTIFACTS = ROOT / "native" / "artifacts"
 RELEASES = ARTIFACTS / "releases"
+VERSION_PATTERN = re.compile(r"<Version>(\d+\.\d+\.\d+)</Version>")
+
+
+def native_version() -> str:
+    props = (ROOT / "Directory.Build.props").read_text(encoding="utf-8")
+    match = VERSION_PATTERN.search(props)
+    if not match:
+        raise ValueError("Directory.Build.props must contain a three-part native Version")
+    return match.group(1)
 
 
 def archive_entries(rid: str) -> list[tuple[Path, str]]:
@@ -45,7 +55,7 @@ def package(rid: str) -> Path:
     if rid not in SUPPORTED_RIDS:
         raise ValueError(f"unsupported native runtime: {rid}")
     RELEASES.mkdir(parents=True, exist_ok=True)
-    archive = RELEASES / f"CodexNative-{rid}.zip"
+    archive = RELEASES / f"CodexNative-v{native_version()}-{rid}.zip"
     temporary = archive.with_suffix(".zip.tmp")
     temporary.unlink(missing_ok=True)
 

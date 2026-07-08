@@ -32,7 +32,9 @@ public sealed class NativeUpdatePackage : IDisposable
     {
         if (!Path.IsPathFullyQualified(updatesDirectory) || updatesDirectory.Any(char.IsControl))
             throw new ArgumentException("Update staging path must be absolute.", nameof(updatesDirectory));
-        var expectedPackageName = GitHubReleaseClient.PackageAssetName(platform.ReleaseRuntimeIdentifier);
+        var expectedPackageName = GitHubReleaseClient.PackageAssetName(
+            platform.ReleaseRuntimeIdentifier,
+            release.Version);
         if (release.Package.Name != expectedPackageName
             || release.Checksum.Name != $"{expectedPackageName}.sha256")
             throw new InvalidDataException("Release assets do not match the current operating system and architecture.");

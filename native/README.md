@@ -51,8 +51,10 @@ when their tab or the app closes.
   included in output-token cost rather than multiplied by reasoning effort.
   Estimates assume Standard mode because stored telemetry does not identify
   Fast mode reliably enough to apply its separate multiplier.
-- Reuses a compatible service on `127.0.0.1:7575`; if none exists, starts a
-  private service on `127.0.0.1:7577` without exposing it to the network.
+- Reuses a compatible service on `127.0.0.1:7575`; if none exists, discovers or
+  starts a private service on the first available loopback port from 7577
+  through 7596 without exposing it to the network. Incompatible leftovers are
+  skipped instead of trapping startup in a port-conflict loop.
 - Checks stable GitHub Releases for a newer platform package. Updates are
   bounded, SHA-256 verified, staged outside the installation, and installed
   only after two consecutive checks find no active Codex sessions
@@ -119,7 +121,8 @@ Artifacts are written to:
 - `native/artifacts/win-x64/`
 - `native/artifacts/osx-x64/CodexNative.app`
 - `native/artifacts/osx-arm64/CodexNative.app`
-- `native/artifacts/releases/CodexNative-<runtime>.zip` and `.zip.sha256`
+- `native/artifacts/releases/CodexNative-v<version>-<runtime>.zip` and
+  `.zip.sha256`
 
 The macOS packages are real `.app` bundles with a native Mach-O app host and
 terminal host. Cross-publishing verifies their structure from Linux, but final
@@ -145,11 +148,30 @@ the behavior matches the Windows client.
 
 ## Release and update contract
 
-`Directory.Build.props` is the native version source. A stable release tag must
-be exactly `v<version>`. The pinned GitHub Actions workflow tests native command
-policy, builds Windows x64 and macOS Intel/Apple Silicon on matching runners,
-validates executable formats and bundle metadata, and publishes one ZIP plus
-one SHA-256 manifest per runtime.
+`Directory.Build.props` is the native version source. Every CI artifact and
+updater archive includes that version and runtime, such as
+`CodexNative-v1.1.1-osx-arm64.zip`. Pull requests retain these versioned Actions
+artifacts for short-term validation; they are not production releases.
+
+The pinned GitHub Actions workflow tests native command policy, builds Windows
+x64 and macOS Intel/Apple Silicon on matching runners, and validates executable
+formats and bundle metadata. A stable release can then be published in either
+of two controlled ways:
+
+1. Push an exact `v<version>` tag matching `Directory.Build.props`.
+2. Run the **Native desktop** workflow on `main` with **publish_release=true**;
+   the workflow creates the matching tag and release.
+
+Both paths publish the three versioned ZIPs and SHA-256 manifests in the
+repository's GitHub Releases section. Existing releases are immutable: the
+workflow refuses to replace a version that already exists. GitHub Packages is
+not used because these desktop archives are not npm, NuGet, Maven, or container
+packages; GitHub Releases is the supported generic-binary distribution surface.
+
+The Release publisher also includes versionless compatibility aliases for the
+pre-1.1.1 updater, which cannot discover versioned asset names. Those aliases
+are updater migration inputs; people downloading manually should choose the
+versioned archive. New clients require the versioned asset/checksum pair.
 
 The updater never runs `git pull`, changes the user's checkout, or requires a
 developer toolchain. It updates only the desktop release. The independently

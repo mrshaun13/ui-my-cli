@@ -9,7 +9,6 @@ public sealed class DashboardApiClient : IDisposable
     public const int RequiredApiVersion = DashboardApiCompatibility.RequiredVersion;
     private static readonly string[] RequiredUsageWindows = ["1d", "2d", "7d", "14d", "30d", "all"];
     private static readonly Uri SharedService = new("http://127.0.0.1:7575/api/");
-    private static readonly Uri PrivateService = new("http://127.0.0.1:7577/api/");
     private readonly HttpClient _http = new()
     {
         Timeout = TimeSpan.FromSeconds(30),
@@ -34,15 +33,22 @@ public sealed class DashboardApiClient : IDisposable
             _service = SharedService;
             return true;
         }
-        if (await ProbeAsync(PrivateService, TimeSpan.FromSeconds(4), cancellationToken))
+        foreach (var port in DashboardServicePorts.PrivateCandidates)
         {
-            _service = PrivateService;
+            var candidate = PrivateService(port);
+            if (!await ProbeAsync(candidate, TimeSpan.FromMilliseconds(400), cancellationToken)) continue;
+            _service = candidate;
             return true;
         }
         return false;
     }
 
-    public void UsePrivateService() => _service = PrivateService;
+    public void UsePrivateService(int port)
+    {
+        if (!DashboardServicePorts.IsPrivateCandidate(port))
+            throw new ArgumentOutOfRangeException(nameof(port));
+        _service = PrivateService(port);
+    }
 
     public Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default) =>
         ProbeAsync(_service, TimeSpan.FromSeconds(2), cancellationToken);
@@ -183,6 +189,8 @@ public sealed class DashboardApiClient : IDisposable
     }
 
     private Uri CodexUri(string path) => new(_service, $"codex/{path}");
+
+    private static Uri PrivateService(int port) => new($"http://127.0.0.1:{port}/api/");
 
     private async Task<T> GetCodexAsync<T>(string path, CancellationToken cancellationToken)
     {

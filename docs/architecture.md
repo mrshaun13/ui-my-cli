@@ -69,6 +69,7 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | `native/CodexNative.Core/ExecutableResolver.cs` | Validated Node.js and login-shell discovery without user-controlled shell interpolation. |
 | `native/CodexNative.Core/DashboardRepositoryLocator.cs` | Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths. |
 | `native/CodexNative.Core/DashboardApiCompatibility.cs` | Exact native-client/server API compatibility policy that rejects stale services with incomplete analytics contracts. |
+| `native/CodexNative.Core/DashboardServicePorts.cs` | Bounded private-service port policy used to bypass incompatible or orphaned loopback services safely. |
 | `native/CodexNative.Core/TokenChartMath.cs` | Shared-scale chart math that keeps native input/output token comparisons proportional. |
 | `native/CodexNative.Core/GitHubReleaseClient.cs` | Selects a newer stable GitHub Release and its exact platform archive/checksum through trusted HTTPS URLs. |
 | `native/CodexNative.Core/NativeUpdatePackage.cs` | Downloads bounded release assets, verifies SHA-256, and rejects traversal, links, or incomplete native payloads. |
