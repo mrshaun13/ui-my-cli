@@ -34,20 +34,9 @@ public sealed class DashboardServiceManager : IDisposable
 
     public void Dispose()
     {
-        try
-        {
-            if (_process is { HasExited: false })
-            {
-                _process.Kill(true);
-            }
-        }
-        catch (InvalidOperationException)
-        {
-            // The service already exited.
-        }
-        finally
-        {
-            _process?.Dispose();
-        }
+        // The dashboard service owns the persistent WSL PTYs. Detaching the
+        // native UI must not kill that service or its Codex processes; the
+        // next native/browser client can reconnect to the same loopback port.
+        _process?.Dispose();
     }
 }

@@ -19,8 +19,16 @@ public sealed record NativeLaunchSpec(string Process, IReadOnlyList<string> Argu
 
 public static class NativeLaunchBuilder
 {
-    private const string CodexExecutable = "$HOME/.local/bin/codex";
     private const string TerminalEnvironment = "export TERM=xterm-256color COLORTERM=truecolor; ";
+
+    private static string CodexInvocation(string arguments) =>
+        $"codex_bin=\"${{CODEX_BIN:-}}\"; " +
+        "if [ -z \"$codex_bin\" ] && [ -x \"$HOME/.local/bin/codex\" ]; then " +
+        "codex_bin=\"$HOME/.local/bin/codex\"; fi; " +
+        "if [ -z \"$codex_bin\" ]; then codex_bin=\"$(command -v codex || true)\"; fi; " +
+        "if [ -z \"$codex_bin\" ]; then " +
+        "echo 'Codex executable was not found in CODEX_BIN, ~/.local/bin, or PATH.' >&2; exit 127; fi; " +
+        $"exec \"$codex_bin\"{arguments}";
 
     public static NativeLaunchSpec ResumePicker(string hostExecutable, string distribution) =>
         BuildHostSpec(hostExecutable, new WslHostRequest(NativeLaunchMode.Sessions, distribution));
@@ -157,14 +165,14 @@ public static class NativeLaunchBuilder
 
         arguments.Add("/bin/bash");
         arguments.Add("-lc");
+        var codexResumeAll = TerminalEnvironment + CodexInvocation(" resume --all");
+        var codexNewSession = TerminalEnvironment + CodexInvocation(string.Empty);
+        var codexResumeSession = TerminalEnvironment + CodexInvocation($" resume {request.SessionId}");
         arguments.Add(request.Mode switch
         {
-            NativeLaunchMode.Sessions =>
-                $"{TerminalEnvironment}exec {CodexExecutable} resume --all",
-            NativeLaunchMode.NewSession =>
-                $"{TerminalEnvironment}exec {CodexExecutable}",
-            NativeLaunchMode.ResumeSession =>
-                $"{TerminalEnvironment}exec {CodexExecutable} resume {request.SessionId}",
+            NativeLaunchMode.Sessions => codexResumeAll,
+            NativeLaunchMode.NewSession => codexNewSession,
+            NativeLaunchMode.ResumeSession => codexResumeSession,
             NativeLaunchMode.DashboardService =>
                 "export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT=7577; exec node server/index.js",
             _ => throw new ArgumentOutOfRangeException(nameof(request)),
