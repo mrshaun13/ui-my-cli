@@ -203,6 +203,16 @@ Check("terminal wheel scrolling moves and clamps the viewport", () =>
     Equal(0, TerminalViewportScroll.Next(0, -1, -1));
 });
 
+Check("cold-day grouping includes only idle sessions at the selected boundary", () =>
+{
+    const long now = 2_000_000;
+    Equal(true, SessionAgeGrouping.IsCold("idle", now - 86_400, now, 1));
+    Equal(false, SessionAgeGrouping.IsCold("idle", now - 86_399, now, 1));
+    Equal(false, SessionAgeGrouping.IsCold("active", now - 172_800, now, 1));
+    Equal(false, SessionAgeGrouping.IsCold("question", now - 172_800, now, 1));
+    Equal(true, SessionAgeGrouping.IsCold("IDLE", now - 86_400, now, 0));
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine($"{failures.Count} native command test(s) failed:");

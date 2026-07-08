@@ -28,6 +28,10 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, TabItem> _previewTabs = [];
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _connectionPulseTimer;
+    private readonly DispatcherTimer _sessionHoverAnimationTimer;
+    private readonly TranslateTransform _sessionHoverTopTransform = new();
+    private readonly TranslateTransform _sessionHoverBottomTransform = new();
+    private Grid? _hoveredSessionRow;
     private DashboardStatusFeed? _statusFeed;
     private CancellationTokenSource? _searchCancellation;
     private Flyout? _newSessionFlyout;
@@ -38,6 +42,9 @@ public sealed partial class MainWindow : Window
     private DashboardStats? _stats;
     private DashboardStatus? _dashboardStatus;
     private RateLimitInfo? _rateLimits;
+    private DashboardTheme _currentTheme = DashboardTheme.All[0];
+    private Color _sessionDividerAccent = Color.Parse(DashboardTheme.All[0].Accent);
+    private Color _sessionDividerSecondary = Color.Parse(DashboardTheme.All[0].Secondary);
     private List<DashboardSession>? _searchResults;
     private readonly HashSet<string> _activeRepoPaths = new(StringComparer.Ordinal);
     private readonly HashSet<string> _hiddenTokenCategories = new(StringComparer.Ordinal);
@@ -53,6 +60,7 @@ public sealed partial class MainWindow : Window
     private bool _isDashboardConnected;
     private int _refreshTick;
     private readonly DateTimeOffset _connectionPulseStartedAt = DateTimeOffset.UtcNow;
+    private DateTimeOffset _sessionHoverAnimationStartedAt = DateTimeOffset.UtcNow;
 
     public MainWindow()
     {
@@ -61,6 +69,7 @@ public sealed partial class MainWindow : Window
         CompactSessionsList.ContainerPrepared += OnCompactSessionContainerPrepared;
         _uiReady = true;
         Opened += OnWindowOpened;
+        Activated += (_, _) => ApplyWindowsTitleBarTheme(_currentTheme);
         Closing += OnWindowClosing;
         KeyDown += OnWindowKeyDown;
         DashboardScroll.SizeChanged += (_, args) =>
@@ -68,13 +77,46 @@ public sealed partial class MainWindow : Window
             DashboardPanel.Width = Math.Max(0, args.NewSize.Width - 44);
             ApplyResponsiveDashboardLayout(args.NewSize.Width);
         };
+        SizeChanged += (_, _) =>
+            Dispatcher.UIThread.Post(ConstrainMainContentHeight, DispatcherPriority.Loaded);
+        WorkspaceTabs.SizeChanged += (_, args) =>
+        {
+            var contentHeight = TerminalTabContentHeight(args.NewSize.Height);
+            foreach (var state in _openTabs.Values)
+            {
+                state.TerminalViewport.Height = contentHeight;
+            }
+        };
+        SessionFiltersToggle.SizeChanged += (_, args) =>
+        {
+            var horizontalPadding = SessionFiltersToggle.Padding.Left + SessionFiltersToggle.Padding.Right;
+            SessionFiltersHeaderGrid.Width = Math.Max(0, args.NewSize.Width - horizontalPadding);
+        };
+        SessionHoverTopBand.RenderTransform = _sessionHoverTopTransform;
+        SessionHoverBottomBand.RenderTransform = _sessionHoverBottomTransform;
+        SessionHoverOverlay.SizeChanged += (_, _) => PositionSessionHoverOverlay();
         _refreshTimer = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, OnRefreshTimerTick);
         _connectionPulseTimer = new DispatcherTimer(
             TimeSpan.FromMilliseconds(40),
             DispatcherPriority.Background,
             OnConnectionPulseTick);
+        _sessionHoverAnimationTimer = new DispatcherTimer(
+            TimeSpan.FromMilliseconds(33),
+            DispatcherPriority.Render,
+            OnSessionHoverAnimationTick);
+        SetSessionFiltersExpanded(false);
         UpdateHeaderConnectionIndicator();
         _connectionPulseTimer.Start();
+    }
+
+    private void ConstrainMainContentHeight()
+    {
+        var availableHeight = Bounds.Height - AppHeader.Bounds.Height - AppFooter.Bounds.Height;
+        if (availableHeight > 0)
+        {
+            MainContentGrid.Height = availableHeight;
+            MainContentGrid.MaxHeight = availableHeight;
+        }
     }
 
     private async void OnWindowKeyDown(object? sender, KeyEventArgs e)
@@ -232,12 +274,49 @@ public sealed partial class MainWindow : Window
 
     private void ApplyPushedSessions(IReadOnlyList<DashboardSession> sessions)
     {
-        _sessions = sessions.OrderByDescending(session => session.LastActivityAt).ToList();
+        var ordered = sessions.OrderByDescending(session => session.LastActivityAt).ToList();
+        if (SessionListsMateriallyEqual(_sessions, ordered)) return;
+
+        _sessions = ordered;
         ReconcilePendingSessions();
         UpdateRepoFilter();
         ApplySessionFilter();
         RenderLatestPrompt();
         UpdateOpenTabStatuses();
+    }
+
+    private static bool SessionListsMateriallyEqual(
+        IReadOnlyList<DashboardSession> current,
+        IReadOnlyList<DashboardSession> incoming)
+    {
+        if (current.Count != incoming.Count) return false;
+        for (var index = 0; index < current.Count; index++)
+        {
+            var left = current[index];
+            var right = incoming[index];
+            if (left.Id != right.Id
+                || left.Provider != right.Provider
+                || left.Source != right.Source
+                || left.ThreadSource != right.ThreadSource
+                || left.Title != right.Title
+                || left.WorkingDir != right.WorkingDir
+                || left.Project != right.Project
+                || left.Model != right.Model
+                || left.ReasoningEffort != right.ReasoningEffort
+                || left.PermissionMode != right.PermissionMode
+                || left.Status != right.Status
+                || left.Snippet != right.Snippet
+                || left.FirstUserPrompt != right.FirstUserPrompt
+                || left.LastUserPrompt != right.LastUserPrompt
+                || left.HasSubagents != right.HasSubagents
+                || left.Archived != right.Archived
+                || left.LastActivityAt != right.LastActivityAt
+                || left.CreatedAt != right.CreatedAt)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void ApplySessionRekey(string temporaryKey, string realId)
@@ -290,17 +369,21 @@ public sealed partial class MainWindow : Window
             var statsTask = _api.GetStatsAsync(_settings.StatsMode);
             var statusTask = _api.GetStatusAsync();
             await Task.WhenAll(sessionsTask, archivedTask, reposTask, statsTask, statusTask);
-            _sessions = sessionsTask.Result.OrderByDescending(session => session.LastActivityAt).ToList();
-            _archivedSessions = archivedTask.Result.OrderByDescending(session => session.LastActivityAt).ToList();
+            var sessions = sessionsTask.Result.OrderByDescending(session => session.LastActivityAt).ToList();
+            var archivedSessions = archivedTask.Result.OrderByDescending(session => session.LastActivityAt).ToList();
+            var sessionsChanged = !SessionListsMateriallyEqual(_sessions, sessions);
+            var archivedSessionsChanged = !SessionListsMateriallyEqual(_archivedSessions, archivedSessions);
+            if (sessionsChanged) _sessions = sessions;
+            if (archivedSessionsChanged) _archivedSessions = archivedSessions;
             _repos = reposTask.Result;
             _stats = statsTask.Result;
             _dashboardStatus = statusTask.Result;
             UpdateRepoFilter();
-            ApplySessionFilter();
+            if (sessionsChanged || archivedSessionsChanged) ApplySessionFilter();
             RenderLatestPrompt();
             RenderStats(_stats);
             RenderProviderStatus(_dashboardStatus);
-            UpdateOpenTabStatuses();
+            if (sessionsChanged) UpdateOpenTabStatuses();
             SetStatus($"Live · {_sessions.Count} sessions · persistent WSL2 terminals", RunningBrush);
         }
         catch (Exception ex)
@@ -325,18 +408,23 @@ public sealed partial class MainWindow : Window
         _refreshing = true;
         try
         {
-            _sessions = (await _api.GetSessionsAsync())
+            var sessions = (await _api.GetSessionsAsync())
                 .OrderByDescending(session => session.LastActivityAt)
                 .ToList();
+            var sessionsChanged = !SessionListsMateriallyEqual(_sessions, sessions);
+            if (sessionsChanged) _sessions = sessions;
+            var archivedSessionsChanged = false;
             if (ArchivedCheckBox.IsChecked == true)
             {
-                _archivedSessions = (await _api.GetArchivedSessionsAsync())
+                var archivedSessions = (await _api.GetArchivedSessionsAsync())
                     .OrderByDescending(session => session.LastActivityAt)
                     .ToList();
+                archivedSessionsChanged = !SessionListsMateriallyEqual(_archivedSessions, archivedSessions);
+                if (archivedSessionsChanged) _archivedSessions = archivedSessions;
             }
             ReconcilePendingSessions();
-            ApplySessionFilter();
-            UpdateOpenTabStatuses();
+            if (sessionsChanged || archivedSessionsChanged) ApplySessionFilter();
+            if (sessionsChanged) UpdateOpenTabStatuses();
         }
         catch (Exception ex)
         {
@@ -441,15 +529,18 @@ public sealed partial class MainWindow : Window
                 || Contains(session.LastUserPrompt, query));
         }
 
-        var cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - Math.Max(1, _settings.ColdDays) * 86400L;
+        ResetSessionDividerAnimations();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var visible = filtered
-            .OrderBy(session => session.LastActivityAt < cutoff ? 1 : 0)
+            .OrderBy(session => SessionAgeGrouping.IsCold(
+                session.Status, session.LastActivityAt, now, _settings.ColdDays) ? 1 : 0)
             .ThenByDescending(session => session.LastActivityAt)
             .ToList();
         SessionsList.ItemsSource = visible;
         CompactSessionsList.ItemsSource = visible;
         var sourceCount = ArchivedCheckBox.IsChecked == true ? _sessions.Count + _archivedSessions.Count : _sessions.Count;
-        var olderCount = visible.Count(session => session.LastActivityAt < cutoff);
+        var olderCount = visible.Count(session => SessionAgeGrouping.IsCold(
+            session.Status, session.LastActivityAt, now, _settings.ColdDays));
         SessionCountText.Text = $"{visible.Count} of {sourceCount} · {olderCount} older than {_settings.ColdDays}d";
     }
 
@@ -1064,6 +1155,7 @@ public sealed partial class MainWindow : Window
         {
             Process = string.Empty,
             BufferSize = 10000,
+            MinHeight = 0,
             FontFamily = new FontFamily("Cascadia Mono, Consolas"),
             FontSize = textSize.TerminalFontSize,
             Background = ResourceBrush("TerminalBrush"),
@@ -1209,6 +1301,8 @@ public sealed partial class MainWindow : Window
 
         var inspector = new Border
         {
+            MinHeight = 120,
+            MaxHeight = 480,
             Background = ResourceBrush("SurfaceBrush"),
             BorderBrush = ResourceBrush("BorderBrush"),
             BorderThickness = new Thickness(0, 1, 0, 0),
@@ -1222,16 +1316,79 @@ public sealed partial class MainWindow : Window
         };
         Grid.SetRow(actions, 1);
 
+        var inspectorResizeGrip = new Border
+        {
+            Width = 54,
+            Height = 3,
+            CornerRadius = new CornerRadius(2),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = ResourceBrush("AccentBrush"),
+            Opacity = 0.72,
+            IsHitTestVisible = false,
+        };
+        var inspectorResizeTrack = new Border
+        {
+            Background = ResourceBrush("SurfaceBrush"),
+            BorderBrush = ResourceBrush("BorderBrightBrush"),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Child = inspectorResizeGrip,
+            IsHitTestVisible = false,
+        };
+        var inspectorSplitter = new GridSplitter
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Background = Brushes.Transparent,
+            ResizeDirection = GridResizeDirection.Rows,
+            ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+            ShowsPreview = true,
+            Cursor = new Cursor(StandardCursorType.SizeNorthSouth),
+        };
+        inspectorSplitter.PointerEntered += (_, _) =>
+        {
+            inspectorResizeTrack.Background = ResourceBrush("ElevatedBrush");
+            inspectorResizeGrip.Opacity = 1;
+        };
+        inspectorSplitter.PointerExited += (_, _) =>
+        {
+            inspectorResizeTrack.Background = ResourceBrush("SurfaceBrush");
+            inspectorResizeGrip.Opacity = 0.72;
+        };
+        ToolTip.SetTip(inspectorSplitter, "Drag to resize session details");
+        AutomationProperties.SetName(inspectorSplitter, "Resize session details panel");
+
         var content = new Grid
         {
-            RowDefinitions = new RowDefinitions("*,Auto"),
+            RowDefinitions = new RowDefinitions("*,12,160"),
             Background = ResourceBrush("TerminalBrush"),
+            MinHeight = 0,
+            ClipToBounds = true,
+            VerticalAlignment = VerticalAlignment.Stretch,
         };
-        content.Children.Add(terminal);
+        content.Loaded += (_, _) =>
+            content.Height = TerminalTabContentHeight(WorkspaceTabs.Bounds.Height);
+        var terminalClip = new Border
+        {
+            ClipToBounds = true,
+            Background = Brushes.Transparent,
+            Child = terminal,
+        };
+        content.Children.Add(terminalClip);
         content.Children.Add(reconnectBanner);
         content.Children.Add(restoreOverlay);
+        content.Children.Add(inspectorResizeTrack);
+        content.Children.Add(inspectorSplitter);
         content.Children.Add(inspector);
-        Grid.SetRow(inspector, 1);
+        Grid.SetRow(inspectorResizeTrack, 1);
+        Grid.SetRow(inspectorSplitter, 1);
+        Grid.SetRow(inspector, 2);
+        terminalClip.ZIndex = 0;
+        inspectorResizeTrack.ZIndex = 2;
+        inspectorSplitter.ZIndex = 3;
+        inspector.ZIndex = 2;
+        reconnectBanner.ZIndex = 4;
+        restoreOverlay.ZIndex = 4;
 
         var closeButton = new Button
         {
@@ -1255,10 +1412,18 @@ public sealed partial class MainWindow : Window
         };
         var statusGlyph = (TextBlock)header.Children[0];
         var titleBlock = (TextBlock)header.Children[1];
-        var tab = new TabItem { Header = header, Content = content };
+        var tab = new TabItem
+        {
+            Header = header,
+            Content = content,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Stretch,
+        };
         AutomationProperties.SetName(tab, title);
         var state = new SessionTabState(
-            key, tab, terminal, content, inspector, reconnectBanner, reconnectText, reconnectButton,
+            key, tab, terminal, content, inspector, inspectorSplitter,
+            inspectorResizeTrack, inspectorResizeGrip,
+            reconnectBanner, reconnectText, reconnectButton,
             restoreOverlay, restoreText,
             titleBlock, statusGlyph, contextText, contextBar, contextDonut,
             detailHeadings, configText,
@@ -1266,6 +1431,21 @@ public sealed partial class MainWindow : Window
             workingDirectory, session, kind);
 
         ApplyThemeToSessionState(state, DashboardTheme.Find(_settings.StyleId));
+        inspectorSplitter.AddHandler(
+            InputElement.PointerPressedEvent,
+            (_, _) => BeginTerminalResizeMask(state),
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        inspectorSplitter.AddHandler(
+            InputElement.PointerMovedEvent,
+            (_, args) =>
+            {
+                if (args.GetCurrentPoint(inspectorSplitter).Properties.IsLeftButtonPressed)
+                    BeginTerminalResizeMask(state);
+            },
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
+            handledEventsToo: true);
+        inspectorSplitter.DragCompleted += (_, _) => CompleteTerminalResizeReveal(state);
         terminal.Loaded += (_, _) => AttachTerminalVisualStyling(state);
 
         closeButton.Click += async (_, _) => await DetachTabAsync(state);
@@ -1292,6 +1472,9 @@ public sealed partial class MainWindow : Window
         terminal.ProcessExited += (_, args) => OnTerminalProcessExited(state, args);
         return state;
     }
+
+    private static double TerminalTabContentHeight(double workspaceHeight) =>
+        Math.Max(240, workspaceHeight - 46);
 
     private async void OnTerminalPasteKeyDown(object? sender, KeyEventArgs args)
     {
@@ -1532,7 +1715,37 @@ public sealed partial class MainWindow : Window
         state.Terminal.IsHitTestVisible = false;
         state.RestoreText.Text = reconnecting ? "Restoring terminal view…" : "Restoring conversation…";
         state.RestoreOverlay.IsVisible = true;
+        StartTerminalRevealTimer(state);
+    }
 
+    private void BeginTerminalResizeMask(SessionTabState state)
+    {
+        if (state.TerminalStartupGate is not null) return;
+        if (state.TerminalResizeMaskActive) return;
+        state.TerminalResizeMaskActive = true;
+        AutomationProperties.SetHelpText(state.InspectorSplitter, "Terminal redraw hidden while resizing");
+        state.Terminal.Opacity = 0;
+        state.Terminal.IsHitTestVisible = false;
+        state.RestoreText.Text = "Resizing terminal view…";
+        state.RestoreOverlay.IsVisible = true;
+    }
+
+    private void CompleteTerminalResizeReveal(SessionTabState state)
+    {
+        if (!state.TerminalResizeMaskActive || state.TerminalStartupGate is not null) return;
+        state.TerminalStartupGate = new TerminalStartupGate(
+            DateTimeOffset.UtcNow,
+            minimumWait: TimeSpan.FromMilliseconds(120),
+            quietPeriod: TimeSpan.FromMilliseconds(240),
+            noOutputMaximumWait: TimeSpan.FromMilliseconds(500),
+            maximumWait: TimeSpan.FromMilliseconds(1800));
+        state.TerminalStartupAllowsQuietReveal = true;
+        StartTerminalRevealTimer(state);
+    }
+
+    private void StartTerminalRevealTimer(SessionTabState state)
+    {
+        state.TerminalStartupTimer?.Stop();
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(75) };
         timer.Tick += (_, _) =>
         {
@@ -1552,6 +1765,8 @@ public sealed partial class MainWindow : Window
         state.TerminalStartupTimer = null;
         state.TerminalStartupGate = null;
         state.TerminalStartupAllowsQuietReveal = false;
+        state.TerminalResizeMaskActive = false;
+        AutomationProperties.SetHelpText(state.InspectorSplitter, "Drag to resize session details");
         state.RestoreOverlay.IsVisible = false;
         state.Terminal.Opacity = 1;
         state.Terminal.IsHitTestVisible = true;
@@ -2168,6 +2383,19 @@ public sealed partial class MainWindow : Window
         await SaveWorkspaceAsync();
     }
 
+    private void OnSessionFiltersToggleClicked(object? sender, RoutedEventArgs e) =>
+        SetSessionFiltersExpanded(SessionFiltersToggle.IsChecked == true);
+
+    private void SetSessionFiltersExpanded(bool expanded)
+    {
+        SessionFiltersToggle.IsChecked = expanded;
+        SessionFiltersPanel.IsVisible = expanded;
+        SessionFiltersChevron.Text = expanded ? "⌃" : "⌄";
+        AutomationProperties.SetItemStatus(
+            SessionFiltersToggle,
+            expanded ? "Expanded" : "Collapsed");
+    }
+
     private async void OnAnalyticsWindowChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_initializingAnalytics || AnalyticsWindowComboBox.SelectedIndex < 0) return;
@@ -2254,6 +2482,7 @@ public sealed partial class MainWindow : Window
 
     private void ApplyTheme(DashboardTheme theme)
     {
+        _currentTheme = theme;
         Resources["BaseBrush"] = Brush.Parse(theme.Base);
         Resources["SurfaceBrush"] = Brush.Parse(theme.Surface);
         Resources["ElevatedBrush"] = Brush.Parse(theme.Elevated);
@@ -2265,7 +2494,14 @@ public sealed partial class MainWindow : Window
         Resources["MutedBrush"] = Brush.Parse(theme.Muted);
         Resources["AccentBrush"] = Brush.Parse(theme.Accent);
         Resources["TerminalBrush"] = Brush.Parse(theme.Terminal);
+        var divider = Color.Parse(theme.BorderBright);
+        Resources["SessionDividerBrush"] = new SolidColorBrush(
+            Color.FromArgb(72, divider.R, divider.G, divider.B));
+        _sessionDividerAccent = Color.Parse(theme.Accent);
+        _sessionDividerSecondary = Color.Parse(theme.Secondary);
+        UpdateSessionHoverOverlayBrushes();
         UpdateHeaderConnectionIndicator();
+        ApplyWindowsTitleBarTheme(theme);
         Resources["ScrollBarBackground"] = Brush.Parse(theme.Elevated);
         Resources["ScrollBarForeground"] = Brush.Parse(theme.Secondary);
         Resources["ScrollBarBorderBrush"] = Brush.Parse(theme.Border);
@@ -2348,6 +2584,10 @@ public sealed partial class MainWindow : Window
         RestyleTerminalText(state);
         state.Inspector.Background = surface;
         state.Inspector.BorderBrush = border;
+        state.InspectorSplitter.Background = Brushes.Transparent;
+        state.InspectorResizeTrack.Background = surface;
+        state.InspectorResizeTrack.BorderBrush = Brush.Parse(theme.BorderBright);
+        state.InspectorResizeGrip.Background = accent;
         state.ReconnectBanner.Background = Brush.Parse(theme.Elevated);
         state.ReconnectBanner.BorderBrush = Brush.Parse(theme.BorderBright);
         state.ReconnectText.Foreground = primary;
@@ -2550,6 +2790,7 @@ public sealed partial class MainWindow : Window
     {
         _refreshTimer.Stop();
         _connectionPulseTimer.Stop();
+        _sessionHoverAnimationTimer.Stop();
         if (_statusFeed is not null) _ = _statusFeed.DisposeAsync();
         _searchCancellation?.Cancel();
         foreach (var state in _openTabs.Values.ToList())
@@ -2604,6 +2845,127 @@ public sealed partial class MainWindow : Window
         HeaderStatusHalo.Opacity = 0.08 + intensity * 0.2;
     }
 
+    private void ApplyWindowsTitleBarTheme(DashboardTheme theme)
+    {
+        var handle = TryGetPlatformHandle();
+        if (handle is null) return;
+        WindowsTitleBarTheme.Apply(
+            handle.Handle,
+            Color.Parse(theme.Surface),
+            Color.Parse(theme.Primary),
+            Color.Parse(theme.BorderBright),
+            !theme.IsLight);
+    }
+
+    private void OnSessionRowPointerEntered(object? sender, PointerEventArgs e)
+    {
+        if (sender is not Grid row) return;
+        if (ReferenceEquals(row, _hoveredSessionRow)) return;
+        _hoveredSessionRow = row;
+        _sessionHoverAnimationStartedAt = DateTimeOffset.UtcNow;
+        SessionHoverOverlay.Opacity = 1;
+        PositionSessionHoverOverlay();
+        UpdateSessionHoverAnimation();
+        _sessionHoverAnimationTimer.Start();
+    }
+
+    private void OnSessionRowPointerExited(object? sender, PointerEventArgs e)
+    {
+        if (sender is not Grid row || !ReferenceEquals(row, _hoveredSessionRow)) return;
+        ClearSessionHoverOverlay();
+    }
+
+    private void OnSessionHoverAnimationTick(object? sender, EventArgs e)
+    {
+        if (_hoveredSessionRow is null)
+        {
+            _sessionHoverAnimationTimer.Stop();
+            return;
+        }
+        PositionSessionHoverOverlay();
+        UpdateSessionHoverAnimation();
+    }
+
+    private void PositionSessionHoverOverlay()
+    {
+        if (_hoveredSessionRow is null) return;
+        var origin = _hoveredSessionRow.TranslatePoint(new Point(0, 0), SessionHoverOverlay);
+        if (origin is null) return;
+
+        var overlayWidth = SessionHoverOverlay.Bounds.Width;
+        var top = origin.Value.Y;
+        var bottom = top + _hoveredSessionRow.Bounds.Height - 1;
+        if (overlayWidth <= 0 || bottom < 0 || top > SessionHoverOverlay.Bounds.Height)
+        {
+            ClearSessionHoverOverlay();
+            return;
+        }
+
+        var bandWidth = Math.Clamp(overlayWidth * 0.34, 110, 230);
+        SessionHoverTopBaseLine.Width = overlayWidth;
+        SessionHoverBottomBaseLine.Width = overlayWidth;
+        SessionHoverTopBand.Width = bandWidth;
+        SessionHoverBottomBand.Width = bandWidth;
+        Canvas.SetLeft(SessionHoverTopBaseLine, 0);
+        Canvas.SetLeft(SessionHoverBottomBaseLine, 0);
+        Canvas.SetLeft(SessionHoverTopBand, 0);
+        Canvas.SetLeft(SessionHoverBottomBand, 0);
+        Canvas.SetTop(SessionHoverTopBaseLine, top);
+        Canvas.SetTop(SessionHoverTopBand, top);
+        Canvas.SetTop(SessionHoverBottomBaseLine, bottom);
+        Canvas.SetTop(SessionHoverBottomBand, bottom);
+    }
+
+    private void UpdateSessionHoverAnimation()
+    {
+        var elapsed = (DateTimeOffset.UtcNow - _sessionHoverAnimationStartedAt).TotalSeconds;
+        var phase = (elapsed % 3.2) / 3.2;
+        var travel = SessionHoverOverlay.Bounds.Width + SessionHoverTopBand.Width;
+        var x = -SessionHoverTopBand.Width + phase * travel;
+        _sessionHoverTopTransform.X = x;
+        _sessionHoverBottomTransform.X = x;
+    }
+
+    private void UpdateSessionHoverOverlayBrushes()
+    {
+        var baseBrush = new LinearGradientBrush
+        {
+            StartPoint = new RelativePoint(0, 0.5, RelativeUnit.Relative),
+            EndPoint = new RelativePoint(1, 0.5, RelativeUnit.Relative),
+            GradientStops = new GradientStops
+            {
+                new(Color.FromArgb(28, _sessionDividerSecondary.R, _sessionDividerSecondary.G, _sessionDividerSecondary.B), 0),
+                new(Color.FromArgb(95, _sessionDividerSecondary.R, _sessionDividerSecondary.G, _sessionDividerSecondary.B), 0.5),
+                new(Color.FromArgb(28, _sessionDividerSecondary.R, _sessionDividerSecondary.G, _sessionDividerSecondary.B), 1),
+            },
+        };
+        var bandBrush = new LinearGradientBrush
+        {
+            StartPoint = new RelativePoint(0, 0.5, RelativeUnit.Relative),
+            EndPoint = new RelativePoint(1, 0.5, RelativeUnit.Relative),
+            GradientStops = new GradientStops
+            {
+                new(Color.FromArgb(0, _sessionDividerSecondary.R, _sessionDividerSecondary.G, _sessionDividerSecondary.B), 0),
+                new(Color.FromArgb(205, _sessionDividerSecondary.R, _sessionDividerSecondary.G, _sessionDividerSecondary.B), 0.28),
+                new(Color.FromArgb(250, _sessionDividerAccent.R, _sessionDividerAccent.G, _sessionDividerAccent.B), 0.65),
+                new(Color.FromArgb(0, _sessionDividerAccent.R, _sessionDividerAccent.G, _sessionDividerAccent.B), 1),
+            },
+        };
+        SessionHoverTopBaseLine.Background = baseBrush;
+        SessionHoverBottomBaseLine.Background = baseBrush;
+        SessionHoverTopBand.Background = bandBrush;
+        SessionHoverBottomBand.Background = bandBrush;
+    }
+
+    private void ResetSessionDividerAnimations() => ClearSessionHoverOverlay();
+
+    private void ClearSessionHoverOverlay()
+    {
+        _sessionHoverAnimationTimer.Stop();
+        _hoveredSessionRow = null;
+        SessionHoverOverlay.Opacity = 0;
+    }
+
     private sealed record RepoFilter(string Label, string? WorkingDir)
     {
         public override string ToString() => Label;
@@ -2621,6 +2983,9 @@ public sealed partial class MainWindow : Window
         TerminalControl terminal,
         Grid terminalViewport,
         Border inspector,
+        GridSplitter inspectorSplitter,
+        Border inspectorResizeTrack,
+        Border inspectorResizeGrip,
         Border reconnectBanner,
         TextBlock reconnectText,
         Button reconnectButton,
@@ -2650,6 +3015,9 @@ public sealed partial class MainWindow : Window
         public TerminalView? TerminalView { get; set; }
         public Color MutedTextColor { get; set; } = Colors.Gray;
         public Border Inspector { get; } = inspector;
+        public GridSplitter InspectorSplitter { get; } = inspectorSplitter;
+        public Border InspectorResizeTrack { get; } = inspectorResizeTrack;
+        public Border InspectorResizeGrip { get; } = inspectorResizeGrip;
         public Border ReconnectBanner { get; } = reconnectBanner;
         public TextBlock ReconnectText { get; } = reconnectText;
         public Button ReconnectButton { get; } = reconnectButton;
@@ -2685,6 +3053,7 @@ public sealed partial class MainWindow : Window
         public TerminalStartupGate? TerminalStartupGate { get; set; }
         public DispatcherTimer? TerminalStartupTimer { get; set; }
         public bool TerminalStartupAllowsQuietReveal { get; set; }
+        public bool TerminalResizeMaskActive { get; set; }
         public bool ArchiveConfirmationPending { get; set; }
     }
 }
