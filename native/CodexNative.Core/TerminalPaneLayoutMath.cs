@@ -2,6 +2,18 @@ namespace CodexNative.Core;
 
 public static class TerminalPaneLayoutMath
 {
+    public static (double Left, double Right) ResizePair(
+        double leftWidth,
+        double rightWidth,
+        double requestedChange,
+        double minimumWidth)
+    {
+        var minimum = Math.Max(0, minimumWidth);
+        var total = Math.Max(minimum * 2, Math.Max(0, leftWidth) + Math.Max(0, rightWidth));
+        var left = Math.Clamp(Math.Max(0, leftWidth) + requestedChange, minimum, total - minimum);
+        return (left, total - left);
+    }
+
     public static double EqualPaneWidth(double viewportWidth, int paneCount, double minimumWidth, double splitterWidth)
     {
         if (paneCount <= 0) return 0;

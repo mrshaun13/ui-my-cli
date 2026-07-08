@@ -5,13 +5,18 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using CodexNative.Core;
 using Iciclecreek.Terminal;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace CodexNative;
 
@@ -42,6 +47,7 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, TabItem> _previewTabs = [];
     private readonly Dictionary<TabItem, TerminalPaneState> _previewPaneByTab = [];
     private readonly List<TerminalPaneState> _panes = [];
+    private readonly List<Border> _paneSplitters = [];
     private readonly HashSet<TerminalPaneState> _paneRemovalsInProgress = [];
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _connectionPulseTimer;
@@ -77,10 +83,14 @@ public sealed partial class MainWindow : Window
     private bool _isDashboardConnected;
     private bool _restoringPaneLayout;
     private bool _updatingPaneLayout;
+    private bool _screenshotCaptureInProgress;
     private int _refreshTick;
     private TerminalPaneState _activePane = null!;
     private readonly DateTimeOffset _connectionPulseStartedAt = DateTimeOffset.UtcNow;
     private DateTimeOffset _sessionHoverAnimationStartedAt = DateTimeOffset.UtcNow;
+
+    [DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
 
     public MainWindow()
     {
@@ -421,6 +431,7 @@ public sealed partial class MainWindow : Window
             if (equalize) EqualizePaneWidths();
             PaneHost.Children.Clear();
             PaneHost.ColumnDefinitions.Clear();
+            _paneSplitters.Clear();
             for (var index = 0; index < _panes.Count; index++)
             {
                 var pane = _panes[index];
@@ -437,20 +448,78 @@ public sealed partial class MainWindow : Window
                 PaneHost.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(PaneSplitterWidth)));
                 var left = pane;
                 var right = _panes[index + 1];
-                var splitter = new GridSplitter
+                var leftColumnIndex = index * 2;
+                var splitterColumnIndex = leftColumnIndex + 1;
+                var rightColumnIndex = leftColumnIndex + 2;
+                var splitter = new Border
                 {
                     Width = PaneSplitterWidth,
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                     VerticalAlignment = VerticalAlignment.Stretch,
-                    ResizeDirection = GridResizeDirection.Columns,
-                    ResizeBehavior = GridResizeBehavior.PreviousAndNext,
-                    ShowsPreview = true,
                     Background = ResourceBrush("BorderBrush"),
                     Cursor = new Cursor(StandardCursorType.SizeWestEast),
+                    ZIndex = 20,
                 };
-                splitter.PointerPressed += (_, _) => BeginHorizontalPaneResize(left, right);
-                splitter.DragCompleted += (_, _) => CompleteHorizontalPaneResize(left, right);
-                Grid.SetColumn(splitter, index * 2 + 1);
+                var previewTransform = new TranslateTransform();
+                splitter.RenderTransform = previewTransform;
+                var horizontalDragActive = false;
+                var horizontalDragStartX = 0d;
+                var leftStartWidth = left.Width;
+                var rightStartWidth = right.Width;
+                var pendingLeftWidth = left.Width;
+                var pendingRightWidth = right.Width;
+                splitter.PointerEntered += (_, _) => splitter.Background = ResourceBrush("BorderBrightBrush");
+                splitter.PointerExited += (_, _) =>
+                {
+                    if (!horizontalDragActive) splitter.Background = ResourceBrush("BorderBrush");
+                };
+                splitter.PointerPressed += (_, args) =>
+                {
+                    if (!args.GetCurrentPoint(splitter).Properties.IsLeftButtonPressed) return;
+                    horizontalDragActive = true;
+                    horizontalDragStartX = args.GetPosition(PaneHost).X;
+                    leftStartWidth = PaneHost.ColumnDefinitions[leftColumnIndex].ActualWidth;
+                    rightStartWidth = PaneHost.ColumnDefinitions[rightColumnIndex].ActualWidth;
+                    pendingLeftWidth = leftStartWidth;
+                    pendingRightWidth = rightStartWidth;
+                    splitter.Background = ResourceBrush("AccentBrush");
+                    args.Pointer.Capture(splitter);
+                    args.Handled = true;
+                };
+                splitter.PointerMoved += (_, args) =>
+                {
+                    if (!horizontalDragActive) return;
+                    var requestedChange = args.GetPosition(PaneHost).X - horizontalDragStartX;
+                    var resized = TerminalPaneLayoutMath.ResizePair(
+                        leftStartWidth,
+                        rightStartWidth,
+                        requestedChange,
+                        MinimumPaneWidth);
+                    pendingLeftWidth = resized.Left;
+                    pendingRightWidth = resized.Right;
+                    previewTransform.X = pendingLeftWidth - leftStartWidth;
+                    args.Handled = true;
+                };
+                splitter.PointerReleased += (_, args) =>
+                {
+                    if (!horizontalDragActive) return;
+                    horizontalDragActive = false;
+                    args.Pointer.Capture(null);
+                    previewTransform.X = 0;
+                    left.Width = pendingLeftWidth;
+                    right.Width = pendingRightWidth;
+                    CompleteHorizontalPaneResize(left, right);
+                    args.Handled = true;
+                };
+                splitter.PointerCaptureLost += (_, _) =>
+                {
+                    if (!horizontalDragActive) return;
+                    horizontalDragActive = false;
+                    previewTransform.X = 0;
+                    splitter.Background = ResourceBrush("BorderBrush");
+                };
+                Grid.SetColumn(splitter, splitterColumnIndex);
+                _paneSplitters.Add(splitter);
                 PaneHost.Children.Add(splitter);
             }
             PaneHost.Width = TerminalPaneLayoutMath.TotalWidth(
@@ -482,23 +551,11 @@ public sealed partial class MainWindow : Window
         if (_panes.Count == 1) RebuildPaneHost(equalize: true);
     }
 
-    private void BeginHorizontalPaneResize(params TerminalPaneState[] panes)
-    {
-        foreach (var state in _openTabs.Values.Where(state => panes.Contains(state.Pane)))
-            BeginTerminalResizeMask(state);
-    }
-
     private void CompleteHorizontalPaneResize(TerminalPaneState left, TerminalPaneState right)
     {
-        var leftIndex = _panes.IndexOf(left) * 2;
-        var rightIndex = _panes.IndexOf(right) * 2;
-        if (leftIndex >= 0 && leftIndex < PaneHost.ColumnDefinitions.Count)
-            left.Width = Math.Max(MinimumPaneWidth, PaneHost.ColumnDefinitions[leftIndex].ActualWidth);
-        if (rightIndex >= 0 && rightIndex < PaneHost.ColumnDefinitions.Count)
-            right.Width = Math.Max(MinimumPaneWidth, PaneHost.ColumnDefinitions[rightIndex].ActualWidth);
+        left.Width = Math.Max(MinimumPaneWidth, left.Width);
+        right.Width = Math.Max(MinimumPaneWidth, right.Width);
         RebuildPaneHost(equalize: false);
-        foreach (var state in _openTabs.Values.Where(state => ReferenceEquals(state.Pane, left) || ReferenceEquals(state.Pane, right)))
-            CompleteTerminalResizeReveal(state);
         _ = SaveWorkspaceAsync();
     }
 
@@ -2078,14 +2135,36 @@ public sealed partial class MainWindow : Window
             Background = Brushes.Transparent,
             Child = terminal,
         };
+        var screenshotButton = new Button
+        {
+            Content = "📷",
+            Width = 32,
+            Height = 28,
+            Padding = new Thickness(0),
+            FontSize = 15,
+            Opacity = 0.82,
+            IsVisible = !isUbuntu,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(9, 0, 0, 8),
+            Background = ResourceBrush("ElevatedBrush"),
+            BorderBrush = ResourceBrush("BorderBrightBrush"),
+        };
+        ToolTip.SetTip(screenshotButton, "Capture and attach a screenshot");
+        AutomationProperties.SetName(screenshotButton, "Capture and attach a screenshot");
         content.Children.Add(terminalClip);
+        content.Children.Add(screenshotButton);
         content.Children.Add(reconnectBanner);
         content.Children.Add(restoreOverlay);
         content.Children.Add(inspectorResizeTrack);
         content.Children.Add(inspector);
         Grid.SetRow(inspectorResizeTrack, 1);
         Grid.SetRow(inspector, 2);
+        Grid.SetRow(screenshotButton, 0);
         terminalClip.ZIndex = 0;
+        screenshotButton.ZIndex = 5;
         inspectorResizeTrack.ZIndex = 3;
         inspector.ZIndex = 2;
         reconnectBanner.ZIndex = 4;
@@ -2148,7 +2227,8 @@ public sealed partial class MainWindow : Window
         };
         AutomationProperties.SetName(tab, title);
         var state = new SessionTabState(
-            key, tab, terminal, content, inspector, inspectorBody, inspectorHeading, inspectorToggleButton, inspectorSplitter,
+            key, tab, terminal, content, screenshotButton,
+            inspector, inspectorBody, inspectorHeading, inspectorToggleButton, inspectorSplitter,
             inspectorResizeTrack, inspectorResizeGrip,
             reconnectBanner, reconnectText, reconnectButton,
             restoreOverlay, restoreText,
@@ -2158,6 +2238,7 @@ public sealed partial class MainWindow : Window
             workingDirectory, session, kind, pane);
 
         ApplyThemeToSessionState(state, DashboardTheme.Find(_settings.StyleId));
+        screenshotButton.Click += async (_, _) => await CaptureAndPasteScreenshotAsync(state);
         var inspectorDragActive = false;
         var inspectorDragStartY = 0d;
         var inspectorDragStartHeight = pane.InspectorHeight;
@@ -2292,6 +2373,13 @@ public sealed partial class MainWindow : Window
         try
         {
             terminalView.Focus();
+            var state = _openTabs.Values.FirstOrDefault(candidate =>
+                ReferenceEquals(candidate.Terminal, terminal));
+            if (state?.Kind == TerminalSessionKind.Codex
+                && await TryPasteClipboardScreenshotAsync(state, terminalView))
+            {
+                return;
+            }
             await terminalView.PasteAsync();
         }
         catch (Exception ex)
@@ -2299,6 +2387,202 @@ public sealed partial class MainWindow : Window
             NativeLog.Write($"Terminal paste failed: {ex}");
             SetStatus($"Paste failed: {ex.Message}", ErrorBrush);
         }
+    }
+
+    private async Task<bool> TryPasteClipboardScreenshotAsync(
+        SessionTabState state,
+        TerminalView terminalView)
+    {
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null) return false;
+
+        Bitmap? bitmap;
+        try
+        {
+            bitmap = await clipboard.TryGetBitmapAsync();
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Clipboard bitmap probe failed; falling back to text paste: {ex}");
+            return false;
+        }
+        if (bitmap is null) return false;
+
+        using (bitmap)
+        {
+            var pixels = (long)bitmap.PixelSize.Width * bitmap.PixelSize.Height;
+            if (pixels <= 0 || pixels > _settings.ScreenshotMaximumPixels)
+                throw new InvalidOperationException(
+                    $"Clipboard image is too large ({bitmap.PixelSize.Width}×{bitmap.PixelSize.Height}).");
+
+            var captureRoot = _settings.EffectiveScreenshotCaptureDirectory;
+            CleanupScreenshotCaptures(captureRoot, _settings.ScreenshotRetention);
+            var sessionFolder = Path.Combine(captureRoot, ScreenshotSessionFolder(state.Key));
+            Directory.CreateDirectory(sessionFolder);
+            var fileName = $"capture-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.png";
+            var windowsPath = Path.Combine(sessionFolder, fileName);
+            bitmap.Save(windowsPath);
+
+            var wslPath = await ResolveScreenshotWslPathAsync(windowsPath);
+            var composerReference = ScreenshotAttachmentPath.ComposerReference(wslPath);
+            Exception? restoreError = null;
+            try
+            {
+                await clipboard.SetTextAsync(composerReference);
+                await terminalView.PasteAsync();
+            }
+            finally
+            {
+                try { await clipboard.SetBitmapAsync(bitmap); }
+                catch (Exception ex) { restoreError = ex; }
+            }
+
+            if (restoreError is not null)
+                NativeLog.Write($"Screenshot pasted but clipboard bitmap restore failed: {restoreError}");
+            SetStatus(
+                $"Screenshot attached · {bitmap.PixelSize.Width}×{bitmap.PixelSize.Height} · {fileName}",
+                RunningBrush);
+            return true;
+        }
+    }
+
+    private async Task CaptureAndPasteScreenshotAsync(SessionTabState state)
+    {
+        if (_screenshotCaptureInProgress)
+        {
+            SetStatus("Finish the active screenshot capture first.", StartingBrush);
+            return;
+        }
+        if (!OperatingSystem.IsWindows())
+        {
+            SetStatus("Screen capture is available only in the Windows native app.", ErrorBrush);
+            return;
+        }
+
+        AttachTerminalVisualStyling(state);
+        var terminalView = state.TerminalView
+            ?? state.Terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault();
+        if (terminalView is null)
+        {
+            SetStatus("The terminal must be ready before capturing a screenshot.", StartingBrush);
+            return;
+        }
+
+        _screenshotCaptureInProgress = true;
+        SetScreenshotCaptureButtonsEnabled(false);
+        try
+        {
+            var clipboardSequence = GetClipboardSequenceNumber();
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-screenclip:")
+            {
+                UseShellExecute = true,
+            });
+            SetStatus("Select a screen region; it will attach automatically.", StartingBrush);
+
+            var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(60);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(150);
+                if (GetClipboardSequenceNumber() == clipboardSequence) continue;
+                if (!await TryPasteClipboardScreenshotAsync(state, terminalView)) continue;
+
+                Activate();
+                terminalView.Focus();
+                return;
+            }
+            SetStatus("Screenshot capture was canceled or timed out.", StartingBrush);
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Screenshot capture failed: {ex}");
+            SetStatus($"Screenshot capture failed: {ex.Message}", ErrorBrush);
+        }
+        finally
+        {
+            _screenshotCaptureInProgress = false;
+            SetScreenshotCaptureButtonsEnabled(true);
+        }
+    }
+
+    private void SetScreenshotCaptureButtonsEnabled(bool enabled)
+    {
+        foreach (var candidate in _openTabs.Values)
+            candidate.ScreenshotButton.IsEnabled = enabled;
+    }
+
+    private async Task<string> ResolveScreenshotWslPathAsync(string windowsPath)
+    {
+        try
+        {
+            var wslExecutable = Path.Combine(Environment.SystemDirectory, "wsl.exe");
+            var startInfo = new System.Diagnostics.ProcessStartInfo(wslExecutable)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            startInfo.ArgumentList.Add("--distribution");
+            startInfo.ArgumentList.Add(_settings.Distribution);
+            startInfo.ArgumentList.Add("--exec");
+            startInfo.ArgumentList.Add("wslpath");
+            startInfo.ArgumentList.Add("-a");
+            startInfo.ArgumentList.Add("-u");
+            startInfo.ArgumentList.Add(windowsPath);
+            using var process = System.Diagnostics.Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Could not start wsl.exe.");
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var outputTask = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            var errorTask = process.StandardError.ReadToEndAsync(timeout.Token);
+            await process.WaitForExitAsync(timeout.Token);
+            var output = (await outputTask).Trim();
+            var error = (await errorTask).Trim();
+            if (process.ExitCode == 0
+                && output.StartsWith("/", StringComparison.Ordinal)
+                && !output.Any(char.IsControl))
+            {
+                return output;
+            }
+            if (!string.IsNullOrWhiteSpace(error))
+                NativeLog.Write($"wslpath failed for screenshot attachment: {error}");
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"wslpath screenshot resolution failed; using standard mount fallback: {ex}");
+        }
+        return ScreenshotAttachmentPath.ToWslPath(windowsPath);
+    }
+
+    private static string ScreenshotSessionFolder(string sessionKey)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sessionKey));
+        return Convert.ToHexString(hash)[..12].ToLowerInvariant();
+    }
+
+    private static void CleanupScreenshotCaptures(string captureRoot, TimeSpan retention)
+    {
+        if (!Directory.Exists(captureRoot)) return;
+        var cutoff = DateTime.UtcNow - retention;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(captureRoot, "capture-*.png", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file);
+                }
+                catch { }
+            }
+            foreach (var directory in Directory.EnumerateDirectories(captureRoot))
+            {
+                try
+                {
+                    if (!Directory.EnumerateFileSystemEntries(directory).Any()) Directory.Delete(directory);
+                }
+                catch { }
+            }
+        }
+        catch { }
     }
 
     private void OnTerminalPointerWheelChanged(object? sender, PointerWheelEventArgs args)
@@ -2565,31 +2849,6 @@ public sealed partial class MainWindow : Window
         StartTerminalRevealTimer(state);
     }
 
-    private void BeginTerminalResizeMask(SessionTabState state)
-    {
-        if (state.TerminalStartupGate is not null) return;
-        if (state.TerminalResizeMaskActive) return;
-        state.TerminalResizeMaskActive = true;
-        AutomationProperties.SetHelpText(state.InspectorSplitter, "Terminal redraw hidden while resizing");
-        state.Terminal.Opacity = 0;
-        state.Terminal.IsHitTestVisible = false;
-        state.RestoreText.Text = "Resizing terminal view…";
-        state.RestoreOverlay.IsVisible = true;
-    }
-
-    private void CompleteTerminalResizeReveal(SessionTabState state)
-    {
-        if (!state.TerminalResizeMaskActive || state.TerminalStartupGate is not null) return;
-        state.TerminalStartupGate = new TerminalStartupGate(
-            DateTimeOffset.UtcNow,
-            minimumWait: TimeSpan.FromMilliseconds(120),
-            quietPeriod: TimeSpan.FromMilliseconds(240),
-            noOutputMaximumWait: TimeSpan.FromMilliseconds(500),
-            maximumWait: TimeSpan.FromMilliseconds(1800));
-        state.TerminalStartupAllowsQuietReveal = true;
-        StartTerminalRevealTimer(state);
-    }
-
     private void StartTerminalRevealTimer(SessionTabState state)
     {
         state.TerminalStartupTimer?.Stop();
@@ -2612,7 +2871,6 @@ public sealed partial class MainWindow : Window
         state.TerminalStartupTimer = null;
         state.TerminalStartupGate = null;
         state.TerminalStartupAllowsQuietReveal = false;
-        state.TerminalResizeMaskActive = false;
         AutomationProperties.SetHelpText(state.InspectorSplitter, "Drag to resize session details");
         state.RestoreOverlay.IsVisible = false;
         state.Terminal.Opacity = 1;
@@ -3603,7 +3861,7 @@ public sealed partial class MainWindow : Window
         }
         PaneWorkspaceScroll.Background = Brush.Parse(theme.Base);
         PaneHost.Background = Brush.Parse(theme.Base);
-        foreach (var paneSplitter in PaneHost.Children.OfType<GridSplitter>())
+        foreach (var paneSplitter in _paneSplitters)
         {
             paneSplitter.Background = Brush.Parse(theme.Border);
         }
@@ -3633,6 +3891,9 @@ public sealed partial class MainWindow : Window
         state.Terminal.Background = terminal;
         state.Terminal.Foreground = primary;
         state.TerminalViewport.Background = terminal;
+        state.ScreenshotButton.Background = Brush.Parse(theme.Elevated);
+        state.ScreenshotButton.BorderBrush = Brush.Parse(theme.BorderBright);
+        state.ScreenshotButton.Foreground = primary;
         state.MutedTextColor = Color.Parse(theme.Muted);
 
         // TerminalControl's template owns the actual drawing surface. Updating the
@@ -4160,6 +4421,7 @@ public sealed partial class MainWindow : Window
         TabItem tab,
         TerminalControl terminal,
         Grid terminalViewport,
+        Button screenshotButton,
         Border inspector,
         ScrollViewer inspectorBody,
         TextBlock inspectorHeading,
@@ -4194,6 +4456,7 @@ public sealed partial class MainWindow : Window
         public TabItem Tab { get; } = tab;
         public TerminalControl Terminal { get; } = terminal;
         public Grid TerminalViewport { get; } = terminalViewport;
+        public Button ScreenshotButton { get; } = screenshotButton;
         public TerminalView? TerminalView { get; set; }
         public Color MutedTextColor { get; set; } = Colors.Gray;
         public Border Inspector { get; } = inspector;
@@ -4239,7 +4502,6 @@ public sealed partial class MainWindow : Window
         public TerminalStartupGate? TerminalStartupGate { get; set; }
         public DispatcherTimer? TerminalStartupTimer { get; set; }
         public bool TerminalStartupAllowsQuietReveal { get; set; }
-        public bool TerminalResizeMaskActive { get; set; }
         public bool ArchiveConfirmationPending { get; set; }
     }
 }

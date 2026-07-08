@@ -30,6 +30,15 @@ and replays recent scrollback.
   WSL projects and paths. Ubuntu tabs open a direct login shell in the selected
   project and close the shell when the tab or application closes.
 - Automatic reconciliation of new terminals with their saved Codex session ID.
+- Clipboard-aware screenshot paste: copy a Windows snip, press `Ctrl+V` in a
+  Codex terminal, and the native client stores a managed temporary PNG and
+  inserts its WSL-accessible image reference into the composer. Storage defaults
+  to the current Windows user's `%LOCALAPPDATA%\CodexNative\captures` directory,
+  and paths are translated through the configured WSL distribution. The capture
+  directory, retention period (three days by default), and maximum image size
+  are configurable; ordinary text paste is unchanged.
+  Each Codex viewport also has a camera button that opens Windows screen
+  clipping and attaches the completed capture without requiring `Ctrl+V`.
 - Per-session context usage, model, reasoning, permissions, rules, active
   skills, latest prompt, rename, and archive controls.
 - Native session summaries with complete conversation history, copy actions,
@@ -72,6 +81,25 @@ and replays recent scrollback.
 - Desktop shortcuts: `Ctrl+K` search, `Ctrl+Shift+N` new Codex or Ubuntu
   session, `Ctrl+R` refresh, `Ctrl+W` detach a Codex tab or close an Ubuntu
   tab, and `Esc` return home.
+
+### Screenshot storage settings
+
+Screenshot storage is per Windows user and contains no fixed user or WSL home
+path. These optional properties in `%LOCALAPPDATA%\CodexNative\settings.json`
+control the managed capture cache:
+
+```json
+{
+  "ScreenshotCaptureDirectory": "%LOCALAPPDATA%\\CodexNative\\captures",
+  "ScreenshotRetentionDays": 3,
+  "ScreenshotMaximumMegapixels": 32
+}
+```
+
+`ScreenshotCaptureDirectory` accepts an absolute Windows path with environment
+variables. Invalid or relative values fall back to the per-user default.
+Positive retention values are constrained to 1–90 days and positive image-size
+values to 1–100 megapixels; missing or non-positive values use the defaults.
 
 ## Build
 

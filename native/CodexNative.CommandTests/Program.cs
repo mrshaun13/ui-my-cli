@@ -232,6 +232,20 @@ Check("terminal pane layout equalizes until minimum width then overflows", () =>
     Equal(497.5, TerminalPaneLayoutMath.EqualPaneWidth(1000, 2, 460, 5));
     Equal(460d, TerminalPaneLayoutMath.EqualPaneWidth(1000, 3, 460, 5));
     Equal(1390d, TerminalPaneLayoutMath.TotalWidth([460d, 460d, 460d], 5));
+    Equal((540d, 460d), TerminalPaneLayoutMath.ResizePair(500, 500, 100, 460));
+    Equal((460d, 540d), TerminalPaneLayoutMath.ResizePair(500, 500, -100, 460));
+});
+
+Check("clipboard screenshot paths become standalone WSL composer references", () =>
+{
+    var wslPath = ScreenshotAttachmentPath.ToWslPath(
+        @"C:\Users\tester\AppData\Local\CodexNative\captures\shot.png");
+    Equal("/mnt/c/Users/tester/AppData/Local/CodexNative/captures/shot.png", wslPath);
+    Equal(
+        "`/mnt/c/Users/tester/AppData/Local/CodexNative/captures/shot.png` ",
+        ScreenshotAttachmentPath.ComposerReference(wslPath));
+    Throws<ArgumentException>(() => ScreenshotAttachmentPath.ToWslPath(@"relative\shot.png"));
+    Throws<ArgumentException>(() => ScreenshotAttachmentPath.ComposerReference("/tmp/bad`path.png"));
 });
 
 if (failures.Count > 0)
