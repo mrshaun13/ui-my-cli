@@ -14,6 +14,7 @@
     "docs": "node scripts/generate-docs.js",
     "docs:check": "node scripts/generate-docs.js --check",
     "test": "npx playwright test",
+    "test:unit": "node --test tests/unit/*.test.js",
     "test:smoke": "npx playwright test tests/smoke.spec.js",
     "native:build": "dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.TerminalHost/CodexNative.TerminalHost.csproj && dotnet build native/CodexNative.Updater/CodexNative.Updater.csproj",
     "native:version:check": "node scripts/check-native-version.mjs",

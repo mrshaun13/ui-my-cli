@@ -56,6 +56,23 @@ test.describe('Dashboard smoke tests', () => {
     }
   });
 
+  test('Codex usage rollups expose token and credit coverage by window and dimension', async ({ request }) => {
+    const response = await request.get('/api/codex/stats?statsMode=codex');
+    expect(response.ok()).toBeTruthy();
+    const stats = await response.json();
+    for (const window of ['1d', '7d', 'all']) {
+      const rollup = stats.usageRollups?.[window];
+      expect(rollup).toBeTruthy();
+      expect(rollup.totals.totalTokens).toBeGreaterThanOrEqual(0);
+      expect(rollup.totals.pricingCoverage).toBeGreaterThanOrEqual(0);
+      expect(rollup.totals.pricingCoverage).toBeLessThanOrEqual(1);
+      expect(Array.isArray(rollup.models)).toBeTruthy();
+      expect(Array.isArray(rollup.projects)).toBeTruthy();
+      expect(Array.isArray(rollup.sessions)).toBeTruthy();
+    }
+    expect(stats.pricing?.source).toContain('developers.openai.com/codex/pricing');
+  });
+
   test('dashboard loads and renders sidebar + topbar', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator(SELECTORS.sidebar)).toBeVisible();
