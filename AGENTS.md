@@ -15,7 +15,7 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - `npm run pm2:restart` — `npm run build && pm2 restart codex-dashboard`
 - `npm run pm2:stop` — `pm2 stop codex-dashboard`
 - `npm run pm2:logs` — `pm2 logs codex-dashboard`
-- `npm run postinstall` — `cd client && npm install`
+- `npm run postinstall` — `npm --prefix client ci`
 - `npm run docs` — `node scripts/generate-docs.js`
 - `npm run docs:check` — `node scripts/generate-docs.js --check`
 - `npm run test` — `npx playwright test`
@@ -103,6 +103,7 @@ list". Archive behavior is provider-owned: Codex uses `codex archive` /
 - Production: `npm start` — must run `npm run build` first.
 - Development: `node --watch server/index.js` + `cd client && npm run dev`.
 - **PM2 caveat** — PM2 keeps the old process in memory until explicitly restarted. After any server-side code change, always run `npm run pm2:restart` (which rebuilds the client and restarts the process). A bare `npm run build` is **not enough** — the running Node process still executes the old code.
+- **Plan artifacts** — Files under `plans/` are working documents and must remain local/untracked by default. Do not stage or commit a plan unless the user explicitly asks for that specific plan to be committed. A generated or review plan is not release content.
 
 ## Decision-Making Philosophy
 

@@ -24,8 +24,10 @@ const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 
-const { attachClient, killPty, isPtyActive, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
+const { attachClient, killPty, isPtyActive, isPtyAdaptive, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
 const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./providers');
+const { isTrustedLaunchRequest, launchNativeDashboard, nativeLaunchCapability } = require('./native-launcher');
+const { CodexAppServer } = require('./codex-app-server');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
 // v2 adds the complete native analytics contract: usageRollups, pricing,
@@ -42,6 +44,9 @@ const pendingToReal = new Map();
 
 const app = express();
 const server = http.createServer(app);
+const codexAppServer = new CodexAppServer({
+  executable: () => getProvider('codex').codexExecutable(),
+});
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
@@ -72,6 +77,28 @@ app.get('/api/providers', (_req, res) => {
   res.json(safeListProviders());
 });
 
+app.get('/api/native/launch/status', (_req, res) => {
+  res.json({ ok: true, ...nativeLaunchCapability() });
+});
+
+app.post('/api/native/launch', async (req, res) => {
+  if (!isTrustedLaunchRequest({
+    origin: req.get('origin'),
+    host: req.get('host'),
+    fetchSite: req.get('sec-fetch-site'),
+  })) {
+    return res.status(403).json({ error: 'Native launch requires a same-origin local dashboard request.' });
+  }
+  try {
+    const action = await launchNativeDashboard();
+    res.json({ ok: true, action });
+  } catch (err) {
+    const unavailable = err.code === 'NATIVE_LAUNCH_UNAVAILABLE';
+    console.error('[native:launch] error:', err.message);
+    res.status(unavailable ? 501 : 500).json({ error: err.message });
+  }
+});
+
 app.get(['/api/:providerId/terminals', '/api/terminals'], providerRoute((provider, _req, res) => {
   res.json(activePtySessions(provider.id));
 }));
@@ -94,6 +121,14 @@ function providerRoute(handler) {
 
 function pendingKey(providerId, tempKey) {
   return `${providerId}:${tempKey}`;
+}
+
+function isExistingDirectory(candidate) {
+  try {
+    return fs.statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 app.get(['/api/:providerId/stats', '/api/stats'], providerRoute((provider, req, res) => {
@@ -154,13 +189,13 @@ app.get(['/api/:providerId/repos', '/api/repos'], providerRoute((provider, _req,
   }
 }));
 
-app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerRoute((provider, req, res) => {
+app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerRoute(async (provider, req, res) => {
   const { workingDir } = req.body;
   if (!workingDir || typeof workingDir !== 'string') {
     return res.status(400).json({ error: 'workingDir is required' });
   }
-  if (!fs.existsSync(workingDir)) {
-    return res.status(400).json({ error: 'workingDir does not exist on disk' });
+  if (!isExistingDirectory(workingDir)) {
+    return res.status(400).json({ error: 'workingDir must be an existing directory' });
   }
 
   try {
@@ -168,7 +203,9 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
     const before = provider.listSessionIds();
     const tempKey = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    spawnNewSession(provider.id, tempKey, workingDir);
+    const adaptive = provider.id === 'codex' && req.body.adaptive === true;
+    const remoteEndpoint = adaptive ? await codexAppServer.ensureStarted() : null;
+    spawnNewSession(provider.id, tempKey, workingDir, 80, 24, { remoteEndpoint });
     console.log(`[${provider.id}:create] spawned new session in ${workingDir} (key: ${tempKey})`);
 
     // Return immediately — the client connects its terminal to the temp key.
@@ -207,6 +244,67 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
     res.status(500).json({ error: err.message });
   }
 }));
+
+app.get('/api/codex/adaptive/models', async (_req, res) => {
+  try {
+    const models = await codexAppServer.listModels();
+    res.json(models
+      .filter(model => !model.hidden)
+      .map(model => ({
+        id: model.id,
+        model: model.model,
+        displayName: model.displayName,
+        description: model.description,
+        isDefault: model.isDefault,
+        defaultReasoningEffort: model.defaultReasoningEffort,
+        supportedReasoningEfforts: model.supportedReasoningEfforts,
+        serviceTiers: model.serviceTiers,
+      })));
+  } catch (err) {
+    console.error('[codex:adaptive] model catalog error:', err.message);
+    res.status(503).json({ error: err.message });
+  }
+});
+
+app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
+  const sessionId = req.params.id;
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  const preference = typeof req.body?.preference === 'string' ? req.body.preference : 'balanced';
+  const workingDir = typeof req.body?.workingDir === 'string' ? req.body.workingDir.trim() : '';
+  if (!text) return res.status(400).json({ error: 'text is required' });
+  if (text.length > 100000) return res.status(413).json({ error: 'Adaptive prompt is too large' });
+  try {
+    if (sessionId.startsWith('pending-')) {
+      if (!workingDir || !isExistingDirectory(workingDir)) {
+        return res.status(400).json({ error: 'A valid workingDir is required for the first Adaptive prompt.' });
+      }
+      if (!isPtyActive('codex', sessionId)) {
+        return res.status(404).json({ error: 'Pending Codex terminal not found.' });
+      }
+      if (!isPtyAdaptive('codex', sessionId)) {
+        return res.status(409).json({ error: 'Enable Adaptive before submitting a routed prompt.' });
+      }
+      const route = await codexAppServer.startAdaptiveTurn(workingDir, text, preference);
+      const realId = route.threadId;
+      pendingToReal.set(pendingKey('codex', sessionId), realId);
+      killPty('codex', sessionId);
+      broadcastRekey('codex', sessionId, realId);
+      broadcastSessions('codex');
+      console.log(`[codex:adaptive] first turn ${sessionId.slice(0, 20)}… → ${realId.slice(0, 8)}… · ${route.model} · ${route.effort}`);
+      return res.json({ ...route, sessionId: realId });
+    }
+    if (!isPtyAdaptive('codex', sessionId)) {
+      return res.status(409).json({ error: 'Enable Adaptive and wait for this terminal to reconnect before submitting.' });
+    }
+    const route = await codexAppServer.submitAdaptiveTurn(sessionId, text, preference);
+    console.log(`[codex:adaptive] ${sessionId.slice(0, 8)}… → ${route.model} · ${route.effort} · ${route.level} (${route.source})`);
+    res.json(route);
+  } catch (err) {
+    console.error(`[codex:adaptive] submit ${sessionId.slice(0, 8)}… failed:`, err.message);
+    const conflict = /active turn|already.*turn|in progress/i.test(err.message);
+    res.status(conflict ? 409 : 500).json({ error: err.message });
+  }
+});
 
 app.get(['/api/:providerId/sessions/:id/preview', '/api/sessions/:id/preview'], providerRoute((provider, req, res) => {
   try {
@@ -448,7 +546,7 @@ function watchProvider(provider) {
   return watchers;
 }
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', async (ws, req) => {
   const parsedUrl = new URL(req.url, 'http://localhost');
   const pathname = parsedUrl.pathname || '';
 
@@ -471,6 +569,7 @@ wss.on('connection', (ws, req) => {
     // Parse initial dimensions from query string
     const cols = parseInt(parsedUrl.searchParams.get('cols') || '80', 10);
     const rows = parseInt(parsedUrl.searchParams.get('rows') || '24', 10);
+    const adaptive = provider.id === 'codex' && parsedUrl.searchParams.get('adaptive') === '1';
 
     // For pending sessions (from "New Session"), the PTY already exists in the
     // map under the temp key — attachClient will find it and attach the WS client.
@@ -479,8 +578,18 @@ wss.on('connection', (ws, req) => {
     const session = isPending ? null : provider.getSession(sessionId);
     const workingDir = session?.workingDir || null;
 
-    console.log(`[${provider.id}:pty] attaching to ${isPending ? 'pending' : 'session'} ${sessionId.slice(0, 20)}… (${cols}x${rows})`);
-    attachClient(provider.id, sessionId, workingDir, ws, cols, rows);
+    let remoteEndpoint = null;
+    if (adaptive) {
+      try {
+        remoteEndpoint = await codexAppServer.ensureStarted();
+      } catch (err) {
+        console.error('[codex:adaptive] terminal control plane failed:', err.message);
+        ws.close(1011, 'Adaptive control plane unavailable');
+        return;
+      }
+    }
+    console.log(`[${provider.id}:pty] attaching to ${isPending ? 'pending' : 'session'} ${sessionId.slice(0, 20)}… (${cols}x${rows}${adaptive ? ', adaptive' : ''})`);
+    attachClient(provider.id, sessionId, workingDir, ws, cols, rows, { remoteEndpoint });
     return;
   }
 
@@ -567,6 +676,8 @@ server.listen(PORT, '127.0.0.1', () => {
     for (const entry of activePtySessions()) {
       try { killPty(entry.providerId, entry.sessionId); } catch { /* ignore */ }
     }
+
+    codexAppServer.stop();
 
     // Close all WebSocket clients
     for (const clients of statusClients.values()) {

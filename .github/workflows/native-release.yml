@@ -5,8 +5,15 @@ on:
     paths:
       - '.github/workflows/native-release.yml'
       - 'Directory.Build.props'
+      - 'client/**'
       - 'native/**'
+      - 'server/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
       - 'scripts/check-native-version.mjs'
+      - 'scripts/doc-prose.js'
+      - 'scripts/generate-docs.js'
       - 'scripts/package-native-release.py'
       - 'scripts/publish-native.sh'
   push:
@@ -48,8 +55,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
       - run: node scripts/check-native-version.mjs
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - run: npm ci
       - run: npm run docs:check
-      - run: npm run test:unit
+      - run: node --test tests/*.test.mjs tests/unit/*.test.js
+      - run: npm run build
       - run: npm run native:test
 
   build:

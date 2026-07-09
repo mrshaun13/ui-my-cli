@@ -22,7 +22,12 @@ public sealed record NativeSettings(
     double SidebarWidth = 310,
     List<string>? SelectedRepos = null,
     string AnalyticsWindow = "7d",
-    string StatsMode = "combined")
+    string StatsMode = "combined",
+    List<NativePaneLayout>? PaneLayouts = null,
+    string? ActivePaneId = null,
+    string? ScreenshotCaptureDirectory = null,
+    int ScreenshotRetentionDays = 3,
+    int ScreenshotMaximumMegapixels = 32)
 {
     public static NativeSettings Default { get; } = CreateDefault();
 
@@ -56,7 +61,65 @@ public sealed record NativeSettings(
 
     [JsonIgnore]
     public IReadOnlyList<string> SavedRepoPaths => SelectedRepos ?? (SelectedRepo is null ? [] : [SelectedRepo]);
+
+    [JsonIgnore]
+    public IReadOnlyList<NativePaneLayout> SavedPaneLayouts => PaneLayouts ?? [];
+
+    [JsonIgnore]
+    public string EffectiveScreenshotCaptureDirectory
+    {
+        get
+        {
+            var defaultDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CodexNative",
+                "captures");
+            if (string.IsNullOrWhiteSpace(ScreenshotCaptureDirectory)) return defaultDirectory;
+            try
+            {
+                var expanded = Environment.ExpandEnvironmentVariables(ScreenshotCaptureDirectory);
+                return Path.IsPathRooted(expanded) ? Path.GetFullPath(expanded) : defaultDirectory;
+            }
+            catch
+            {
+                return defaultDirectory;
+            }
+        }
+    }
+
+    [JsonIgnore]
+    public TimeSpan ScreenshotRetention => TimeSpan.FromDays(
+        ScreenshotRetentionDays <= 0 ? 3 : Math.Clamp(ScreenshotRetentionDays, 1, 90));
+
+    [JsonIgnore]
+    public long ScreenshotMaximumPixels =>
+        (long)(ScreenshotMaximumMegapixels <= 0
+            ? 32
+            : Math.Clamp(ScreenshotMaximumMegapixels, 1, 100)) * 1_000_000;
 }
+
+public sealed record NativePaneLayout(
+    string Id,
+    double Width,
+    double InspectorHeight,
+    List<NativePaneTabLayout>? Tabs = null,
+    string? ActiveTabKey = null,
+    bool InspectorCollapsed = false,
+    bool AdaptiveEnabled = false,
+    string AdaptivePreference = "balanced",
+    string? StyleId = null)
+{
+    [JsonIgnore]
+    public IReadOnlyList<NativePaneTabLayout> SavedTabs => Tabs ?? [];
+}
+
+public sealed record NativePaneTabLayout(
+    string Kind,
+    string Key,
+    string? SessionId,
+    string WorkingDirectory,
+    string Title,
+    long LaunchedAt = 0);
 
 public sealed class NativeSettingsStore
 {

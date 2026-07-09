@@ -11,7 +11,7 @@ public sealed class DashboardApiClient : IDisposable
     private static readonly Uri SharedService = new("http://127.0.0.1:7575/api/");
     private readonly HttpClient _http = new()
     {
-        Timeout = TimeSpan.FromSeconds(30),
+        Timeout = TimeSpan.FromSeconds(90),
     };
     private Uri _service = SharedService;
 
@@ -23,8 +23,8 @@ public sealed class DashboardApiClient : IDisposable
     public int ConnectedPort => _service.Port;
     public Uri StatusWebSocketUri => new($"ws://127.0.0.1:{_service.Port}/ws/codex/status");
 
-    public Uri TerminalWebSocketUri(string sessionId, int columns = 120, int rows = 36) =>
-        new($"ws://127.0.0.1:{_service.Port}/ws/codex/terminal/{Uri.EscapeDataString(sessionId)}?cols={columns}&rows={rows}");
+    public Uri TerminalWebSocketUri(string sessionId, int columns = 120, int rows = 36, bool adaptive = false) =>
+        new($"ws://127.0.0.1:{_service.Port}/ws/codex/terminal/{Uri.EscapeDataString(sessionId)}?cols={columns}&rows={rows}&adaptive={(adaptive ? 1 : 0)}");
 
     public async Task<bool> TryUseExistingServiceAsync(CancellationToken cancellationToken = default)
     {
@@ -81,6 +81,15 @@ public sealed class DashboardApiClient : IDisposable
     public Task<List<DashboardSession>> GetSessionsAsync(CancellationToken cancellationToken = default) =>
         GetCodexAsync<List<DashboardSession>>("sessions", cancellationToken);
 
+    public async Task<HashSet<string>> GetActiveTerminalIdsAsync(CancellationToken cancellationToken = default)
+    {
+        var terminals = await GetCodexAsync<List<TerminalDescriptor>>("terminals", cancellationToken);
+        return terminals
+            .Where(terminal => !string.IsNullOrWhiteSpace(terminal.SessionId))
+            .Select(terminal => terminal.SessionId)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
     public Task<List<DashboardSession>> GetArchivedSessionsAsync(CancellationToken cancellationToken = default) =>
         GetCodexAsync<List<DashboardSession>>("sessions/archived", cancellationToken);
 
@@ -126,13 +135,49 @@ public sealed class DashboardApiClient : IDisposable
             $"sessions/search?q={Uri.EscapeDataString(query)}&archived={(includeArchived ? 1 : 0)}",
             cancellationToken);
 
-    public async Task<string> CreateSessionAsync(string workingDirectory, CancellationToken cancellationToken = default)
+    public async Task<string> CreateSessionAsync(
+        string workingDirectory,
+        bool adaptive = false,
+        CancellationToken cancellationToken = default)
     {
-        using var response = await _http.PostAsJsonAsync(CodexUri("sessions/create"), new { workingDir = workingDirectory }, cancellationToken);
+        using var response = await _http.PostAsJsonAsync(
+            CodexUri("sessions/create"),
+            new { workingDir = workingDirectory, adaptive },
+            cancellationToken);
         response.EnsureSuccessStatusCode();
         using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
         return body.RootElement.GetProperty("tempKey").GetString()
             ?? throw new InvalidDataException("Dashboard did not return a temporary session key.");
+    }
+
+    public async Task<AdaptiveRouteResult> SubmitAdaptivePromptAsync(
+        string sessionId,
+        string text,
+        string preference = "balanced",
+        string? workingDirectory = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.PostAsJsonAsync(
+            CodexUri($"sessions/{Uri.EscapeDataString(sessionId)}/adaptive/submit"),
+            new { text, preference, workingDir = workingDirectory },
+            cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            string? message = null;
+            try
+            {
+                using var body = await JsonDocument.ParseAsync(
+                    await response.Content.ReadAsStreamAsync(cancellationToken),
+                    cancellationToken: cancellationToken);
+                message = body.RootElement.TryGetProperty("error", out var error)
+                    ? error.GetString()
+                    : null;
+            }
+            catch (JsonException) { }
+            throw new InvalidOperationException(message ?? $"Adaptive submission failed ({(int)response.StatusCode}).");
+        }
+        return await response.Content.ReadFromJsonAsync<AdaptiveRouteResult>(JsonOptions, cancellationToken)
+            ?? throw new InvalidDataException("Dashboard returned no Adaptive routing decision.");
     }
 
     public async Task KillTerminalAsync(string sessionId, CancellationToken cancellationToken = default)
@@ -202,4 +247,9 @@ public sealed class DashboardApiClient : IDisposable
     }
 
     public void Dispose() => _http.Dispose();
+
+    private sealed class TerminalDescriptor
+    {
+        public string SessionId { get; set; } = string.Empty;
+    }
 }

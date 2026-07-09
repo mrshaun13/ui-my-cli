@@ -378,6 +378,9 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [coldDays, setColdDaysState] = useState(() => loadColdDays(providerId))
+  const [nativeLaunchPending, setNativeLaunchPending] = useState(false)
+  const [nativeLaunchError, setNativeLaunchError] = useState('')
+  const [nativeLaunchCapability, setNativeLaunchCapability] = useState(null)
   const env = useEnv(providerId, providerSessionsReady)
 
   const setSelectedProviderId = useCallback((nextProviderId) => {
@@ -459,6 +462,33 @@ export default function App() {
   }, [sidebarWidth])
 
   const goHome = useCallback(() => dispatch({ type: 'deactivate' }), [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/native/launch/status')
+      .then(response => response.ok ? response.json() : null)
+      .then(capability => {
+        if (!cancelled) setNativeLaunchCapability(capability)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const handleLaunchNative = useCallback(async () => {
+    setNativeLaunchPending(true)
+    setNativeLaunchError('')
+    try {
+      const response = await fetch('/api/native/launch', { method: 'POST' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error || 'The operating system could not launch Codex Native.')
+      }
+    } catch (error) {
+      setNativeLaunchError(error.message)
+    } finally {
+      setNativeLaunchPending(false)
+    }
+  }, [])
 
   // ── Persist tabs to localStorage on every change ───────────────────────────
   useEffect(() => {
@@ -748,6 +778,21 @@ export default function App() {
             <div className="topbar-meta">
               <span style={{ color: 'var(--yellow)' }}>⚡ {needsYouCount}</span> waiting
             </div>
+          )}
+          {nativeLaunchCapability?.supported && (
+            <button
+              type="button"
+              className="surface-launch-btn"
+              onClick={handleLaunchNative}
+              disabled={nativeLaunchPending}
+              aria-busy={nativeLaunchPending}
+              title={nativeLaunchError || 'Open Codex Native'}
+            >
+              {nativeLaunchCapability.label || 'Launch native app'}
+            </button>
+          )}
+          {nativeLaunchError && (
+            <span className="surface-launch-error" role="status">{nativeLaunchError}</span>
           )}
         </div>
       </header>

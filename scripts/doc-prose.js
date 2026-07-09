@@ -87,7 +87,7 @@ module.exports = {
     'regress us onto a vulnerable copy. Other deps stay on their floated ' +
     'ranges to keep up with non-security patches automatically. Currently ' +
     'pinned for this reason:\n\n' +
-    '- `vite` pinned to `6.4.2` in `client/package.json` (fixes the WebSocket ' +
+    '- `vite` pinned to `6.4.3` in `client/package.json` (fixes the WebSocket ' +
     '`fetchModule` and `.map` traversal advisories in earlier 6.x).\n' +
     '- `postcss` pinned to `8.5.12` via `client/package.json#overrides` ' +
     '(fixes the `</style>` XSS advisory). The `overrides` block is scoped to ' +
@@ -134,6 +134,9 @@ module.exports = {
       ' After any server-side code change, always run `npm run pm2:restart`' +
       ' (which rebuilds the client and restarts the process).' +
       ' A bare `npm run build` is **not enough** — the running Node process still executes the old code.',
+    '**Plan artifacts** — Files under `plans/` are working documents and must remain local/untracked by default. ' +
+      'Do not stage or commit a plan unless the user explicitly asks for that specific plan to be committed. ' +
+      'A generated or review plan is not release content.',
   ],
 
   // ── Decision-making philosophy ───────────────────────────────────────────────
@@ -181,6 +184,8 @@ module.exports = {
 
   // Descriptions for REST routes — keyed as "METHOD /path"
   routeDescriptions: {
+    'GET /api/native/launch/status': 'Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching.',
+    'POST /api/native/launch':       'Focus or start the installed Codex Native app through Windows/WSL2 PowerShell or macOS LaunchServices.',
     'GET /api/status':               'Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds',
     'GET /api/providers':            'Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata',
     'GET /api/:providerId/stats':    'Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex includes 1d/2d/7d/14d/30d/all-time token and credit-estimate rollups by model, project, and session, and supports `statsMode=combined|triage|codex` cohort switching.',
@@ -195,8 +200,10 @@ module.exports = {
     'GET /api/sessions/search':      'Compatibility alias for default provider search',
     'GET /api/:providerId/repos':    'List all unique repos (working directories) from one provider\'s past sessions',
     'GET /api/repos':                'Compatibility alias for default provider repos',
-    'POST /api/:providerId/sessions/create': 'Start a new session for one provider in the given working directory (body: `{ workingDir: string }`); returns `{ tempKey }`',
+    'POST /api/:providerId/sessions/create': 'Start a new session for one provider in the given working directory (body: `{ workingDir: string, adaptive?: boolean }`); returns `{ tempKey }`',
     'POST /api/sessions/create':     'Compatibility alias for default provider session creation',
+    'GET /api/codex/adaptive/models': 'Authenticated Codex model catalog used by native Adaptive routing, including each visible model\'s supported reasoning efforts and service tiers.',
+    'POST /api/codex/sessions/:id/adaptive/submit': 'Classify and submit one native Adaptive prompt through the shared Codex app-server thread. For a pending session, body `{ text, preference?, workingDir }` starts the first turn before returning its real `sessionId`; later turns use `{ text, preference? }`.',
     'GET /api/:providerId/sessions/:id/preview': 'Provider-scoped rich read-only session detail — chat history, stats, top tools',
     'GET /api/sessions/:id/preview': 'Rich read-only session detail — chat history, stats, top tools',
     'GET /api/:providerId/sessions/:id/conversation': 'Provider-scoped paginated user↔assistant conversation turns for a session.',

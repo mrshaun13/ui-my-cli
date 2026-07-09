@@ -23,7 +23,7 @@ test('Codex provider prefers the user install over an older PATH binary', () => 
     delete process.env.CODEX_BIN
     assert.deepEqual(provider.buildCommand('session-id'), {
       command: executable,
-      args: ['resume', 'session-id'],
+      args: ['-c', 'tui.animations=false', 'resume', 'session-id'],
     })
   } finally {
     if (previousHome === undefined) delete process.env.HOME
@@ -40,7 +40,25 @@ test('CODEX_BIN explicitly selects the Codex executable', () => {
     process.env.CODEX_BIN = '/opt/codex/current/bin/codex'
     assert.deepEqual(provider.buildCommand(null), {
       command: '/opt/codex/current/bin/codex',
-      args: [],
+      args: ['-c', 'tui.animations=false'],
+    })
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = previous
+  }
+})
+
+test('Codex provider can launch the authentic TUI through an Adaptive app-server endpoint', () => {
+  const previous = process.env.CODEX_BIN
+  try {
+    process.env.CODEX_BIN = '/opt/codex/current/bin/codex'
+    assert.deepEqual(provider.buildCommand('session-id', { remoteEndpoint: 'ws://127.0.0.1:45678' }), {
+      command: '/opt/codex/current/bin/codex',
+      args: [
+        '-c', 'tui.animations=false',
+        '--remote', 'ws://127.0.0.1:45678',
+        'resume', 'session-id',
+      ],
     })
   } finally {
     if (previous === undefined) delete process.env.CODEX_BIN

@@ -540,6 +540,45 @@ Check("cold-day grouping includes only idle sessions at the selected boundary", 
     Equal(true, SessionAgeGrouping.IsCold("IDLE", now - 86_400, now, 0));
 });
 
+Check("terminal ctrl-click detects only safe web links at the clicked column", () =>
+{
+    const string line = "Docs: https://example.com/path?q=1, not file:///tmp/nope";
+    Equal("https://example.com/path?q=1", TerminalLinkDetector.FindHttpUrlAtColumn(line, 12));
+    Equal(null, TerminalLinkDetector.FindHttpUrlAtColumn(line, 2));
+    Equal(null, TerminalLinkDetector.FindHttpUrlAtColumn(line, 47));
+    Equal(null, TerminalLinkDetector.FindHttpUrlAtColumn("javascript:alert(1)", 5));
+    var links = TerminalLinkDetector.FindHttpUrls(line);
+    Equal(1, links.Count);
+    Equal(line.IndexOf("https://", StringComparison.Ordinal), links[0].Start);
+    Equal("https://example.com/path?q=1".Length, links[0].Length);
+    Equal("https://example.com/path?q=1", links[0].Url);
+});
+
+Check("terminal pane layout equalizes until minimum width then overflows", () =>
+{
+    Equal(497.5, TerminalPaneLayoutMath.EqualPaneWidth(1000, 2, 460, 5));
+    Equal(460d, TerminalPaneLayoutMath.EqualPaneWidth(1000, 3, 460, 5));
+    Equal(1390d, TerminalPaneLayoutMath.TotalWidth([460d, 460d, 460d], 5));
+    Equal((540d, 460d), TerminalPaneLayoutMath.ResizePair(500, 500, 100, 460));
+    Equal((460d, 540d), TerminalPaneLayoutMath.ResizePair(500, 500, -100, 460));
+});
+
+Check("clipboard screenshot paths become standalone host composer references", () =>
+{
+    var wslPath = ScreenshotAttachmentPath.ToWslPath(
+        @"C:\Users\tester\AppData\Local\CodexNative\captures\shot.png");
+    Equal("/mnt/c/Users/tester/AppData/Local/CodexNative/captures/shot.png", wslPath);
+    Equal(
+        "`/mnt/c/Users/tester/AppData/Local/CodexNative/captures/shot.png` ",
+        ScreenshotAttachmentPath.ComposerReference(wslPath));
+    Equal(
+        "`/Users/tester/Library/Application Support/CodexNative/captures/shot.png` ",
+        ScreenshotAttachmentPath.ComposerReference(
+            "/Users/tester/Library/Application Support/CodexNative/captures/shot.png"));
+    Throws<ArgumentException>(() => ScreenshotAttachmentPath.ToWslPath(@"relative\shot.png"));
+    Throws<ArgumentException>(() => ScreenshotAttachmentPath.ComposerReference("/tmp/bad`path.png"));
+});
+
 if (failures.Count > 0)
 {
     Console.Error.WriteLine($"{failures.Count} native command test(s) failed:");

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Native desktop 1.1.3
+
+- Added a persistent, horizontally resizable multi-pane native workspace with
+  per-pane tabs, context inspectors, themes, Adaptive routing preferences, and
+  complete workspace restoration.
+- Preserved the v1.1.2 drain-aware updater, private-service recovery, versioned
+  Windows/macOS release assets, checksum verification, rollback, and automatic
+  restart behavior while reconciling the feature branch with current `main`.
+- Made direct shell tabs, shortcuts, terminal links, screenshot paste/capture,
+  and browser-to-native launching platform-aware on both Windows and macOS.
+- Corrected browser-to-Windows launch discovery to use the supported portable
+  install root at `%LOCALAPPDATA%\Programs\CodexNative` and added macOS native
+  activation through LaunchServices.
+- Added tests for pane sizing, safe terminal links, screenshot attachment paths,
+  Adaptive model routing/app-server startup, and Windows/macOS native launch.
+- Strengthened native CI so server integration tests, the production client
+  build, and deterministic root/client dependency installs gate every native
+  pull request and stable release.
+- Updated the pinned Vite development toolchain to 6.4.3 and refreshed Babel
+  transitive locks to clear the current Windows path and source-map advisories.
+
 ### Documentation
 
 - Documented the supported portable Windows installation under

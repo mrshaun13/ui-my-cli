@@ -10,7 +10,7 @@
     "pm2:restart": "npm run build && pm2 restart codex-dashboard",
     "pm2:stop": "pm2 stop codex-dashboard",
     "pm2:logs": "pm2 logs codex-dashboard",
-    "postinstall": "cd client && npm install",
+    "postinstall": "npm --prefix client ci",
     "docs": "node scripts/generate-docs.js",
     "docs:check": "node scripts/generate-docs.js --check",
     "test": "npx playwright test",
