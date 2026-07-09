@@ -80,6 +80,7 @@ public sealed partial class MainWindow : Window
     private List<DashboardSession>? _searchResults;
     private readonly HashSet<string> _hiddenTokenCategories = new(StringComparer.Ordinal);
     private bool _refreshing;
+    private int _providerEpoch;
     private bool _initializingSelectors;
     private bool _initializingProviderSelector;
     private bool _initializingNavigation;
@@ -1088,25 +1089,38 @@ public sealed partial class MainWindow : Window
         try
         {
             while (_refreshing) await Task.Delay(50);
-            await StopStatusFeedAsync();
-            _searchCancellation?.Cancel();
-            _api.UseProvider(provider.Id);
-            _settings = _settings with { ProviderId = provider.Id };
-            _sessions = [];
-            _archivedSessions = [];
-            _repos = [];
-            _searchResults = null;
-            _stats = null;
-            _rateLimits = null;
-            ApplyProviderChrome();
-            UpdateRepoFilter();
-            ApplySessionFilter();
-            RenderRateLimits(null);
-            SetDashboardConnectionState(false);
-            if (_dashboardStatus is not null) RenderProviderStatus(_dashboardStatus);
-            SetStatus($"Switching dashboard to {CurrentProviderLabel}…", StartingBrush);
-            await PersistSettingsAsync();
-            await RefreshAllAsync();
+            _refreshing = true;
+            RefreshButton.IsEnabled = false;
+            try
+            {
+                await StopStatusFeedAsync();
+                _searchCancellation?.Cancel();
+                _api.UseProvider(provider.Id);
+                _providerEpoch++;
+                var providerId = provider.Id;
+                var epoch = _providerEpoch;
+                _settings = _settings with { ProviderId = providerId };
+                _sessions = [];
+                _archivedSessions = [];
+                _repos = [];
+                _searchResults = null;
+                _stats = null;
+                _rateLimits = null;
+                ApplyProviderChrome();
+                UpdateRepoFilter();
+                ApplySessionFilter();
+                RenderRateLimits(null);
+                SetDashboardConnectionState(false);
+                if (_dashboardStatus is not null) RenderProviderStatus(_dashboardStatus);
+                SetStatus($"Switching dashboard to {CurrentProviderLabel}…", StartingBrush);
+                await PersistSettingsAsync();
+                await RefreshAllCoreAsync(providerId, epoch);
+            }
+            finally
+            {
+                _refreshing = false;
+                RefreshButton.IsEnabled = true;
+            }
         }
         catch (Exception ex)
         {
@@ -1114,6 +1128,7 @@ public sealed partial class MainWindow : Window
             try
             {
                 _api.UseProvider(previousProviderId);
+                _providerEpoch++;
                 _settings = _settings with { ProviderId = previousProviderId };
                 SelectProviderInComboBox(previousProviderId);
                 ApplyProviderChrome();
@@ -1132,6 +1147,10 @@ public sealed partial class MainWindow : Window
             ProviderComboBox.IsEnabled = true;
         }
     }
+
+    private bool IsCurrentProviderData(string providerId, int epoch) =>
+        epoch == _providerEpoch
+        && string.Equals(_api.ProviderId, providerId, StringComparison.Ordinal);
 
     private string CurrentProviderLabel => ProviderLabel(_api.ProviderId);
 
@@ -1448,12 +1467,27 @@ public sealed partial class MainWindow : Window
         RefreshButton.IsEnabled = false;
         try
         {
-            var sessionsTask = _api.GetSessionsAsync();
-            var archivedTask = _api.GetArchivedSessionsAsync();
+            await RefreshAllCoreAsync(_api.ProviderId, _providerEpoch);
+        }
+        finally
+        {
+            _refreshing = false;
+            RefreshButton.IsEnabled = true;
+        }
+    }
+
+    private async Task RefreshAllCoreAsync(string providerId, int epoch)
+    {
+        try
+        {
+            var sessionsTask = _api.GetSessionsAsync(providerId: providerId);
+            var archivedTask = _api.GetArchivedSessionsAsync(providerId: providerId);
             var reposTask = _api.GetReposAsync();
             var statsTask = _api.GetStatsAsync(_settings.StatsMode);
             var statusTask = _api.GetStatusAsync();
             await Task.WhenAll(sessionsTask, archivedTask, reposTask, statsTask, statusTask);
+            if (!IsCurrentProviderData(providerId, epoch)) return;
+
             var sessions = sessionsTask.Result.OrderByDescending(session => session.LastActivityAt).ToList();
             var archivedSessions = archivedTask.Result.OrderByDescending(session => session.LastActivityAt).ToList();
             var sessionsChanged = !SessionListsMateriallyEqual(_sessions, sessions);
@@ -1473,13 +1507,9 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            if (!IsCurrentProviderData(providerId, epoch)) return;
             NativeLog.Write($"Dashboard refresh failed: {ex}");
             SetStatus($"Refresh failed: {ex.Message}", ErrorBrush);
-        }
-        finally
-        {
-            _refreshing = false;
-            RefreshButton.IsEnabled = true;
         }
     }
 
@@ -1493,17 +1523,32 @@ public sealed partial class MainWindow : Window
         _refreshing = true;
         try
         {
-            var sessions = (await _api.GetSessionsAsync())
+            await RefreshSessionsCoreAsync(_api.ProviderId, _providerEpoch);
+        }
+        finally
+        {
+            _refreshing = false;
+        }
+    }
+
+    private async Task RefreshSessionsCoreAsync(string providerId, int epoch)
+    {
+        try
+        {
+            var sessions = (await _api.GetSessionsAsync(providerId: providerId))
                 .OrderByDescending(session => session.LastActivityAt)
                 .ToList();
+            if (!IsCurrentProviderData(providerId, epoch)) return;
+
             var sessionsChanged = !SessionListsMateriallyEqual(_sessions, sessions);
             if (sessionsChanged) _sessions = sessions;
             var archivedSessionsChanged = false;
             if (ArchivedCheckBox.IsChecked == true)
             {
-                var archivedSessions = (await _api.GetArchivedSessionsAsync())
+                var archivedSessions = (await _api.GetArchivedSessionsAsync(providerId: providerId))
                     .OrderByDescending(session => session.LastActivityAt)
                     .ToList();
+                if (!IsCurrentProviderData(providerId, epoch)) return;
                 archivedSessionsChanged = !SessionListsMateriallyEqual(_archivedSessions, archivedSessions);
                 if (archivedSessionsChanged) _archivedSessions = archivedSessions;
             }
@@ -1513,11 +1558,8 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            if (!IsCurrentProviderData(providerId, epoch)) return;
             NativeLog.Write($"Session refresh failed: {ex.Message}");
-        }
-        finally
-        {
-            _refreshing = false;
         }
     }
 
@@ -4620,8 +4662,19 @@ public sealed partial class MainWindow : Window
         if (_initializingNavigation) return;
         if (ArchivedCheckBox.IsChecked == true)
         {
-            try { _archivedSessions = await _api.GetArchivedSessionsAsync(); }
-            catch (Exception ex) { SetStatus($"Archived sessions unavailable: {ex.Message}", ErrorBrush); }
+            var providerId = _api.ProviderId;
+            var epoch = _providerEpoch;
+            try
+            {
+                var archivedSessions = await _api.GetArchivedSessionsAsync(providerId: providerId);
+                if (IsCurrentProviderData(providerId, epoch))
+                    _archivedSessions = archivedSessions;
+            }
+            catch (Exception ex)
+            {
+                if (IsCurrentProviderData(providerId, epoch))
+                    SetStatus($"Archived sessions unavailable: {ex.Message}", ErrorBrush);
+            }
         }
         if (!string.IsNullOrWhiteSpace(SearchTextBox.Text)) await RefreshSearchAsync();
         else ApplySessionFilter();
@@ -5512,11 +5565,14 @@ public sealed partial class MainWindow : Window
         _refreshTick++;
         if (_refreshTick % 2 == 0)
         {
+            var providerId = _api.ProviderId;
+            var epoch = _providerEpoch;
             try
             {
                 var statsTask = _api.GetStatsAsync(_settings.StatsMode);
                 var statusTask = _api.GetStatusAsync();
                 await Task.WhenAll(statsTask, statusTask);
+                if (!IsCurrentProviderData(providerId, epoch)) return;
                 _stats = statsTask.Result;
                 _dashboardStatus = statusTask.Result;
                 RenderStats(_stats);
@@ -5524,6 +5580,7 @@ public sealed partial class MainWindow : Window
             }
             catch (Exception ex)
             {
+                if (!IsCurrentProviderData(providerId, epoch)) return;
                 NativeLog.Write($"Stats refresh failed: {ex.Message}");
             }
         }

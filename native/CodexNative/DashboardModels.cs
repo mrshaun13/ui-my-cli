@@ -5,7 +5,7 @@ namespace CodexNative;
 public class DashboardSession
 {
     public string Id { get; set; } = string.Empty;
-    public string Provider { get; set; } = "codex";
+    public string Provider { get; set; } = string.Empty;
     public string Source { get; set; } = "cli";
     public string ThreadSource { get; set; } = "user";
     public string Title { get; set; } = "Untitled session";
