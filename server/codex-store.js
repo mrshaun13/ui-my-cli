@@ -207,6 +207,8 @@ function emptyRolloutSummary(pathname) {
     path: pathname,
     metadata: {},
     runtime: {},
+    currentModel: null,
+    currentReasoningEffort: null,
     firstUser: null,
     lastUser: null,
     lastAssistant: null,
@@ -222,6 +224,10 @@ function applySummaryEvent(summary, event) {
   }
   if (event.type === 'turn_context') {
     const payload = event.payload || {};
+    summary.currentModel = payload.model || summary.currentModel;
+    summary.currentReasoningEffort = payload.effort
+      || payload.collaboration_mode?.settings?.reasoning_effort
+      || summary.currentReasoningEffort;
     summary.runtime = {
       approvalMode: payload.approval_policy || summary.runtime.approvalMode || null,
       sandboxPolicy: payload.sandbox_policy || summary.runtime.sandboxPolicy || null,
@@ -260,6 +266,8 @@ function publicRolloutSummary(entry) {
     path: entry.summary.path,
     metadata: entry.summary.metadata,
     runtime: entry.summary.runtime,
+    currentModel: entry.summary.currentModel,
+    currentReasoningEffort: entry.summary.currentReasoningEffort,
     messages,
     subagentCount: entry.summary.subagentIds.size,
   };
@@ -491,8 +499,11 @@ function normalizeThread(thread, _overrides = null, rollout = null) {
     title,
     workingDir: thread.cwd || '',
     project: projectName(thread.cwd),
-    model: thread.model || parsed.metadata.model || 'codex',
-    reasoningEffort: thread.reasoning_effort || parsed.metadata.reasoning_effort || null,
+    model: parsed.currentModel || thread.model || parsed.metadata.model || 'codex',
+    reasoningEffort: parsed.currentReasoningEffort
+      || thread.reasoning_effort
+      || parsed.metadata.reasoning_effort
+      || null,
     sandboxPolicy: access?.rawSandboxType || thread.sandbox_policy || null,
     approvalMode: access?.rawApprovalMode || thread.approval_mode || null,
     permissionMode: access?.label || null,
@@ -829,7 +840,7 @@ function getSessionContextBreakdown(id) {
     maxContext,
     freeTokens: Math.max(0, maxContext - totalUsed),
     compactionCount: rollout.events.filter(e => JSON.stringify(e).includes('compact')).length,
-    model: thread.model || 'codex',
+    model: rollout.currentModel || thread.model || 'codex',
   };
 }
 
@@ -849,7 +860,8 @@ function getSessionConfig(id) {
     rules: [],
     activeSkills: [],
     permissions,
-    model: thread.model || null,
+    model: rollout.currentModel || thread.model || null,
+    reasoningEffort: rollout.currentReasoningEffort || thread.reasoning_effort || null,
     permissionMode: access?.label || null,
   };
 }

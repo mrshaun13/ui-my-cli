@@ -30,5 +30,7 @@
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Codex Native uses microphone audio only for local voice-to-text transcription.</string>
 </dict>
 </plist>

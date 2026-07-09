@@ -88,10 +88,15 @@ jobs:
           plutil -lint "$bundle/Contents/Info.plist"
           file "$bundle/Contents/MacOS/CodexNative" | grep -q 'Mach-O 64-bit'
           file "$bundle/Contents/MacOS/CodexNative.TerminalHost" | grep -q 'Mach-O 64-bit'
+          file "$bundle/Contents/MacOS/CodexNative.SpeechHost" | grep -q 'Mach-O 64-bit'
           file "$bundle/Contents/MacOS/CodexNative.Updater" | grep -q 'Mach-O 64-bit'
           test -x "$bundle/Contents/MacOS/CodexNative"
           test -x "$bundle/Contents/MacOS/CodexNative.TerminalHost"
+          test -x "$bundle/Contents/MacOS/CodexNative.SpeechHost"
           test -x "$bundle/Contents/MacOS/CodexNative.Updater"
+          speech_runtime="macos-${{ matrix.rid == 'osx-arm64' && 'arm64' || 'x64' }}"
+          test -f "$bundle/Contents/MacOS/runtimes/$speech_runtime/libwhisper.dylib"
+          test -f "$bundle/Contents/MacOS/runtimes/$speech_runtime/libggml-whisper.dylib"
           set +e
           "$bundle/Contents/MacOS/CodexNative.TerminalHost" --invalid
           host_exit=$?
@@ -105,7 +110,10 @@ jobs:
         run: |
           file native/artifacts/win-x64/CodexNative.exe | grep -q 'PE32+ executable (GUI)'
           file native/artifacts/win-x64/CodexNative.TerminalHost.exe | grep -q 'PE32+ executable (console)'
+          file native/artifacts/win-x64/CodexNative.SpeechHost.exe | grep -q 'PE32+ executable (console)'
           file native/artifacts/win-x64/CodexNative.Updater.exe | grep -q 'PE32+ executable (console)'
+          file native/artifacts/win-x64/runtimes/win-x64/whisper.dll | grep -q 'PE32+ executable'
+          test -f native/artifacts/win-x64/runtimes/win-x64/ggml-whisper.dll
       - run: python3 scripts/package-native-release.py "${{ matrix.rid }}"
       - run: npm run native:verify-artifacts -- "${{ matrix.rid }}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

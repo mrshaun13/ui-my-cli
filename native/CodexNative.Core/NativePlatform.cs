@@ -14,6 +14,9 @@ public sealed record NativePlatformProfile(
     string ReleaseRuntimeIdentifier)
 {
     public bool UsesWsl => Platform == NativePlatform.Windows;
+    public string SpeechHostFileName => Platform == NativePlatform.Windows
+        ? "CodexNative.SpeechHost.exe"
+        : "CodexNative.SpeechHost";
 
     public static NativePlatformProfile Current => For(
         OperatingSystem.IsWindows()
