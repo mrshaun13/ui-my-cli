@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Native desktop 1.1.2 hotfix
+
+- Fixed native self-update failures when the loopback dashboard service stopped
+  after the package download but before the active-session drain check. The
+  update handoff now performs one bounded service rediscovery/restart and then
+  repeats the drain query; explicit cancellation still stops immediately and
+  package trust, checksum, extraction, and active-session gates are unchanged.
+- The already-published 1.0.0/1.1.1 application cannot receive this running-code
+  change until it completes one upgrade. If its service has stopped, use the
+  dashboard refresh action to restart the service before retrying the update,
+  or install the versioned Windows ZIP directly from GitHub Releases.
+
 ### Native desktop 1.1.1 development preview
 
 This preview is being merged as the shared development baseline so that the

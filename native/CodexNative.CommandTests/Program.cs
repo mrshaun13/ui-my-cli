@@ -185,6 +185,50 @@ Check("update drain blocks all active Codex work and local shells", () =>
     Equal(true, NativeUpdatePolicy.CanInstall([(Status: "finished", IsHeadless: false)], false));
 });
 
+await CheckAsync("update drain recovers one refused data-service request", async () =>
+{
+    var operationAttempts = 0;
+    var recoveryAttempts = 0;
+    var result = await NativeUpdateDataServiceRecovery.RunAsync(
+        _ => ++operationAttempts == 1
+            ? Task.FromException<string>(new HttpRequestException("connection refused"))
+            : Task.FromResult("sessions loaded"),
+        _ =>
+        {
+            recoveryAttempts++;
+            return Task.FromResult(true);
+        });
+    Equal("sessions loaded", result);
+    Equal(2, operationAttempts);
+    Equal(1, recoveryAttempts);
+});
+
+await CheckAsync("update drain does not retry failed recovery or user cancellation", async () =>
+{
+    var failedRecoveryAttempts = 0;
+    await ThrowsAsync<InvalidOperationException>(() => NativeUpdateDataServiceRecovery.RunAsync(
+        _ => Task.FromException<string>(new HttpRequestException("connection refused")),
+        _ =>
+        {
+            failedRecoveryAttempts++;
+            return Task.FromResult(false);
+        }));
+    Equal(1, failedRecoveryAttempts);
+
+    using var canceled = new CancellationTokenSource();
+    canceled.Cancel();
+    var cancellationRecoveryAttempts = 0;
+    await ThrowsAsync<OperationCanceledException>(() => NativeUpdateDataServiceRecovery.RunAsync(
+        token => Task.FromCanceled<string>(token),
+        _ =>
+        {
+            cancellationRecoveryAttempts++;
+            return Task.FromResult(true);
+        },
+        canceled.Token));
+    Equal(0, cancellationRecoveryAttempts);
+});
+
 Check("updater request preserves paths as structured arguments", () =>
 {
     var request = new NativeInstallRequest(
