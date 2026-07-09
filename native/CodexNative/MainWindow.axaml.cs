@@ -5204,11 +5204,6 @@ public sealed partial class MainWindow : Window
         {
             var outcome = await TryStopOwnedServiceAsync(allowStopWhenProbeFails: true);
             if (outcome == OwnedServiceStopOutcome.RefusedActiveTerminals) return;
-            if (_serviceManager.OwnsRunningService
-                && outcome != OwnedServiceStopOutcome.ProbeFailedBestEffort)
-            {
-                return;
-            }
         }
         _shutdownConfirmed = true;
         Close();
@@ -5258,8 +5253,16 @@ public sealed partial class MainWindow : Window
 
         if (!_serviceManager.StopOwnedService())
         {
-            if (!probeFailed)
+            if (_serviceManager.OwnsRunningService)
+            {
+                SetStatus(
+                    "Could not fully stop the local dashboard service; ownership kept for retry.",
+                    ErrorBrush);
+            }
+            else if (!probeFailed)
+            {
                 SetStatus("No native-managed service is running.", StartingBrush);
+            }
             return probeFailed
                 ? OwnedServiceStopOutcome.ProbeFailedBestEffort
                 : OwnedServiceStopOutcome.StopFailed;

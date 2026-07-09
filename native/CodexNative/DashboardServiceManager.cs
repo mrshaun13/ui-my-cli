@@ -145,7 +145,7 @@ public sealed class DashboardServiceManager : IDisposable
             ClearOwnedProcess(process);
             return true;
         }
-        catch (InvalidOperationException)
+        catch (Exception ex)
         {
             try
             {
@@ -156,10 +156,10 @@ public sealed class DashboardServiceManager : IDisposable
                     return true;
                 }
             }
-            catch (InvalidOperationException)
+            catch (Exception)
             {
             }
-            NativeLog.Write("Failed to stop the dashboard service; retaining ownership for a later retry.");
+            NativeLog.Write($"Failed to stop the dashboard service ({ex.GetType().Name}: {ex.Message}); retaining ownership for a later retry.");
             return false;
         }
     }
