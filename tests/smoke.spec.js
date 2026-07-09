@@ -16,7 +16,7 @@ test.describe('Dashboard smoke tests', () => {
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
     expect(body.ok).toBe(true);
-    expect(body.apiVersion).toBe(2);
+    expect(body.apiVersion).toBe(5);
     expect(body).toHaveProperty('activePtys');
     expect(body).toHaveProperty('uptime');
   });

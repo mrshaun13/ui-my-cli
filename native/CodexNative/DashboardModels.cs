@@ -288,6 +288,7 @@ public sealed class SessionConfigData
     public List<NamedEnvironmentItem> ActiveSkills { get; set; } = [];
     public List<SessionPermission> Permissions { get; set; } = [];
     public string Model { get; set; } = string.Empty;
+    public string ReasoningEffort { get; set; } = string.Empty;
     public string PermissionMode { get; set; } = string.Empty;
 }
 

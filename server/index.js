@@ -24,16 +24,18 @@ const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 
-const { attachClient, killPty, isPtyActive, isPtyAdaptive, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
+const { attachClient, killPty, isPtyActive, isPtyControlPlane, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
 const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./providers');
 const { isTrustedLaunchRequest, launchNativeDashboard, nativeLaunchCapability } = require('./native-launcher');
 const { CodexAppServer } = require('./codex-app-server');
+const { wantsCodexControlPlane, tryStartCodexControlPlane } = require('./codex-control-plane');
+const { trackPendingSession } = require('./pending-session-tracker');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
-// v2 adds the complete native analytics contract: usageRollups, pricing,
-// six token windows, and matching heatmap windows. Native clients must not
-// silently reuse a pre-v2 process and render missing telemetry as zero.
-const API_VERSION = 2;
+// v5 passes the user-selected working root explicitly to remote Codex TUIs.
+// Native clients must not reuse a v4 service whose shared app-server causes
+// new sessions to inherit the dashboard checkout.
+const API_VERSION = 5;
 const IS_DEV = process.env.NODE_ENV !== 'production';
 const CLIENT_DIST = path.resolve(__dirname, '..', 'client', 'dist');
 
@@ -203,8 +205,12 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
     const before = provider.listSessionIds();
     const tempKey = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const adaptive = provider.id === 'codex' && req.body.adaptive === true;
-    const remoteEndpoint = adaptive ? await codexAppServer.ensureStarted() : null;
+    const controlPlane = wantsCodexControlPlane(provider.id, req.body);
+    const remoteEndpoint = controlPlane
+      ? await tryStartCodexControlPlane(
+        () => codexAppServer.ensureStarted(),
+        err => console.warn(`[codex:control-plane] unavailable for new session; using direct terminal: ${err.message}`))
+      : null;
     spawnNewSession(provider.id, tempKey, workingDir, 80, 24, { remoteEndpoint });
     console.log(`[${provider.id}:create] spawned new session in ${workingDir} (key: ${tempKey})`);
 
@@ -213,30 +219,34 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
     // poll in the background to re-key the PTY entry once the real session ID
     // appears. This prevents a duplicate PTY from being spawned if the user
     // clicks the sidebar card for the new session.
-    const POLL_INTERVAL = 2000;
-    const MAX_POLLS = 90;  // ~3 minutes of polling
-    let polls = 0;
-
-    const bgPoll = setInterval(() => {
-      polls++;
-      const realId = provider.findNewSessionInDir(workingDir, before);
-      if (realId) {
-        clearInterval(bgPoll);
+    // A new Codex TUI does not persist its thread until the first turn starts.
+    // Keep a healthy pending terminal alive indefinitely: poll quickly for the
+    // first three minutes, then back off until it registers or actually exits.
+    trackPendingSession({
+      findSessionId: () => {
+        const excluded = new Set(before);
+        const providerPrefix = `${provider.id}:`;
+        for (const [key, sessionId] of pendingToReal) {
+          if (key.startsWith(providerPrefix)) excluded.add(sessionId);
+        }
+        return provider.findNewSessionInDir(workingDir, excluded);
+      },
+      isTerminalActive: () => isPtyActive(provider.id, tempKey),
+      onRegistered: realId => {
         pendingToReal.set(pendingKey(provider.id, tempKey), realId);
         if (rekeyPty(provider.id, tempKey, realId)) {
           console.log(`[${provider.id}:create] re-keyed ${tempKey.slice(0, 20)}… → ${realId.slice(0, 8)}…`);
         }
         broadcastRekey(provider.id, tempKey, realId);
         broadcastSessions(provider.id);
-      } else if (polls >= MAX_POLLS) {
-        clearInterval(bgPoll);
-        console.warn(`[${provider.id}:create] gave up re-keying ${tempKey.slice(0, 20)}… after ${MAX_POLLS} polls`);
-        // Kill the orphaned PTY — it will never get a real session ID
-        killPty(provider.id, tempKey);
-        // Notify clients so they can clean up the pending tab/card
+      },
+      onTerminalEnded: () => {
+        console.warn(`[${provider.id}:create] pending terminal ${tempKey.slice(0, 20)}… exited before registering`);
         broadcastPendingExpired(provider.id, tempKey);
-      }
-    }, POLL_INTERVAL);
+      },
+      onPollError: error =>
+        console.warn(`[${provider.id}:create] pending re-key poll failed: ${error.message}`),
+    });
 
     res.json({ tempKey });
   } catch (err) {
@@ -281,8 +291,8 @@ app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
       if (!isPtyActive('codex', sessionId)) {
         return res.status(404).json({ error: 'Pending Codex terminal not found.' });
       }
-      if (!isPtyAdaptive('codex', sessionId)) {
-        return res.status(409).json({ error: 'Enable Adaptive before submitting a routed prompt.' });
+      if (!isPtyControlPlane('codex', sessionId)) {
+        return res.status(409).json({ error: 'The Codex control plane is unavailable for this terminal. Reconnect the terminal before submitting an Adaptive prompt.' });
       }
       const route = await codexAppServer.startAdaptiveTurn(workingDir, text, preference);
       const realId = route.threadId;
@@ -293,8 +303,8 @@ app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
       console.log(`[codex:adaptive] first turn ${sessionId.slice(0, 20)}… → ${realId.slice(0, 8)}… · ${route.model} · ${route.effort}`);
       return res.json({ ...route, sessionId: realId });
     }
-    if (!isPtyAdaptive('codex', sessionId)) {
-      return res.status(409).json({ error: 'Enable Adaptive and wait for this terminal to reconnect before submitting.' });
+    if (!isPtyControlPlane('codex', sessionId)) {
+      return res.status(409).json({ error: 'The Codex control plane is unavailable for this terminal. Reconnect the terminal before submitting an Adaptive prompt.' });
     }
     const route = await codexAppServer.submitAdaptiveTurn(sessionId, text, preference);
     console.log(`[codex:adaptive] ${sessionId.slice(0, 8)}… → ${route.model} · ${route.effort} · ${route.level} (${route.source})`);
@@ -479,9 +489,8 @@ function broadcastRekey(providerId, tempKey, realId) {
 }
 
 /**
- * Notify all status-feed clients that a pending session's rekey poll expired
- * without finding a real session ID.  The client uses this to dismiss the
- * orphaned pending tab/card and show a "session failed to start" message.
+ * Notify all status-feed clients that a pending terminal ended before Codex
+ * persisted its real session ID. The client dismisses the dead placeholder.
  *
  * Message shape: { type: 'pending-expired', tempKey: string }
  */
@@ -569,7 +578,10 @@ wss.on('connection', async (ws, req) => {
     // Parse initial dimensions from query string
     const cols = parseInt(parsedUrl.searchParams.get('cols') || '80', 10);
     const rows = parseInt(parsedUrl.searchParams.get('rows') || '24', 10);
-    const adaptive = provider.id === 'codex' && parsedUrl.searchParams.get('adaptive') === '1';
+    const controlPlane = wantsCodexControlPlane(provider.id, {
+      controlPlane: parsedUrl.searchParams.get('controlPlane'),
+      adaptive: parsedUrl.searchParams.get('adaptive'),
+    });
 
     // For pending sessions (from "New Session"), the PTY already exists in the
     // map under the temp key — attachClient will find it and attach the WS client.
@@ -578,17 +590,12 @@ wss.on('connection', async (ws, req) => {
     const session = isPending ? null : provider.getSession(sessionId);
     const workingDir = session?.workingDir || null;
 
-    let remoteEndpoint = null;
-    if (adaptive) {
-      try {
-        remoteEndpoint = await codexAppServer.ensureStarted();
-      } catch (err) {
-        console.error('[codex:adaptive] terminal control plane failed:', err.message);
-        ws.close(1011, 'Adaptive control plane unavailable');
-        return;
-      }
-    }
-    console.log(`[${provider.id}:pty] attaching to ${isPending ? 'pending' : 'session'} ${sessionId.slice(0, 20)}… (${cols}x${rows}${adaptive ? ', adaptive' : ''})`);
+    const remoteEndpoint = controlPlane
+      ? await tryStartCodexControlPlane(
+        () => codexAppServer.ensureStarted(),
+        err => console.warn(`[codex:control-plane] unavailable; using direct terminal: ${err.message}`))
+      : null;
+    console.log(`[${provider.id}:pty] attaching to ${isPending ? 'pending' : 'session'} ${sessionId.slice(0, 20)}… (${cols}x${rows}${remoteEndpoint ? ', control-plane' : ''})`);
     attachClient(provider.id, sessionId, workingDir, ws, cols, rows, { remoteEndpoint });
     return;
   }

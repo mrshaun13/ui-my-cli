@@ -48,6 +48,7 @@ public sealed partial class MainWindow : Window
     private readonly DashboardServiceManager _serviceManager = new();
     private readonly NativePlatformProfile _platform = NativePlatformProfile.Current;
     private readonly NativeUpdateService _updateService = new();
+    private readonly SpeechHostClient _speechHost;
     private readonly Dictionary<string, SessionTabState> _openTabs = [];
     private readonly Dictionary<string, TabItem> _previewTabs = [];
     private readonly Dictionary<TabItem, TerminalPaneState> _previewPaneByTab = [];
@@ -94,6 +95,10 @@ public sealed partial class MainWindow : Window
     private bool _restoringPaneLayout;
     private bool _updatingPaneLayout;
     private bool _screenshotCaptureInProgress;
+    private SpeechStage _speechStage = SpeechStage.Idle;
+    private SessionTabState? _speechTarget;
+    private string? _speechOperationId;
+    private bool _speechUseAdaptiveComposer;
     private bool _checkingForUpdate;
     private bool _updateInProgress;
     private NativeReleaseInfo? _availableUpdate;
@@ -108,6 +113,8 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _speechHost = new SpeechHostClient(_platform);
+        _speechHost.MessageReceived += OnSpeechHostMessage;
         InitializePaneWorkspace();
         ApplyProviderChrome();
         AutomationProperties.SetName(DashboardTab, "Dashboard overview");
@@ -475,6 +482,9 @@ public sealed partial class MainWindow : Window
 
     private void RebuildPaneHost(bool equalize)
     {
+        // Structural operation only: clearing Children detaches TerminalView and
+        // therefore its local PTY bridge. Viewport and splitter resizes must use
+        // ApplyPaneHostGeometry so live terminals remain attached.
         if (_panes.Count == 0 || _updatingPaneLayout) return;
         _updatingPaneLayout = true;
         try
@@ -573,10 +583,7 @@ public sealed partial class MainWindow : Window
                 _paneSplitters.Add(splitter);
                 PaneHost.Children.Add(splitter);
             }
-            PaneHost.Width = TerminalPaneLayoutMath.TotalWidth(
-                _panes.Select(pane => pane.Width),
-                PaneSplitterWidth);
-            PaneHost.MinWidth = PaneHost.Width;
+            ApplyPaneHostGeometry();
             UpdatePaneEmptyStates();
             SetActivePane(_activePane);
         }
@@ -600,8 +607,30 @@ public sealed partial class MainWindow : Window
     {
         if (_panes.Count == 0 || _updatingPaneLayout) return;
         FitPaneWidthsToViewport();
-        RebuildPaneHost(equalize: false);
+        // Do not rebuild the visual/logical tree here. Avalonia emits this event
+        // throughout restore/maximize animations, and detaching TerminalView
+        // kills the bridge and forces the server scrollback to replay.
+        ApplyPaneHostGeometry();
         UpdateTerminalTabContentHeights();
+    }
+
+    private void ApplyPaneHostGeometry()
+    {
+        var expectedColumns = _panes.Count * 2 - 1;
+        if (PaneHost.ColumnDefinitions.Count != expectedColumns)
+            throw new InvalidOperationException(
+                $"Terminal pane host has {PaneHost.ColumnDefinitions.Count} columns; expected {expectedColumns}.");
+
+        for (var index = 0; index < _panes.Count; index++)
+        {
+            var column = PaneHost.ColumnDefinitions[index * 2];
+            column.Width = new GridLength(_panes[index].Width);
+            column.MinWidth = MinimumPaneWidth;
+        }
+        PaneHost.Width = TerminalPaneLayoutMath.TotalWidth(
+            _panes.Select(pane => pane.Width),
+            PaneSplitterWidth);
+        PaneHost.MinWidth = PaneHost.Width;
     }
 
     private void FitPaneWidthsToViewport()
@@ -629,7 +658,7 @@ public sealed partial class MainWindow : Window
     {
         left.Width = Math.Max(MinimumPaneWidth, left.Width);
         right.Width = Math.Max(MinimumPaneWidth, right.Width);
-        RebuildPaneHost(equalize: false);
+        ApplyPaneHostGeometry();
         _ = SaveWorkspaceAsync();
     }
 
@@ -773,15 +802,12 @@ public sealed partial class MainWindow : Window
         state.AdaptivePromptBox.IsEnabled = !state.AdaptiveSubmitting && !state.Pane.AdaptiveChanging;
         state.AdaptiveSendButton.IsEnabled = !state.AdaptiveSubmitting && !state.Pane.AdaptiveChanging;
         ApplyAdaptiveToggleTheme(state, EffectivePaneTheme(state.Pane));
-        state.ScreenshotButton.HorizontalAlignment = HorizontalAlignment.Right;
-        state.ScreenshotButton.VerticalAlignment = VerticalAlignment.Bottom;
-        state.ScreenshotButton.Margin = new Thickness(0, 0, 9, 8);
         ToolTip.SetTip(
             state.AdaptiveToggleButton,
             pending
                 ? "Adaptive will create this Codex session when you send its first routed prompt"
                 : enabled
-                    ? "Adaptive routes prompts submitted in the native composer; click to restore manual model selection"
+                    ? "Adaptive routes prompts submitted in the native composer; click to return to manual prompting"
                     : "Automatically choose a Codex model and reasoning effort for each native prompt");
     }
 
@@ -798,42 +824,22 @@ public sealed partial class MainWindow : Window
             UpdatePaneAdaptiveControls(pane);
             return;
         }
-        var previousEnabled = pane.AdaptiveEnabled;
         pane.AdaptiveChanging = true;
         pane.AdaptiveEnabled = enabled;
         UpdatePaneAdaptiveControls(pane);
         try
         {
-            var launched = _openTabs.Values
-                .Where(state => ReferenceEquals(state.Pane, pane)
-                    && IsCodexSession(state)
-                    && state.IsLaunched)
-                .ToList();
-            var reconnecting = launched.Where(state => !IsPendingCodexSession(state)).ToList();
-            if (reconnecting.Count > 0)
-            {
-                SetStatus(
-                    $"{(enabled ? "Enabling" : "Disabling")} Adaptive · reconnecting {reconnecting.Count} Codex terminal{(reconnecting.Count == 1 ? string.Empty : "s")}…",
-                    StartingBrush);
-            }
-            else if (enabled && launched.Any(IsPendingCodexSession))
-            {
-                SetStatus("Adaptive enabled · the first routed prompt will create and attach this Codex session…", StartingBrush);
-            }
-            foreach (var state in reconnecting)
-                await RestartTerminalForAdaptiveModeAsync(state);
             await SaveWorkspaceAsync();
             SetStatus(
                 enabled
                     ? $"Adaptive enabled for {PaneLabel(pane)} · use the native prompt composer"
-                    : $"Adaptive disabled for {PaneLabel(pane)} · manual /model control is available",
+                    : $"Adaptive disabled for {PaneLabel(pane)} · terminal session kept running",
                 RunningBrush);
         }
         catch (Exception ex)
         {
-            pane.AdaptiveEnabled = previousEnabled;
-            NativeLog.Write($"Adaptive terminal mode change failed: {ex}");
-            SetStatus($"Could not change Adaptive mode: {ex.Message}", ErrorBrush);
+            NativeLog.Write($"Adaptive preference save failed: {ex}");
+            SetStatus($"Adaptive changed, but the workspace preference could not be saved: {ex.Message}", ErrorBrush);
         }
         finally
         {
@@ -842,7 +848,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task RestartTerminalForAdaptiveModeAsync(SessionTabState state)
+    private async Task RestartTerminalAfterAdaptiveSessionCreationAsync(SessionTabState state)
     {
         CancelTerminalReconnect(state, suppress: true);
         EndTerminalStartupReveal(state);
@@ -879,7 +885,7 @@ public sealed partial class MainWindow : Window
                 var sessionId = route.SessionId
                     ?? throw new InvalidDataException("Adaptive did not return the new Codex session ID.");
                 if (state.Key == temporaryKey) ApplySessionRekey(temporaryKey, sessionId, state.ProviderId);
-                await RestartTerminalForAdaptiveModeAsync(state);
+                await RestartTerminalAfterAdaptiveSessionCreationAsync(state);
             }
             state.AdaptivePromptBox.Text = string.Empty;
             var modelLabel = string.IsNullOrWhiteSpace(route.DisplayName) ? route.Model : route.DisplayName;
@@ -970,6 +976,13 @@ public sealed partial class MainWindow : Window
         }
         if (e.Key == Key.Escape)
         {
+            if (_speechStage != SpeechStage.Idle)
+            {
+                await CancelSpeechCaptureAsync();
+                SetStatus("Voice capture canceled.", StartingBrush);
+                e.Handled = true;
+                return;
+            }
             SetActivePane(_panes[0]);
             WorkspaceTabs.SelectedItem = DashboardTab;
             e.Handled = true;
@@ -2728,11 +2741,10 @@ public sealed partial class MainWindow : Window
         try
         {
             var providerId = _api.ProviderId;
-            var adaptive = targetPane.AdaptiveEnabled;
             var knownSessionIds = _sessions.Select(session => session.Id).ToHashSet(StringComparer.Ordinal);
             var key = await _api.CreateSessionAsync(
                 workingDirectory,
-                adaptive,
+                useControlPlane: string.Equals(providerId, "codex", StringComparison.Ordinal),
                 providerId: providerId);
             var project = workingDirectory.TrimEnd('/').Split('/').LastOrDefault() ?? workingDirectory;
             var state = CreateTerminalTab(
@@ -3122,12 +3134,37 @@ public sealed partial class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Bottom,
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 9, 8),
+            Margin = new Thickness(0),
             Background = ResourceBrush("ElevatedBrush"),
             BorderBrush = ResourceBrush("BorderBrightBrush"),
         };
         ToolTip.SetTip(screenshotButton, "Capture and attach a screenshot");
         AutomationProperties.SetName(screenshotButton, "Capture and attach a screenshot");
+        var microphoneButton = new Button
+        {
+            Content = "🎙",
+            Width = 32,
+            Height = 28,
+            Padding = new Thickness(0),
+            FontSize = 15,
+            Opacity = 0.82,
+            IsVisible = !isLocalShell,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Background = ResourceBrush("ElevatedBrush"),
+            BorderBrush = ResourceBrush("BorderBrightBrush"),
+        };
+        ToolTip.SetTip(microphoneButton, "Start voice-to-text for this terminal");
+        AutomationProperties.SetName(microphoneButton, "Start voice-to-text for this terminal");
+        var captureActions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 9, 8),
+            Children = { microphoneButton, screenshotButton },
+        };
         var adaptiveToggleButton = new ToggleButton
         {
             Content = "Adaptive off",
@@ -3209,7 +3246,7 @@ public sealed partial class MainWindow : Window
         };
         AutomationProperties.SetName(adaptiveComposer, "Adaptive Codex prompt composer");
         content.Children.Add(terminalClip);
-        content.Children.Add(screenshotButton);
+        content.Children.Add(captureActions);
         content.Children.Add(adaptiveToggleHost);
         content.Children.Add(adaptiveComposer);
         content.Children.Add(reconnectBanner);
@@ -3219,10 +3256,10 @@ public sealed partial class MainWindow : Window
         Grid.SetRow(adaptiveComposer, AdaptiveComposerRow);
         Grid.SetRow(inspectorResizeTrack, InspectorSplitterRow);
         Grid.SetRow(inspector, InspectorRow);
-        Grid.SetRow(screenshotButton, 0);
+        Grid.SetRow(captureActions, 0);
         Grid.SetRow(adaptiveToggleHost, 0);
         terminalClip.ZIndex = 0;
-        screenshotButton.ZIndex = 5;
+        captureActions.ZIndex = 5;
         adaptiveToggleHost.ZIndex = 6;
         adaptiveComposer.ZIndex = 6;
         inspectorResizeTrack.ZIndex = 3;
@@ -3288,7 +3325,7 @@ public sealed partial class MainWindow : Window
         };
         AutomationProperties.SetName(tab, title);
         var state = new SessionTabState(
-            key, tab, terminal, content, screenshotButton,
+            key, tab, terminal, content, screenshotButton, microphoneButton,
             adaptiveToggleButton, adaptivePulseHalo, adaptiveComposer, adaptivePromptBox, adaptiveSendButton, adaptiveRouteText,
             inspector, inspectorBody, inspectorHeading, inspectorToggleButton, inspectorSplitter,
             inspectorResizeTrack, inspectorResizeGrip,
@@ -3301,6 +3338,7 @@ public sealed partial class MainWindow : Window
 
         ApplyThemeToSessionState(state, EffectivePaneTheme(pane));
         screenshotButton.Click += async (_, _) => await CaptureAndPasteScreenshotAsync(state);
+        microphoneButton.Click += async (_, _) => await ToggleSpeechCaptureAsync(state);
         adaptiveToggleButton.Click += async (_, _) =>
             await SetPaneAdaptiveEnabledAsync(pane, adaptiveToggleButton.IsChecked == true);
         adaptiveSendButton.Click += async (_, _) => await SubmitAdaptivePromptAsync(state);
@@ -3433,6 +3471,225 @@ public sealed partial class MainWindow : Window
         var workspaceHeight = PaneWorkspaceScroll.Bounds.Height;
         if (workspaceHeight <= 0) workspaceHeight = fallbackHeight;
         return Math.Max(240, workspaceHeight - 46);
+    }
+
+    private async Task ToggleSpeechCaptureAsync(SessionTabState state)
+    {
+        if (state.Kind == TerminalSessionKind.LocalShell) return;
+        if (_speechStage == SpeechStage.Recording && ReferenceEquals(_speechTarget, state))
+        {
+            var operationId = _speechOperationId;
+            if (operationId is null) return;
+            _speechStage = SpeechStage.Transcribing;
+            UpdateSpeechButtons();
+            SetStatus("Finishing voice capture and transcribing locally…", StartingBrush);
+            try
+            {
+                await _speechHost.SendAsync(new SpeechHostCommand("stop", operationId));
+            }
+            catch (Exception ex)
+            {
+                NativeLog.Write($"Could not stop speech capture: {ex}");
+                SetStatus($"Voice capture failed: {ex.Message}", ErrorBrush);
+                ResetSpeechUi();
+            }
+            return;
+        }
+
+        if (_speechStage != SpeechStage.Idle)
+        {
+            SetStatus("Finish or cancel the active voice capture first.", StartingBrush);
+            return;
+        }
+
+        AttachTerminalVisualStyling(state);
+        if (!state.Pane.AdaptiveEnabled
+            && (state.TerminalView
+                ?? state.Terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault()) is null)
+        {
+            SetStatus("The terminal must be ready before starting voice-to-text.", StartingBrush);
+            return;
+        }
+
+        var operation = $"speech-{Guid.NewGuid():N}";
+        _speechTarget = state;
+        _speechOperationId = operation;
+        _speechUseAdaptiveComposer = state.Pane.AdaptiveEnabled;
+        _speechStage = SpeechStage.Recording;
+        UpdateSpeechButtons();
+        SetStatus("Starting local microphone capture…", StartingBrush);
+        try
+        {
+            await _speechHost.SendAsync(new SpeechHostCommand("start", operation));
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Could not start speech capture: {ex}");
+            SetStatus($"Voice capture failed: {ex.Message}", ErrorBrush);
+            ResetSpeechUi();
+        }
+    }
+
+    private void OnSpeechHostMessage(SpeechHostEvent message) =>
+        Dispatcher.UIThread.Post(() => _ = HandleSpeechHostMessageAsync(message));
+
+    private async Task HandleSpeechHostMessageAsync(SpeechHostEvent message)
+    {
+        if (message.OperationId is not null
+            && message.OperationId != _speechOperationId)
+            return;
+
+        switch (message.Type)
+        {
+            case "state" when message.Stage is not null:
+                _speechStage = message.Stage.Value;
+                UpdateSpeechButtons(message.Level);
+                SetStatus(
+                    _speechStage == SpeechStage.Recording
+                        ? "Listening · click the stop button when you are finished."
+                        : "Transcribing locally…",
+                    _speechStage == SpeechStage.Recording ? ErrorBrush : StartingBrush);
+                break;
+            case "level":
+                UpdateSpeechButtons(message.Level);
+                break;
+            case "download_progress" when message.Progress is not null:
+                SetStatus(
+                    $"Downloading the local speech model · {message.Progress.Value:P0}",
+                    StartingBrush);
+                break;
+            case "result":
+            {
+                var target = _speechTarget;
+                var useAdaptive = _speechUseAdaptiveComposer;
+                var text = message.Text?.Trim() ?? string.Empty;
+                ResetSpeechUi();
+                if (target is null || !target.IsAttached)
+                {
+                    SetStatus("Voice transcription was discarded because its terminal closed.", StartingBrush);
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    SetStatus("No speech was detected.", StartingBrush);
+                    return;
+                }
+                if (useAdaptive)
+                {
+                    InsertAdaptiveComposerText(target.AdaptivePromptBox, $"{text} ");
+                    SetStatus("Voice transcription added to the Adaptive prompt.", RunningBrush);
+                }
+                else
+                {
+                    await InsertSpeechIntoTerminalAsync(target, $"{text} ");
+                    SetStatus("Voice transcription added to the terminal input.", RunningBrush);
+                }
+                if (message.Parity is { Passed: false } parity)
+                    SetStatus($"Voice parity check failed · {string.Join(" ", parity.Failures)}", ErrorBrush);
+                break;
+            }
+            case "cancelled":
+                ResetSpeechUi();
+                SetStatus("Voice capture canceled.", StartingBrush);
+                break;
+            case "error":
+                NativeLog.Write($"Speech host error: {message.Error}");
+                ResetSpeechUi();
+                SetStatus($"Voice-to-text failed: {message.Error ?? "unknown speech-host error"}", ErrorBrush);
+                break;
+        }
+    }
+
+    private async Task InsertSpeechIntoTerminalAsync(SessionTabState state, string text)
+    {
+        var terminalView = state.TerminalView
+            ?? state.Terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault()
+            ?? throw new InvalidOperationException("The terminal input is unavailable.");
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
+            ?? throw new InvalidOperationException("The system clipboard is unavailable.");
+        var previous = await clipboard.TryGetDataAsync();
+        var restored = false;
+        try
+        {
+            await clipboard.SetTextAsync(text);
+            terminalView.Focus();
+            await terminalView.PasteAsync();
+        }
+        finally
+        {
+            try
+            {
+                if (previous is null) await clipboard.ClearAsync();
+                else await clipboard.SetDataAsync(previous);
+                restored = true;
+            }
+            catch (Exception ex)
+            {
+                NativeLog.Write($"Voice paste succeeded but clipboard restore failed: {ex}");
+            }
+            if (!restored) previous?.Dispose();
+        }
+    }
+
+    private async Task CancelSpeechCaptureAsync(SessionTabState? state = null)
+    {
+        if (_speechStage == SpeechStage.Idle || _speechOperationId is null) return;
+        if (state is not null && !ReferenceEquals(state, _speechTarget)) return;
+        var operationId = _speechOperationId;
+        try { await _speechHost.SendAsync(new SpeechHostCommand("cancel", operationId)); }
+        catch (Exception ex) { NativeLog.Write($"Speech cancellation failed: {ex.Message}"); }
+        ResetSpeechUi();
+    }
+
+    private void ResetSpeechUi()
+    {
+        _speechStage = SpeechStage.Idle;
+        _speechOperationId = null;
+        _speechTarget = null;
+        _speechUseAdaptiveComposer = false;
+        UpdateSpeechButtons();
+    }
+
+    private void UpdateSpeechButtons(float? level = null)
+    {
+        foreach (var state in _openTabs.Values)
+        {
+            var button = state.MicrophoneButton;
+            var isTarget = ReferenceEquals(state, _speechTarget);
+            var theme = EffectivePaneTheme(state.Pane);
+            button.IsEnabled = _speechStage == SpeechStage.Idle
+                || isTarget && _speechStage == SpeechStage.Recording;
+            button.Content = isTarget
+                ? _speechStage switch
+                {
+                    SpeechStage.Recording => "■",
+                    SpeechStage.Transcribing or SpeechStage.Downloading => "…",
+                    _ => "🎙",
+                }
+                : "🎙";
+            button.Background = Brush.Parse(
+                isTarget && _speechStage == SpeechStage.Recording ? theme.Hover : theme.Elevated);
+            button.BorderBrush = Brush.Parse(
+                isTarget && _speechStage != SpeechStage.Idle ? theme.Accent : theme.BorderBright);
+            button.BorderThickness = new Thickness(isTarget && _speechStage != SpeechStage.Idle ? 2 : 1);
+            button.Foreground = Brush.Parse(
+                isTarget && _speechStage != SpeechStage.Idle ? theme.Accent : theme.Primary);
+            button.Opacity = isTarget && _speechStage == SpeechStage.Recording && level is not null
+                ? Math.Clamp(0.72 + level.Value * 1.5, 0.72, 1)
+                : 0.82;
+            ToolTip.SetTip(
+                button,
+                isTarget && _speechStage == SpeechStage.Recording
+                    ? "Stop and transcribe voice capture"
+                    : isTarget && _speechStage == SpeechStage.Transcribing
+                        ? "Transcribing locally"
+                        : "Start voice-to-text for this terminal");
+            AutomationProperties.SetName(
+                button,
+                isTarget && _speechStage == SpeechStage.Recording
+                    ? "Stop and transcribe voice capture"
+                    : "Start voice-to-text for this terminal");
+        }
     }
 
     private async void OnTerminalPasteKeyDown(object? sender, KeyEventArgs args)
@@ -3818,7 +4075,7 @@ public sealed partial class MainWindow : Window
                     hostExecutable,
                     _api.TerminalWebSocketUri(
                         state.Key,
-                        adaptive: IsCodexSession(state) && state.Pane.AdaptiveEnabled,
+                        useControlPlane: IsCodexSession(state),
                         providerId: state.ProviderId).AbsoluteUri),
                 TerminalSessionKind.LocalShell => NativeLaunchBuilder.LocalShell(
                     _platform.Platform,
@@ -3882,11 +4139,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task MoveTabToPaneAsync(SessionTabState state, TerminalPaneState targetPane)
+    private Task MoveTabToPaneAsync(SessionTabState state, TerminalPaneState targetPane)
     {
-        if (ReferenceEquals(state.Pane, targetPane)) return;
+        if (ReferenceEquals(state.Pane, targetPane)) return Task.CompletedTask;
         var sourcePane = state.Pane;
-        var adaptiveModeChanged = sourcePane.AdaptiveEnabled != targetPane.AdaptiveEnabled;
         if (state.IsAttached) sourcePane.Tabs.Items.Remove(state.Tab);
         state.Pane = targetPane;
         ApplyPaneInspectorHeight(targetPane);
@@ -3897,8 +4153,7 @@ public sealed partial class MainWindow : Window
         targetPane.Tabs.SelectedItem = state.Tab;
         SetActivePane(targetPane);
         UpdatePaneEmptyStates();
-        if (adaptiveModeChanged && IsCodexSession(state) && state.IsLaunched)
-            await RestartTerminalForAdaptiveModeAsync(state);
+        return Task.CompletedTask;
     }
 
     private void ApplyPaneInspectorHeight(TerminalPaneState pane)
@@ -3946,6 +4201,7 @@ public sealed partial class MainWindow : Window
             await StopAndRemoveTabAsync(state, selectFallback);
             return;
         }
+        await CancelSpeechCaptureAsync(state);
         CancelTerminalReconnect(state, suppress: true);
         EndTerminalStartupReveal(state);
         state.Pane.Tabs.Items.Remove(state.Tab);
@@ -3958,6 +4214,7 @@ public sealed partial class MainWindow : Window
 
     private async Task StopAndRemoveTabAsync(SessionTabState state, bool selectFallback = true)
     {
+        await CancelSpeechCaptureAsync(state);
         CancelTerminalReconnect(state, suppress: true);
         EndTerminalStartupReveal(state);
         if (state.Kind == TerminalSessionKind.Codex)
@@ -4117,13 +4374,36 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task LoadSessionDetailsAsync(SessionTabState state, DashboardSession session)
+    private Task LoadSessionDetailsAsync(SessionTabState state, DashboardSession session)
+    {
+        var generation = ++state.SessionDetailsGeneration;
+        return LoadSessionDetailsCoreAsync(state, session, generation, TimeSpan.Zero);
+    }
+
+    private void ScheduleSessionDetailsRefresh(SessionTabState state, DashboardSession session)
+    {
+        var generation = ++state.SessionDetailsGeneration;
+        _ = LoadSessionDetailsCoreAsync(state, session, generation, TimeSpan.FromMilliseconds(250));
+    }
+
+    private async Task LoadSessionDetailsCoreAsync(
+        SessionTabState state,
+        DashboardSession session,
+        int generation,
+        TimeSpan delay)
     {
         try
         {
+            if (delay > TimeSpan.Zero) await Task.Delay(delay);
+            if (generation != state.SessionDetailsGeneration
+                || state.Session?.Id != session.Id
+                || !_openTabs.ContainsValue(state)) return;
             var contextTask = _api.GetContextAsync(session.Id, providerId: state.ProviderId);
             var configTask = _api.GetConfigAsync(session.Id, providerId: state.ProviderId);
             await Task.WhenAll(contextTask, configTask);
+            if (generation != state.SessionDetailsGeneration
+                || state.Session?.Id != session.Id
+                || !_openTabs.ContainsValue(state)) return;
             var context = contextTask.Result;
             var config = configTask.Result;
             var percent = context.MaxContext > 0 ? context.TotalUsed * 100d / context.MaxContext : 0;
@@ -4143,13 +4423,19 @@ public sealed partial class MainWindow : Window
                 $"user {FormatNumber(context.Categories.UserMessages)} · assistant {FormatNumber(context.Categories.AssistantMessages)} · tools {FormatNumber(context.Categories.ToolCalls)}";
             var permissions = string.Join(", ", config.Permissions.Select(permission =>
                 string.IsNullOrWhiteSpace(permission.Label) ? $"{permission.Scope}: {permission.Action}" : permission.Label).Distinct());
+            var reasoningEffort = string.IsNullOrWhiteSpace(config.ReasoningEffort)
+                ? session.ReasoningEffort
+                : config.ReasoningEffort;
             state.ConfigText.Text =
-                $"{config.Model} · {session.ReasoningEffort}\n{permissions}\n" +
+                $"{config.Model} · {reasoningEffort}\n{permissions}\n" +
                 $"{config.Rules.Count} rules · {config.ActiveSkills.Count} active skills";
         }
         catch (Exception ex)
         {
-            state.ContextText.Text = $"Context unavailable: {ex.Message}";
+            if (generation == state.SessionDetailsGeneration
+                && state.Session?.Id == session.Id
+                && _openTabs.ContainsValue(state))
+                state.ContextText.Text = $"Context unavailable: {ex.Message}";
             NativeLog.Write($"Session detail load failed for {session.Id}: {ex}");
         }
     }
@@ -4215,11 +4501,18 @@ public sealed partial class MainWindow : Window
             var current = _sessions.FirstOrDefault(session => session.Id == state.Session.Id);
             if (current is not null)
             {
+                var detailsChanged = state.Session.Model != current.Model
+                    || state.Session.ReasoningEffort != current.ReasoningEffort
+                    || state.Session.LastActivityAt != current.LastActivityAt
+                    || state.Session.PermissionMode != current.PermissionMode;
                 state.Session.Status = current.Status;
                 state.Session.Model = current.Model;
                 state.Session.ReasoningEffort = current.ReasoningEffort;
+                state.Session.LastActivityAt = current.LastActivityAt;
+                state.Session.PermissionMode = current.PermissionMode;
                 state.PromptText.Text = current.LastUserPrompt;
                 UpdateAdaptiveControls(state);
+                if (detailsChanged) ScheduleSessionDetailsRefresh(state, current);
             }
         }
     }
@@ -5275,6 +5568,9 @@ public sealed partial class MainWindow : Window
         state.ScreenshotButton.Background = Brush.Parse(theme.Elevated);
         state.ScreenshotButton.BorderBrush = Brush.Parse(theme.BorderBright);
         state.ScreenshotButton.Foreground = primary;
+        state.MicrophoneButton.Background = Brush.Parse(theme.Elevated);
+        state.MicrophoneButton.BorderBrush = Brush.Parse(theme.BorderBright);
+        state.MicrophoneButton.Foreground = primary;
         ApplyAdaptiveToggleTheme(state, theme);
         state.AdaptiveComposer.Background = surface;
         state.AdaptiveComposer.BorderBrush = accent;
@@ -5852,6 +6148,7 @@ public sealed partial class MainWindow : Window
         if (_statusFeed is not null) _ = _statusFeed.DisposeAsync();
         _searchCancellation?.Cancel();
         _updateInstallCancellation?.Cancel();
+        _ = _speechHost.DisposeAsync().AsTask();
         foreach (var state in _openTabs.Values.ToList())
         {
             CancelTerminalReconnect(state, suppress: true);
@@ -6086,6 +6383,7 @@ public sealed partial class MainWindow : Window
         TerminalControl terminal,
         Grid terminalViewport,
         Button screenshotButton,
+        Button microphoneButton,
         ToggleButton adaptiveToggleButton,
         Border adaptivePulseHalo,
         Border adaptiveComposer,
@@ -6128,6 +6426,7 @@ public sealed partial class MainWindow : Window
         public TerminalControl Terminal { get; } = terminal;
         public Grid TerminalViewport { get; } = terminalViewport;
         public Button ScreenshotButton { get; } = screenshotButton;
+        public Button MicrophoneButton { get; } = microphoneButton;
         public ToggleButton AdaptiveToggleButton { get; } = adaptiveToggleButton;
         public Border AdaptivePulseHalo { get; } = adaptivePulseHalo;
         public Border AdaptiveComposer { get; } = adaptiveComposer;
@@ -6180,6 +6479,7 @@ public sealed partial class MainWindow : Window
         public TaskCompletionSource<bool>? ReconnectNow { get; set; }
         public TerminalStartupGate? TerminalStartupGate { get; set; }
         public DispatcherTimer? TerminalStartupTimer { get; set; }
+        public int SessionDetailsGeneration { get; set; }
         public bool TerminalStartupAllowsQuietReveal { get; set; }
         public bool ArchiveConfirmationPending { get; set; }
     }

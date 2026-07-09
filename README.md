@@ -15,6 +15,10 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - **Needs-your-input filter** — one click to show only agents waiting for a reply
 - **Project filter** — compact count-labelled project selection replaces the unbounded native pill wall; selection persists across reloads
 - **Persistent native terminals** — provider-scoped PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback. On macOS the private service is launched through `nohup`, window close hides to the menu bar, and the menu-bar icon can reopen, reconnect, stop an idle app-managed service, or quit
+- **Instant Adaptive switching** — native Codex PTYs stay connected through one app-server control plane while each pane independently switches between native Adaptive routing and direct TUI prompting without restarting or replaying the terminal
+- **Durable blank terminals and live context** — newly opened Codex tabs remain available until their first prompt persists the thread, while open native inspectors follow model, reasoning-effort, and context changes from manual `/model` selection or Adaptive routing
+- **Project-root-safe native sessions** — each new Codex TUI receives the directory selected in the native chooser as an explicit working root, including when it connects through the shared app-server control plane
+- **Local native voice-to-text** — each Codex terminal has a microphone control that captures through a dedicated cross-platform audio helper, trims speech with Silero VAD, transcribes locally with Whisper base.en, and inserts the result into either terminal input or the initiating pane's Adaptive composer without auto-submitting
 - **Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for active provider sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
 - **Archive / restore** — hide sessions from the list without deleting them; restore from the collapsible drawer at the bottom of the sidebar
@@ -85,7 +89,7 @@ request workflow artifacts use the same unambiguous names but are temporary
 validation outputs rather than stable releases.
 
 The Windows ZIP is a portable application. After verifying its SHA-256, extract
-the complete archive to `%LOCALAPPDATA%\Programs\CodexNative`, keep all three
+the complete archive to `%LOCALAPPDATA%\Programs\CodexNative`, keep all four
 executables together, and run or pin `CodexNative.exe` from that location. Do
 not install it on the Desktop, in Downloads, or under OneDrive/network sync:
 the in-place updater needs to atomically replace the installation directory.
@@ -219,6 +223,8 @@ native/
   native/CodexNative.Core/NativeLaunchBuilder.cs   Validated launch specifications for the loopback terminal bridge, local shells, and private Windows/macOS service.
   native/CodexNative.TerminalHost/Program.cs       Cross-platform console companion for persistent server-terminal bridging and Windows WSL startup.
   native/CodexNative.TerminalHost/TerminalBridge.cs Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent server PTYs.
+  native/CodexNative.SpeechHost/SpeechHostApplication.cs On-demand local microphone, Silero VAD, Whisper transcription, and measurable Handy-parity fixture host.
+  native/CodexNative.Core/SpeechProtocol.cs        Typed speech-helper lifecycle, capture-health metrics, and word-error-rate parity policy.
   native/CodexNative.Core/NativePlatform.cs        Explicit Windows, macOS, and Linux native runtime profile and artifact naming.
   native/CodexNative.Core/ExecutableResolver.cs    Validated Node.js and login-shell discovery without user-controlled shell interpolation.
   native/CodexNative.Core/DashboardRepositoryLocator.cs Finds a ready ui-my-cli checkout (sources plus express/node-pty) from configuration, app location, or conventional home paths, preferring dependency-ready paths over stale configured ones.

@@ -241,6 +241,10 @@ function collect() {
     'Cross-platform console companion for persistent server-terminal bridging and Windows WSL startup.';
   fileDescs['native/CodexNative.TerminalHost/TerminalBridge.cs'] =
     'Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent server PTYs.';
+  fileDescs['native/CodexNative.SpeechHost/SpeechHostApplication.cs'] =
+    'On-demand local microphone, Silero VAD, Whisper transcription, and measurable Handy-parity fixture host.';
+  fileDescs['native/CodexNative.Core/SpeechProtocol.cs'] =
+    'Typed speech-helper lifecycle, capture-health metrics, and word-error-rate parity policy.';
   fileDescs['native/CodexNative.Core/NativePlatform.cs'] =
     'Explicit Windows, macOS, and Linux native runtime profile and artifact naming.';
   fileDescs['native/CodexNative.Core/ExecutableResolver.cs'] =
@@ -422,7 +426,7 @@ request workflow artifacts use the same unambiguous names but are temporary
 validation outputs rather than stable releases.
 
 The Windows ZIP is a portable application. After verifying its SHA-256, extract
-the complete archive to \`%LOCALAPPDATA%\\Programs\\CodexNative\`, keep all three
+the complete archive to \`%LOCALAPPDATA%\\Programs\\CodexNative\`, keep all four
 executables together, and run or pin \`CodexNative.exe\` from that location. Do
 not install it on the Desktop, in Downloads, or under OneDrive/network sync:
 the in-place updater needs to atomically replace the installation directory.

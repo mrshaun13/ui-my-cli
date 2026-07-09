@@ -30,9 +30,9 @@ public sealed class DashboardApiClient : IDisposable
         string sessionId,
         int columns = 120,
         int rows = 36,
-        bool adaptive = false,
+        bool useControlPlane = false,
         string? providerId = null) =>
-        new($"ws://127.0.0.1:{_service.Port}/ws/{ProviderPath(providerId)}/terminal/{Uri.EscapeDataString(sessionId)}?cols={columns}&rows={rows}&adaptive={(adaptive ? 1 : 0)}");
+        new($"ws://127.0.0.1:{_service.Port}/ws/{ProviderPath(providerId)}/terminal/{Uri.EscapeDataString(sessionId)}?cols={columns}&rows={rows}&controlPlane={(useControlPlane ? 1 : 0)}");
 
     public void UseProvider(string providerId)
     {
@@ -129,7 +129,7 @@ public sealed class DashboardApiClient : IDisposable
             cancellationToken);
         if (!_providerId.Equals("codex", StringComparison.OrdinalIgnoreCase)) return stats;
 
-        // Credit rollups and every heatmap window are part of the Codex v2
+        // Credit rollups and every heatmap window are part of the Codex API
         // contract. Other providers may expose a smaller analytics surface.
         var missingWindows = RequiredUsageWindows
             .Where(window => !stats.UsageRollups.ContainsKey(window)
@@ -165,13 +165,13 @@ public sealed class DashboardApiClient : IDisposable
 
     public async Task<string> CreateSessionAsync(
         string workingDirectory,
-        bool adaptive = false,
+        bool useControlPlane = false,
         CancellationToken cancellationToken = default,
         string? providerId = null)
     {
         using var response = await _http.PostAsJsonAsync(
             ProviderUri("sessions/create", providerId),
-            new { workingDir = workingDirectory, adaptive },
+            new { workingDir = workingDirectory, controlPlane = useControlPlane },
             cancellationToken);
         response.EnsureSuccessStatusCode();
         using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);

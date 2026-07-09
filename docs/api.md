@@ -27,7 +27,7 @@ with an appropriate HTTP status code.
 | `GET` | `/api/sessions/search` | Compatibility alias for default provider search |
 | `GET` | `/api/:providerId/repos` | List all unique repos (working directories) from one provider's past sessions |
 | `GET` | `/api/repos` | Compatibility alias for default provider repos |
-| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string, adaptive?: boolean }`); returns `{ tempKey }` |
+| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string, controlPlane?: boolean }`); returns `{ tempKey }` |
 | `POST` | `/api/sessions/create` | Compatibility alias for default provider session creation |
 | `GET` | `/api/:providerId/sessions/:id/preview` | Provider-scoped rich read-only session detail — chat history, stats, top tools |
 | `GET` | `/api/sessions/:id/preview` | Rich read-only session detail — chat history, stats, top tools |

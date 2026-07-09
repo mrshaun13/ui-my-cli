@@ -70,14 +70,20 @@ UI-owned and end when their tab or the app closes.
 - Automatic terminal-bridge reconnect with bounded backoff and a manual
   "Retry now" action when a terminal view disconnects unexpectedly.
 - New-session chooser with selected-provider agent and platform-shell modes plus
-  searchable known projects and paths. Shell tabs open a direct login shell in
-  the selected project and close the shell when the tab or application closes.
-- Automatic reconciliation of new terminals with their saved provider session ID.
-- Per-terminal Adaptive model routing for Codex. When enabled, a native prompt
-  composer uses local task-shape rules first, calls a small ephemeral classifier
-  only for low-confidence requests, validates the decision against Codex's live
+  projects and paths. Shell tabs open a direct login shell in the selected
+  project and close the shell when the tab or application closes. Codex tabs
+  pass that selected project as an explicit working root even when their TUI is
+  connected through the shared app-server control plane.
+- Automatic reconciliation of new terminals with their saved Codex session ID.
+  A healthy blank terminal remains open until its first prompt creates the
+  persisted thread; only a terminal that actually exits is dismissed.
+- Per-terminal Adaptive model routing for Codex. When enabled, a native prompt composer
+  uses local task-shape rules first, calls a small ephemeral classifier only
+  for low-confidence requests, validates the decision against Codex's live
   `model/list` catalog, and submits the turn with a supported model and
-  reasoning effort. Non-Adaptive terminals retain the existing direct PTY path.
+  reasoning effort. Native Codex terminals keep one persistent app-server-backed
+  PTY whether Adaptive routing is on or off, so changing the routing preference
+  does not restart the terminal or replay its conversation.
 - Clipboard-aware screenshot paste: copy a Windows or macOS image, press
   `Ctrl+V` in a Codex terminal, and the native client stores a managed temporary
   PNG and inserts its host-accessible image reference into the composer. Windows
@@ -88,8 +94,15 @@ UI-owned and end when their tab or the app closes.
   Each Codex viewport also has a camera button that opens Windows screen
   clipping or macOS interactive capture and attaches the completed image
   without requiring `Ctrl+V`.
-- Per-session context usage, model, reasoning, permissions, rules, active
-  skills, latest prompt, rename, and archive controls.
+- Local voice-to-text through the microphone button beside the camera button.
+  Capture runs only between explicit start and stop clicks in an isolated
+  helper process, is normalized to 16 kHz mono, trimmed with Silero VAD, and
+  transcribed locally with Whisper base.en. The text is inserted without being
+  submitted: into the terminal input in direct mode, or into the initiating
+  pane's prompt box when Adaptive is enabled.
+- Live per-session context usage, model, reasoning, permissions, rules, active
+  skills, latest prompt, rename, and archive controls. Persisted `turn_context`
+  changes from either `/model` or Adaptive routing refresh the open inspector.
 - Native session summaries with complete conversation history, copy actions,
   an interactive context-composition ring, tool usage, model changes, and real
   Codex subagent lifecycle timelines with task/result details.
@@ -160,18 +173,43 @@ values to 1–100 megapixels; missing or non-positive values use the defaults.
 
 ### Adaptive routing
 
-Adaptive is stored per terminal pane and is off by default. Enabling it
-reconnects that pane's Codex terminals through a private loopback app-server
-while keeping the authentic Codex TUI visible. Prompts submitted through the
+Adaptive is stored per terminal pane and is off by default. Native Codex
+terminals connect through a private loopback app-server while keeping the
+authentic Codex TUI visible, regardless of the Adaptive preference. Switching
+Adaptive on or off changes only where new prompts are composed and routed; it
+does not restart the PTY. Prompts submitted through the
 native Adaptive composer are classified as simple, standard, deep, or critical
 and routed only to model/effort combinations advertised for the signed-in user.
 The composer shows the selected model, effort, route level, and whether the
-model classifier was needed. Turning Adaptive off reconnects the normal direct
-Codex terminal and restores manual `/model` control.
+model classifier was needed. Turning Adaptive off keeps the same terminal and
+returns prompt entry to the authentic Codex TUI, including its `/model` command.
 
 The classifier never receives the full transcript and is skipped for
 high-confidence local decisions. Routing failure preserves the draft and does
 not silently submit with a different configuration.
+
+### Local voice-to-text
+
+The speech helper starts on demand and the microphone is released after stop,
+cancel, tab close, or application shutdown. Audio is not sent to a remote
+service. The first use downloads the Whisper base.en and Silero VAD model files
+to the OS user's `CodexNative/speech-models` application-data directory; the
+Whisper model is accepted only after its pinned SHA-256 verifies. Later uses
+reuse the local models.
+
+The implementation records capture-start latency, peak level, clipping,
+leading/trailing silence, and word error rate for a supplied reference phrase.
+Its speech-host protocol can also transcribe absolute `.wav` fixtures, including
+Handy recordings, so the same phrases and microphone can be compared before a
+release is considered Handy-equivalent. Automated tests cover lifecycle,
+metric, WAV round-trip/resampling, and parity thresholds; a physical microphone
+bake-off remains a release gate because CI cannot measure the user's audio
+hardware, room, or OS permissions.
+
+Windows asks for microphone access through the normal privacy controls. macOS
+uses `NSMicrophoneUsageDescription` in the app bundle and carries the
+audio-input entitlement for future signed builds. A denied permission or
+missing input device is reported in the dashboard status line.
 
 Additional release/runtime capabilities preserved from v1.1.2:
 
@@ -298,13 +336,15 @@ Extract the complete archive to a stable, local, user-writable directory:
 Do not run the application from inside the ZIP, the Downloads directory, the
 Desktop, OneDrive, or another synchronized/network directory. The updater
 atomically renames and replaces the installation directory; sync clients can
-deny that operation or leave stale folder entries. Keep all three executables
+deny that operation or leave stale folder entries. Keep all four executables
 together:
 
 ```text
 CodexNative.exe
 CodexNative.TerminalHost.exe
+CodexNative.SpeechHost.exe
 CodexNative.Updater.exe
+runtimes\win-x64\*.dll
 ```
 
 The binaries are not currently code-signed. After verifying the GitHub origin
