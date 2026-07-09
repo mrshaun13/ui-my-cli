@@ -1342,28 +1342,33 @@ public sealed partial class MainWindow : Window
     {
         if (_statusFeed is not null) return;
         var providerId = _api.ProviderId;
-        _statusFeed = new DashboardStatusFeed(_api.StatusWebSocketUri);
-        _statusFeed.SessionsReceived += sessions => Dispatcher.UIThread.Post(() =>
+        var epoch = _providerEpoch;
+        var feed = new DashboardStatusFeed(_api.StatusWebSocketUri);
+        _statusFeed = feed;
+        feed.SessionsReceived += sessions => Dispatcher.UIThread.Post(() =>
         {
-            if (_api.ProviderId == providerId) ApplyPushedSessions(sessions);
+            if (!ReferenceEquals(_statusFeed, feed) || !IsCurrentProviderData(providerId, epoch)) return;
+            ApplyPushedSessions(sessions);
         });
-        _statusFeed.SessionRekeyed += (temporaryKey, realId) =>
+        feed.SessionRekeyed += (temporaryKey, realId) =>
             Dispatcher.UIThread.Post(() =>
             {
-                if (_api.ProviderId == providerId) ApplySessionRekey(temporaryKey, realId);
+                if (!ReferenceEquals(_statusFeed, feed) || !IsCurrentProviderData(providerId, epoch)) return;
+                ApplySessionRekey(temporaryKey, realId);
             });
-        _statusFeed.PendingSessionExpired += temporaryKey =>
+        feed.PendingSessionExpired += temporaryKey =>
             Dispatcher.UIThread.Post(() =>
             {
-                if (_api.ProviderId == providerId) RemoveExpiredPendingSession(temporaryKey);
+                if (!ReferenceEquals(_statusFeed, feed) || !IsCurrentProviderData(providerId, epoch)) return;
+                RemoveExpiredPendingSession(temporaryKey);
             });
-        _statusFeed.ConnectionChanged += connected => Dispatcher.UIThread.Post(() =>
+        feed.ConnectionChanged += connected => Dispatcher.UIThread.Post(() =>
         {
-            if (_api.ProviderId != providerId) return;
+            if (!ReferenceEquals(_statusFeed, feed) || !IsCurrentProviderData(providerId, epoch)) return;
             SetDashboardConnectionState(connected);
             if (connected) SetStatus($"{CurrentProviderLabel} live push connected · {_sessions.Count:N0} sessions", RunningBrush);
         });
-        _statusFeed.Start();
+        feed.Start();
     }
 
     private async Task StopStatusFeedAsync()
@@ -4626,15 +4631,20 @@ public sealed partial class MainWindow : Window
             ApplySessionFilter();
             return;
         }
+        var providerId = _api.ProviderId;
+        var epoch = _providerEpoch;
         try
         {
             await Task.Delay(250, cancellationToken);
-            _searchResults = await _api.SearchSessionsAsync(query, ArchivedCheckBox.IsChecked == true, cancellationToken);
+            var results = await _api.SearchSessionsAsync(query, ArchivedCheckBox.IsChecked == true, cancellationToken);
+            if (!IsCurrentProviderData(providerId, epoch)) return;
+            _searchResults = results;
             ApplySessionFilter();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
+            if (!IsCurrentProviderData(providerId, epoch)) return;
             _searchResults = null;
             SetStatus($"Deep search unavailable; showing local matches: {ex.Message}", StartingBrush);
             ApplySessionFilter();
@@ -5675,11 +5685,16 @@ public sealed partial class MainWindow : Window
         var probeFailed = false;
         try
         {
-            var active = await _api.GetActiveTerminalIdsAsync();
-            if (active.Count > 0)
+            var activeCount = 0;
+            foreach (var providerId in UpdateDrainProviderIds())
+            {
+                var active = await _api.GetActiveTerminalIdsAsync(providerId: providerId);
+                activeCount += active.Count;
+            }
+            if (activeCount > 0)
             {
                 SetStatus(
-                    $"Close {active.Count} active terminal{(active.Count == 1 ? string.Empty : "s")} before stopping the service.",
+                    $"Close {activeCount} active terminal{(activeCount == 1 ? string.Empty : "s")} before stopping the service.",
                     StartingBrush);
                 return OwnedServiceStopOutcome.RefusedActiveTerminals;
             }
