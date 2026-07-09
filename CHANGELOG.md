@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Native desktop 1.1.5
+
+- Added a native Agent selector backed by `/api/providers` so Codex and Devin
+  can coexist in the Avalonia desktop app without mixing session lists.
+- Scoped native dashboard REST, WebSocket, tabs, previews, archives, and
+  session actions by selected provider; persists `ProviderId` in native
+  settings and stamps each pane tab so reattach stays provider-correct.
+- Hardened provider switches: status-feed restart/rollback, refresh and search
+  epoch guards, multi-provider update drain and service-stop, pending-tab
+  rekey after full refresh, catalog refresh when switching, and safer preview
+  provider fallbacks.
+- Devin analytics omit Codex-only credit rollups and pricing telemetry when
+  Devin is selected.
+- Fixed native pane theming and responsive header/pane sizing for the
+  provider-aware chrome.
+- Bumped the native version to 1.1.5 and documented mandatory version +
+  `CHANGELOG.md` release hygiene for agent contributors.
+- Remaining non-goals: macOS signing/notarization and a fully self-contained
+  desktop payload remain separate work.
+
 ### Native desktop 1.1.4
 
 - Recovered the native macOS runtime against a real Apple Silicon environment:

@@ -806,7 +806,10 @@ ${scriptList}
 | \`server/pty-manager.js\` | node-pty lifecycle, scrollback buffer, WSL env handling, Unix spawn-helper executable repair |
 | \`native/CodexNative/MainWindow.axaml.cs\` | Native Agent provider switcher, provider-scoped tabs, analytics, and preferences |
 | \`native/CodexNative/DashboardApiClient.cs\` | Provider-scoped native REST/WebSocket client for the loopback dashboard API |
+| \`Directory.Build.props\` | Native version source of truth (\`Version\` / assembly / file versions) for packaging and CI |
+| \`CHANGELOG.md\` | Hand-edited release notes under \`## Unreleased\` — required on every user-facing native PR |
 | \`scripts/doc-prose.js\` | Editorial prose for auto-generated docs |
+| \`native/README.md\` | Native install, update contract, and platform notes (hand-edited) |
 
 ## Status Values (Canonical)
 
@@ -867,6 +870,34 @@ ${principleList}
 Before writing code, run through these questions:
 
 ${checklistItems}
+
+`;
+})()}${(() => {
+  const rp = prose.release_process;
+  if (!rp) return '';
+  const when = (rp.when_required || []).map(i => `- ${i}`).join('\n');
+  const prCheck = (rp.pr_checklist || []).map(i => `- ${i}`).join('\n');
+  const publish = (rp.publish_steps || []).map((i, n) => `${n + 1}. ${i}`).join('\n');
+  const nonGoals = (rp.non_goals || []).map(i => `- ${i}`).join('\n');
+  return `## Native release process
+
+${rp.overview || ''}
+
+### When a PR must follow this process
+
+${when}
+
+### PR checklist (do these before merge)
+
+${prCheck}
+
+### Publishing a stable release (after merge to \`main\`)
+
+${publish}
+
+### Non-goals / traps
+
+${nonGoals}
 
 `;
 })()}## Adding a New REST Endpoint

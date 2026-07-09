@@ -334,7 +334,7 @@ the behavior matches the Windows client.
 
 `Directory.Build.props` is the native version source. Every CI artifact and
 updater archive includes that version and runtime, such as
-`CodexNative-v1.1.4-osx-arm64.zip`. Pull requests retain these versioned Actions
+`CodexNative-v1.1.5-osx-arm64.zip`. Pull requests retain these versioned Actions
 artifacts for short-term validation; they are not production releases.
 
 The pinned GitHub Actions workflow tests native command policy, builds Windows
