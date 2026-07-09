@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Native desktop 1.1.4
+
+- Recovered the native macOS runtime against a real Apple Silicon environment:
+  the app now prefers a ready local ui-my-cli checkout (dashboard sources plus
+  installed `express` and `node-pty`) over a stale configured path, and reports
+  missing checkout or dependency setup as an actionable native status instead
+  of an empty dashboard.
+- Expanded checkout discovery to common home-directory locations and one level
+  under Desktop, Documents, Developer, Projects, and Code.
+- Repaired the executable bit npm can lose on node-pty's Unix `spawn-helper` at
+  dashboard startup and before each PTY spawn, eliminating the opaque
+  `posix_spawnp failed` terminal failure on macOS and other non-Windows hosts.
+- Launched the private macOS dashboard service through `nohup` so it survives
+  Finder/LaunchServices UI closure and supports terminal reattachment.
+- Added a macOS menu-bar service lifecycle: closing the window hides it while
+  the menu-bar icon can reopen the dashboard, start or reconnect the service,
+  stop an app-managed idle service (refused while a terminal is active), or
+  quit after a best-effort stop.
+- Bumped the native version to 1.1.4; each native release matrix job verifies its
+  RID archive with `npm run native:verify-artifacts -- <rid>`.
+- Remaining non-goals: the package still requires a prepared local ui-my-cli
+  checkout with Node and dependencies; macOS signing, notarization, and a fully
+  self-contained desktop payload remain separate work.
+
 ### Native desktop 1.1.3
 
 - Added a persistent, horizontally resizable multi-pane native workspace with

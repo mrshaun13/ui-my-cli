@@ -1,5 +1,5 @@
 /**
- * PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients.
+ * PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients, with Unix spawn-helper executable repair.
  *
  * One PTY per provider/session ID. Multiple WS clients can attach to the same PTY
  * (e.g. two browser tabs), all sharing the same terminal stream.
@@ -8,6 +8,9 @@
  *
  * On WSL: we need to ensure the shell environment is properly inherited
  * so the selected CLI binary is on PATH.
+ *
+ * On macOS and other Unix hosts, npm can ship node-pty's spawn-helper without the
+ * executable bit; startup and spawn paths repair that mode so posix_spawnp works.
  *
  * Output buffering:
  *   Each PTY keeps a rolling byte buffer (SCROLLBACK_BYTES) of recent output.

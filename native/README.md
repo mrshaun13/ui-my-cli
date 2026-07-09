@@ -18,9 +18,10 @@ checkout is ready only when it has the dashboard sources and the installed
 session rail explicitly say that dashboard setup is required and name the
 missing checkout or dependency step instead of presenting an empty dashboard.
 
-On Apple Silicon, the client also repairs the executable mode that npm can lose
-on node-pty's `spawn-helper`. This prevents the otherwise opaque
-`posix_spawnp failed` error and restores native Codex terminal attachments.
+The local Node dashboard service also repairs the executable mode that npm can
+lose on node-pty's Unix `spawn-helper` (including darwin-arm64). This prevents
+the otherwise opaque `posix_spawnp failed` error and restores Codex terminal
+attachments on macOS and other non-Windows hosts.
 
 The v1.1.4 packaged app was validated on Apple Silicon against real local Codex
 state: it found sessions, started its private loopback service, and attached a
@@ -323,8 +324,11 @@ updater archive includes that version and runtime, such as
 artifacts for short-term validation; they are not production releases.
 
 The pinned GitHub Actions workflow tests native command policy, builds Windows
-x64 and macOS Intel/Apple Silicon on matching runners, and validates executable
-formats and bundle metadata. A stable release can then be published in either
+x64 and macOS Intel/Apple Silicon on matching runners, validates executable
+formats and bundle metadata, and runs per-RID release archive verification with
+`npm run native:verify-artifacts -- <rid>` after packaging each matrix runtime.
+Locally, omit the RID argument to verify all three packaged runtimes under
+`native/artifacts/releases`. A stable release can then be published in either
 of two controlled ways:
 
 1. Push an exact `v<version>` tag matching `Directory.Build.props`.

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The browser dashboard server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Windows keeps Codex and project files in WSL2; macOS uses the local Node service and Codex state. Direct login-shell tabs run in validated project paths and end when their tab or the application closes. Native updates consume platform-specific GitHub Release archives, verify their SHA-256 manifests, stage them outside the installation, wait for active work to drain, and hand replacement/restart to an external helper with rollback.
+The browser dashboard server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Windows keeps Codex and project files in WSL2; macOS uses the local Node service and Codex state, recovers a ready ui-my-cli checkout with installed Node dependencies when a configured path is stale, launches its private service through `nohup`, and exposes a menu-bar lifecycle for hide/reopen/stop/quit. The Node PTY manager self-heals a missing executable bit on node-pty's Unix spawn-helper before spawn. Direct login-shell tabs run in validated project paths and end when their tab or the application closes. Native updates consume platform-specific GitHub Release archives, verify their SHA-256 manifests, stage them outside the installation, wait for active work to drain, and hand replacement/restart to an external helper with rollback.
 
 ## Data Flow
 
@@ -25,7 +25,7 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | `server/index.js` | Agent Dashboard — Express server with WebSocket support. |
 | `server/sessions.js` | Codex compatibility session facade for legacy imports. |
 | `server/stats.js` | Codex compatibility stats facade for legacy imports. |
-| `server/pty-manager.js` | PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients. |
+| `server/pty-manager.js` | PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients, with Unix spawn-helper executable repair. |
 | `server/db-path.js` | Compatibility exports for legacy db-path imports. |
 | `server/codex-paths.js` | Resolves local Codex state paths. |
 | `server/codex-store.js` | Codex session adapter. |
@@ -55,19 +55,20 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 
 | File | Description |
 | --- | --- |
-| `native/CodexNative/MainWindow.axaml.cs` | Cross-platform native dashboard shell, persistent Codex tabs, direct local shell tabs, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences. |
+| `native/CodexNative/App.axaml.cs` | Avalonia application entry; on macOS configures the menu-bar icon for open, service start/reconnect, managed stop, and quit. |
+| `native/CodexNative/MainWindow.axaml.cs` | Cross-platform native dashboard shell, persistent Codex tabs, direct local shell tabs, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences. |
 | `native/CodexNative/MainWindow.axaml` | Native dashboard layout with theme-aware control chrome and the in-app pixel C identity. |
 | `native/CodexNative/Assets/codex-native-icon.png` | Transparent generated pixel-art C used by the native dashboard header. |
 | `native/CodexNative/Assets/codex-native-icon.ico` | Multi-resolution Windows executable and title-bar icon bundle. |
 | `native/CodexNative/DashboardApiClient.cs` | Typed localhost client for sessions, repos, stats, context, configuration, rename, and archive metadata. |
 | `native/CodexNative/DashboardTheme.cs` | Native equivalents of the browser dashboard themes and text-size choices. |
-| `native/CodexNative/DashboardServiceManager.cs` | Starts the local ui-my-cli service in WSL2 or macOS when port 7575 is unavailable. |
+| `native/CodexNative/DashboardServiceManager.cs` | Starts the local ui-my-cli service in WSL2 or macOS when port 7575 is unavailable; on macOS launches through nohup and can stop an app-owned idle service. |
 | `native/CodexNative.Core/NativeLaunchBuilder.cs` | Validated launch specifications for the loopback terminal bridge, local shells, and private Windows/macOS service. |
 | `native/CodexNative.TerminalHost/Program.cs` | Cross-platform console companion for persistent server-terminal bridging and Windows WSL startup. |
 | `native/CodexNative.TerminalHost/TerminalBridge.cs` | Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent server PTYs. |
 | `native/CodexNative.Core/NativePlatform.cs` | Explicit Windows, macOS, and Linux native runtime profile and artifact naming. |
 | `native/CodexNative.Core/ExecutableResolver.cs` | Validated Node.js and login-shell discovery without user-controlled shell interpolation. |
-| `native/CodexNative.Core/DashboardRepositoryLocator.cs` | Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths. |
+| `native/CodexNative.Core/DashboardRepositoryLocator.cs` | Finds a ready ui-my-cli checkout (sources plus express/node-pty) from configuration, app location, or conventional home paths, preferring dependency-ready paths over stale configured ones. |
 | `native/CodexNative.Core/DashboardApiCompatibility.cs` | Exact native-client/server API compatibility policy that rejects stale services with incomplete analytics contracts. |
 | `native/CodexNative.Core/DashboardServicePorts.cs` | Bounded private-service port policy used to bypass incompatible or orphaned loopback services safely. |
 | `native/CodexNative.Core/TokenChartMath.cs` | Shared-scale chart math that keeps native input/output token comparisons proportional. |

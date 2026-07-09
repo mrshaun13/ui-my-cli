@@ -49,7 +49,7 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 | `server/index.js` | All REST endpoints, WebSocket protocol, broadcast logic |
 | `client/src/hooks/useStatusFeed.js` | How the client receives live session updates |
 | `client/src/components/Terminal.jsx` | xterm.js + PTY WebSocket bridge |
-| `server/pty-manager.js` | node-pty lifecycle, scrollback buffer, WSL env handling |
+| `server/pty-manager.js` | node-pty lifecycle, scrollback buffer, WSL env handling, Unix spawn-helper executable repair |
 | `scripts/doc-prose.js` | Editorial prose for auto-generated docs |
 
 ## Status Values (Canonical)
