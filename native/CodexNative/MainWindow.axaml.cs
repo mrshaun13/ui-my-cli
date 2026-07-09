@@ -242,13 +242,13 @@ public sealed partial class MainWindow : Window
         _initializingAnalytics = false;
     }
 
-    private async Task EnsureDashboardServiceAsync()
+    private async Task<bool> EnsureDashboardServiceAsync(CancellationToken cancellationToken = default)
     {
         SetStatus("Connecting to ui-my-cli data service…", StartingBrush);
-        if (await _api.TryUseExistingServiceAsync())
+        if (await _api.TryUseExistingServiceAsync(cancellationToken))
         {
             SetStatus($"Dashboard connected on {_api.ConnectedPort} · persistent terminals enabled", RunningBrush);
-            return;
+            return true;
         }
 
         try
@@ -267,13 +267,13 @@ public sealed partial class MainWindow : Window
                 var exited = false;
                 for (var attempt = 0; attempt < 20; attempt++)
                 {
-                    await Task.Delay(500);
-                    if (await _api.IsAvailableAsync())
+                    await Task.Delay(500, cancellationToken);
+                    if (await _api.IsAvailableAsync(cancellationToken))
                     {
                         SetStatus(
                             $"Started ui-my-cli data service on {port} · persistent terminals enabled",
                             RunningBrush);
-                        return;
+                        return true;
                     }
                     if (!_serviceManager.TryGetExitCode(out var exitCode)) continue;
                     NativeLog.Write(
@@ -289,10 +289,15 @@ public sealed partial class MainWindow : Window
                 $"No private dashboard port from {DashboardServicePorts.FirstPrivate} through " +
                 $"{DashboardServicePorts.LastPrivate} could start the data service. See {NativeLog.FilePath}");
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             NativeLog.Write($"Dashboard service startup failed: {ex}");
             SetStatus($"Dashboard data unavailable: {ex.Message}", ErrorBrush);
+            return false;
         }
     }
 
@@ -2713,7 +2718,16 @@ public sealed partial class MainWindow : Window
         while (consecutiveClearChecks < 2)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var sessions = await _api.GetSessionsAsync(cancellationToken);
+            var sessions = await NativeUpdateDataServiceRecovery.RunAsync(
+                _api.GetSessionsAsync,
+                async token =>
+                {
+                    NativeLog.Write(
+                        $"Dashboard service on port {_api.ConnectedPort} stopped during update drain; attempting recovery.");
+                    SetStatus("Update downloaded · reconnecting to verify active sessions…", StartingBrush);
+                    return await EnsureDashboardServiceAsync(token);
+                },
+                cancellationToken);
             var blockingSessions = NativeUpdatePolicy.CountBlockingSessions(
                 sessions.Select(session => (session.Status, session.IsHeadless)));
             var localShells = _openTabs.Values.Count(state =>
