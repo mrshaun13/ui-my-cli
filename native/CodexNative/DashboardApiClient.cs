@@ -14,6 +14,7 @@ public sealed class DashboardApiClient : IDisposable
         Timeout = TimeSpan.FromSeconds(90),
     };
     private Uri _service = SharedService;
+    private string _providerId = "codex";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -21,10 +22,24 @@ public sealed class DashboardApiClient : IDisposable
     };
 
     public int ConnectedPort => _service.Port;
-    public Uri StatusWebSocketUri => new($"ws://127.0.0.1:{_service.Port}/ws/codex/status");
+    public string ProviderId => _providerId;
+    public Uri StatusWebSocketUri => new(
+        $"ws://127.0.0.1:{_service.Port}/ws/{Uri.EscapeDataString(_providerId)}/status");
 
-    public Uri TerminalWebSocketUri(string sessionId, int columns = 120, int rows = 36, bool adaptive = false) =>
-        new($"ws://127.0.0.1:{_service.Port}/ws/codex/terminal/{Uri.EscapeDataString(sessionId)}?cols={columns}&rows={rows}&adaptive={(adaptive ? 1 : 0)}");
+    public Uri TerminalWebSocketUri(
+        string sessionId,
+        int columns = 120,
+        int rows = 36,
+        bool adaptive = false,
+        string? providerId = null) =>
+        new($"ws://127.0.0.1:{_service.Port}/ws/{ProviderPath(providerId)}/terminal/{Uri.EscapeDataString(sessionId)}?cols={columns}&rows={rows}&adaptive={(adaptive ? 1 : 0)}");
+
+    public void UseProvider(string providerId)
+    {
+        if (string.IsNullOrWhiteSpace(providerId))
+            throw new ArgumentException("Provider ID is required.", nameof(providerId));
+        _providerId = providerId.Trim();
+    }
 
     public async Task<bool> TryUseExistingServiceAsync(CancellationToken cancellationToken = default)
     {
@@ -78,31 +93,44 @@ public sealed class DashboardApiClient : IDisposable
         }
     }
 
-    public Task<List<DashboardSession>> GetSessionsAsync(CancellationToken cancellationToken = default) =>
-        GetCodexAsync<List<DashboardSession>>("sessions", cancellationToken);
+    public Task<List<ProviderStatus>> GetProvidersAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<List<ProviderStatus>>(new Uri(_service, "providers"), "providers", cancellationToken);
 
-    public async Task<HashSet<string>> GetActiveTerminalIdsAsync(CancellationToken cancellationToken = default)
+    public Task<List<DashboardSession>> GetSessionsAsync(
+        CancellationToken cancellationToken = default,
+        string? providerId = null) =>
+        GetProviderAsync<List<DashboardSession>>("sessions", cancellationToken, providerId);
+
+    public async Task<HashSet<string>> GetActiveTerminalIdsAsync(
+        CancellationToken cancellationToken = default,
+        string? providerId = null)
     {
-        var terminals = await GetCodexAsync<List<TerminalDescriptor>>("terminals", cancellationToken);
+        var terminals = await GetProviderAsync<List<TerminalDescriptor>>("terminals", cancellationToken, providerId);
         return terminals
             .Where(terminal => !string.IsNullOrWhiteSpace(terminal.SessionId))
             .Select(terminal => terminal.SessionId)
             .ToHashSet(StringComparer.Ordinal);
     }
 
-    public Task<List<DashboardSession>> GetArchivedSessionsAsync(CancellationToken cancellationToken = default) =>
-        GetCodexAsync<List<DashboardSession>>("sessions/archived", cancellationToken);
+    public Task<List<DashboardSession>> GetArchivedSessionsAsync(
+        CancellationToken cancellationToken = default,
+        string? providerId = null) =>
+        GetProviderAsync<List<DashboardSession>>("sessions/archived", cancellationToken, providerId);
 
     public Task<List<DashboardRepo>> GetReposAsync(CancellationToken cancellationToken = default) =>
-        GetCodexAsync<List<DashboardRepo>>("repos", cancellationToken);
+        GetProviderAsync<List<DashboardRepo>>("repos", cancellationToken);
 
     public async Task<DashboardStats> GetStatsAsync(
         string statsMode = "combined",
         CancellationToken cancellationToken = default)
     {
-        var stats = await GetCodexAsync<DashboardStats>(
+        var stats = await GetProviderAsync<DashboardStats>(
             $"stats?statsMode={Uri.EscapeDataString(statsMode)}",
             cancellationToken);
+        if (!_providerId.Equals("codex", StringComparison.OrdinalIgnoreCase)) return stats;
+
+        // Credit rollups and every heatmap window are part of the Codex v2
+        // contract. Other providers may expose a smaller analytics surface.
         var missingWindows = RequiredUsageWindows
             .Where(window => !stats.UsageRollups.ContainsKey(window)
                 || !stats.TokensByHour.ContainsKey(window)
@@ -131,7 +159,7 @@ public sealed class DashboardApiClient : IDisposable
         string query,
         bool includeArchived,
         CancellationToken cancellationToken = default) =>
-        GetCodexAsync<List<DashboardSession>>(
+        GetProviderAsync<List<DashboardSession>>(
             $"sessions/search?q={Uri.EscapeDataString(query)}&archived={(includeArchived ? 1 : 0)}",
             cancellationToken);
 
@@ -141,7 +169,7 @@ public sealed class DashboardApiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         using var response = await _http.PostAsJsonAsync(
-            CodexUri("sessions/create"),
+            ProviderUri("sessions/create"),
             new { workingDir = workingDirectory, adaptive },
             cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -158,7 +186,7 @@ public sealed class DashboardApiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         using var response = await _http.PostAsJsonAsync(
-            CodexUri($"sessions/{Uri.EscapeDataString(sessionId)}/adaptive/submit"),
+            ProviderUri($"sessions/{Uri.EscapeDataString(sessionId)}/adaptive/submit", providerId: "codex"),
             new { text, preference, workingDir = workingDirectory },
             cancellationToken);
         if (!response.IsSuccessStatusCode)
@@ -180,70 +208,110 @@ public sealed class DashboardApiClient : IDisposable
             ?? throw new InvalidDataException("Dashboard returned no Adaptive routing decision.");
     }
 
-    public async Task KillTerminalAsync(string sessionId, CancellationToken cancellationToken = default)
-    {
-        using var response = await _http.PostAsync(CodexUri($"sessions/{Uri.EscapeDataString(sessionId)}/kill-pty"), null, cancellationToken);
-        response.EnsureSuccessStatusCode();
-    }
-
-    public Task<SessionContextData> GetContextAsync(string sessionId, CancellationToken cancellationToken = default) =>
-        GetCodexAsync<SessionContextData>($"sessions/{Uri.EscapeDataString(sessionId)}/context", cancellationToken);
-
-    public Task<SessionConfigData> GetConfigAsync(string sessionId, CancellationToken cancellationToken = default) =>
-        GetCodexAsync<SessionConfigData>($"sessions/{Uri.EscapeDataString(sessionId)}/config", cancellationToken);
-
-    public Task<SessionPreviewData> GetPreviewAsync(string sessionId, CancellationToken cancellationToken = default) =>
-        GetCodexAsync<SessionPreviewData>($"sessions/{Uri.EscapeDataString(sessionId)}/preview", cancellationToken);
-
-    public Task<SessionConversationData> GetConversationAsync(
+    public async Task KillTerminalAsync(
         string sessionId,
-        int offset = 0,
-        int limit = 50,
-        CancellationToken cancellationToken = default) =>
-        GetCodexAsync<SessionConversationData>(
-            $"sessions/{Uri.EscapeDataString(sessionId)}/conversation?offset={Math.Max(0, offset)}&limit={Math.Max(0, limit)}",
-            cancellationToken);
-
-    public Task<List<SubagentData>> GetSubagentsAsync(string sessionId, CancellationToken cancellationToken = default) =>
-        GetCodexAsync<List<SubagentData>>($"sessions/{Uri.EscapeDataString(sessionId)}/subagents", cancellationToken);
-
-    public async Task RenameAsync(string sessionId, string title, CancellationToken cancellationToken = default)
-    {
-        using var response = await _http.PostAsJsonAsync(
-            CodexUri($"sessions/{Uri.EscapeDataString(sessionId)}/rename"),
-            new { title },
-            cancellationToken);
-        response.EnsureSuccessStatusCode();
-    }
-
-    public async Task ArchiveAsync(string sessionId, CancellationToken cancellationToken = default)
-    {
-        using var response = await _http.DeleteAsync(
-            CodexUri($"sessions/{Uri.EscapeDataString(sessionId)}"),
-            cancellationToken);
-        response.EnsureSuccessStatusCode();
-    }
-
-    public async Task RestoreAsync(string sessionId, CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? providerId = null)
     {
         using var response = await _http.PostAsync(
-            CodexUri($"sessions/{Uri.EscapeDataString(sessionId)}/restore"),
+            ProviderUri($"sessions/{Uri.EscapeDataString(sessionId)}/kill-pty", providerId),
             null,
             cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 
-    private Uri CodexUri(string path) => new(_service, $"codex/{path}");
+    public Task<SessionContextData> GetContextAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default,
+        string? providerId = null) =>
+        GetProviderAsync<SessionContextData>($"sessions/{Uri.EscapeDataString(sessionId)}/context", cancellationToken, providerId);
+
+    public Task<SessionConfigData> GetConfigAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default,
+        string? providerId = null) =>
+        GetProviderAsync<SessionConfigData>($"sessions/{Uri.EscapeDataString(sessionId)}/config", cancellationToken, providerId);
+
+    public Task<SessionPreviewData> GetPreviewAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default,
+        string? providerId = null) =>
+        GetProviderAsync<SessionPreviewData>($"sessions/{Uri.EscapeDataString(sessionId)}/preview", cancellationToken, providerId);
+
+    public Task<SessionConversationData> GetConversationAsync(
+        string sessionId,
+        int offset = 0,
+        int limit = 50,
+        CancellationToken cancellationToken = default,
+        string? providerId = null) =>
+        GetProviderAsync<SessionConversationData>(
+            $"sessions/{Uri.EscapeDataString(sessionId)}/conversation?offset={Math.Max(0, offset)}&limit={Math.Max(0, limit)}",
+            cancellationToken,
+            providerId);
+
+    public Task<List<SubagentData>> GetSubagentsAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default,
+        string? providerId = null) =>
+        GetProviderAsync<List<SubagentData>>($"sessions/{Uri.EscapeDataString(sessionId)}/subagents", cancellationToken, providerId);
+
+    public async Task RenameAsync(
+        string sessionId,
+        string title,
+        CancellationToken cancellationToken = default,
+        string? providerId = null)
+    {
+        using var response = await _http.PostAsJsonAsync(
+            ProviderUri($"sessions/{Uri.EscapeDataString(sessionId)}/rename", providerId),
+            new { title },
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ArchiveAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default,
+        string? providerId = null)
+    {
+        using var response = await _http.DeleteAsync(
+            ProviderUri($"sessions/{Uri.EscapeDataString(sessionId)}", providerId),
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RestoreAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default,
+        string? providerId = null)
+    {
+        using var response = await _http.PostAsync(
+            ProviderUri($"sessions/{Uri.EscapeDataString(sessionId)}/restore", providerId),
+            null,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    private string ProviderPath(string? providerId = null) =>
+        Uri.EscapeDataString(string.IsNullOrWhiteSpace(providerId) ? _providerId : providerId.Trim());
+
+    private Uri ProviderUri(string path, string? providerId = null) =>
+        new(_service, $"{ProviderPath(providerId)}/{path}");
 
     private static Uri PrivateService(int port) => new($"http://127.0.0.1:{port}/api/");
 
-    private async Task<T> GetCodexAsync<T>(string path, CancellationToken cancellationToken)
+    private Task<T> GetProviderAsync<T>(
+        string path,
+        CancellationToken cancellationToken,
+        string? providerId = null) =>
+        GetAsync<T>(ProviderUri(path, providerId), path, cancellationToken);
+
+    private async Task<T> GetAsync<T>(Uri uri, string description, CancellationToken cancellationToken)
     {
-        using var response = await _http.GetAsync(CodexUri(path), cancellationToken);
+        using var response = await _http.GetAsync(uri, cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, cancellationToken)
-            ?? throw new InvalidDataException($"Dashboard returned no data for {path}.");
+            ?? throw new InvalidDataException($"Dashboard returned no data for {description}.");
     }
 
     public void Dispose() => _http.Dispose();

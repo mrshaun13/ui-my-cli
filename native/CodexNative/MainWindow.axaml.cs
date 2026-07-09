@@ -51,6 +51,7 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, SessionTabState> _openTabs = [];
     private readonly Dictionary<string, TabItem> _previewTabs = [];
     private readonly Dictionary<TabItem, TerminalPaneState> _previewPaneByTab = [];
+    private readonly Dictionary<TabItem, DashboardSession> _previewSessionByTab = [];
     private readonly List<TerminalPaneState> _panes = [];
     private readonly List<Border> _paneSplitters = [];
     private readonly HashSet<TerminalPaneState> _paneRemovalsInProgress = [];
@@ -69,6 +70,7 @@ public sealed partial class MainWindow : Window
     private List<DashboardSession> _sessions = [];
     private List<DashboardSession> _archivedSessions = [];
     private List<DashboardRepo> _repos = [];
+    private List<ProviderStatus> _providers = [];
     private DashboardStats? _stats;
     private DashboardStatus? _dashboardStatus;
     private RateLimitInfo? _rateLimits;
@@ -79,6 +81,7 @@ public sealed partial class MainWindow : Window
     private readonly HashSet<string> _hiddenTokenCategories = new(StringComparer.Ordinal);
     private bool _refreshing;
     private bool _initializingSelectors;
+    private bool _initializingProviderSelector;
     private bool _initializingNavigation;
     private bool _initializingAnalytics;
     private bool _shutdownConfirmed;
@@ -105,12 +108,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         InitializePaneWorkspace();
-        TerminalPathText.Text = _platform.UsesWsl
-            ? "Terminal path: native view → persistent WSL2 PTY → Codex"
-            : $"Terminal path: native view → persistent {_platform.DisplayName} PTY → Codex";
-        var newSessionShortcut = OperatingSystem.IsMacOS() ? "Cmd+Shift+N" : "Ctrl+Shift+N";
-        ToolTip.SetTip(NewSessionButton, $"New Codex or {_platform.LocalShellLabel} session ({newSessionShortcut})");
-        ToolTip.SetTip(CompactNewSessionButton, $"New Codex or {_platform.LocalShellLabel} session ({newSessionShortcut})");
+        ApplyProviderChrome();
         AutomationProperties.SetName(DashboardTab, "Dashboard overview");
         CompactSessionsList.ContainerPrepared += OnCompactSessionContainerPrepared;
         _uiReady = true;
@@ -126,6 +124,7 @@ public sealed partial class MainWindow : Window
         SizeChanged += (_, _) =>
             Dispatcher.UIThread.Post(() =>
             {
+                ApplyResponsiveHeaderLayout(Bounds.Width);
                 ConstrainMainContentHeight();
                 UpdateTerminalTabContentHeights();
             }, DispatcherPriority.Loaded);
@@ -246,7 +245,7 @@ public sealed partial class MainWindow : Window
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
         };
-        ToolTip.SetTip(button, $"Start a new Codex or {_platform.LocalShellLabel} session in this terminal pane");
+        ToolTip.SetTip(button, $"Start a new agent or {_platform.LocalShellLabel} session in this terminal pane");
         AutomationProperties.SetName(button, "Start a new session in this terminal pane");
         var launcher = new TabItem
         {
@@ -286,7 +285,7 @@ public sealed partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             VerticalContentAlignment = VerticalAlignment.Stretch,
         };
-        var startNew = new Button { Content = $"Choose Codex or {_platform.LocalShellLabel}", Padding = new Thickness(12, 6) };
+        var startNew = new Button { Content = $"Choose agent or {_platform.LocalShellLabel}", Padding = new Thickness(12, 6) };
         var emptyState = new Border
         {
             Background = ResourceBrush("BaseBrush"),
@@ -312,7 +311,7 @@ public sealed partial class MainWindow : Window
                     },
                     new TextBlock
                     {
-                        Text = $"Start a Codex or {_platform.LocalShellLabel} session in this pane.",
+                        Text = $"Start an agent or {_platform.LocalShellLabel} session in this pane.",
                         Foreground = ResourceBrush("SecondaryBrush"),
                         TextAlignment = TextAlignment.Center,
                         TextWrapping = TextWrapping.Wrap,
@@ -426,10 +425,10 @@ public sealed partial class MainWindow : Window
     private async Task<bool> ConfirmPaneRemovalAsync(TerminalPaneState pane)
     {
         var states = _openTabs.Values.Where(state => ReferenceEquals(state.Pane, pane)).ToList();
-        var codexCount = states.Count(state => state.Kind == TerminalSessionKind.Codex);
+        var providerCount = states.Count(state => state.Kind == TerminalSessionKind.Codex);
         var localShellCount = states.Count(state => state.Kind == TerminalSessionKind.LocalShell);
         var previewCount = _previewPaneByTab.Count(entry => ReferenceEquals(entry.Value, pane));
-        if (codexCount + localShellCount + previewCount == 0) return true;
+        if (providerCount + localShellCount + previewCount == 0) return true;
 
         var dialog = new Window
         {
@@ -458,7 +457,7 @@ public sealed partial class MainWindow : Window
                 new TextBlock { Text = $"Remove {PaneLabel(pane)}?", FontSize = 18, FontWeight = FontWeight.Bold, Foreground = ResourceBrush("PrimaryBrush") },
                 new TextBlock
                 {
-                    Text = $"{codexCount} Codex tab{(codexCount == 1 ? "" : "s")} will detach, " +
+                    Text = $"{providerCount} agent tab{(providerCount == 1 ? "" : "s")} will detach, " +
                            $"{localShellCount} {_platform.LocalShellLabel} shell{(localShellCount == 1 ? "" : "s")} will stop, and " +
                            $"{previewCount} summary tab{(previewCount == 1 ? "" : "s")} will close.",
                     Foreground = ResourceBrush("SecondaryBrush"),
@@ -638,8 +637,26 @@ public sealed partial class MainWindow : Window
         _ => "balanced",
     };
 
-    private static bool IsPendingCodexSession(SessionTabState state) =>
+    private static string ProviderTabKey(string providerId, string sessionId) =>
+        $"provider:{providerId}:{sessionId}";
+
+    private static string PreviewTabKey(string providerId, string sessionId) =>
+        $"preview:{providerId}:{sessionId}";
+
+    private static string OpenTabRegistryKey(SessionTabState state) =>
+        state.Kind == TerminalSessionKind.LocalShell
+            ? state.Key
+            : ProviderTabKey(state.ProviderId, state.Key);
+
+    private string SessionProvider(DashboardSession session) =>
+        string.IsNullOrWhiteSpace(session.Provider) ? _api.ProviderId : session.Provider;
+
+    private static bool IsCodexSession(SessionTabState state) =>
         state.Kind == TerminalSessionKind.Codex
+        && state.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPendingCodexSession(SessionTabState state) =>
+        IsCodexSession(state)
         && state.Key.StartsWith("pending-", StringComparison.Ordinal);
 
     private DashboardTheme EffectivePaneTheme(TerminalPaneState pane) =>
@@ -728,7 +745,7 @@ public sealed partial class MainWindow : Window
 
     private void UpdateAdaptiveControls(SessionTabState state)
     {
-        var codex = state.Kind == TerminalSessionKind.Codex;
+        var codex = IsCodexSession(state);
         var enabled = codex && state.Pane.AdaptiveEnabled;
         var pending = IsPendingCodexSession(state);
         state.AdaptiveToggleButton.IsVisible = codex;
@@ -772,7 +789,7 @@ public sealed partial class MainWindow : Window
         {
             var launched = _openTabs.Values
                 .Where(state => ReferenceEquals(state.Pane, pane)
-                    && state.Kind == TerminalSessionKind.Codex
+                    && IsCodexSession(state)
                     && state.IsLaunched)
                 .ToList();
             var reconnecting = launched.Where(state => !IsPendingCodexSession(state)).ToList();
@@ -812,7 +829,7 @@ public sealed partial class MainWindow : Window
     {
         CancelTerminalReconnect(state, suppress: true);
         EndTerminalStartupReveal(state);
-        try { await _api.KillTerminalAsync(state.Key); }
+        try { await _api.KillTerminalAsync(state.Key, providerId: state.ProviderId); }
         catch (Exception ex) { NativeLog.Write($"Adaptive PTY restart could not stop {state.Key}: {ex.Message}"); }
         state.Terminal.Kill();
         state.IsRunning = false;
@@ -824,7 +841,7 @@ public sealed partial class MainWindow : Window
 
     private async Task SubmitAdaptivePromptAsync(SessionTabState state)
     {
-        if (state.Kind != TerminalSessionKind.Codex || !state.Pane.AdaptiveEnabled) return;
+        if (!IsCodexSession(state) || !state.Pane.AdaptiveEnabled) return;
         var text = state.AdaptivePromptBox.Text?.Trim();
         if (string.IsNullOrWhiteSpace(text) || state.AdaptiveSubmitting) return;
 
@@ -945,6 +962,7 @@ public sealed partial class MainWindow : Window
     private async void OnWindowOpened(object? sender, EventArgs e)
     {
         _settings = await _settingsStore.LoadAsync();
+        _api.UseProvider(string.IsNullOrWhiteSpace(_settings.ProviderId) ? "codex" : _settings.ProviderId);
         InitializeSelectors();
         InitializeNavigation();
         InitializeAnalytics();
@@ -954,6 +972,7 @@ public sealed partial class MainWindow : Window
         await ReconcileDashboardRepositoryAsync();
         if (await EnsureDashboardServiceAsync())
         {
+            await InitializeProviderSelectorAsync();
             await RefreshAllAsync();
             StartStatusFeed();
         }
@@ -971,6 +990,122 @@ public sealed partial class MainWindow : Window
         _refreshTimer.Start();
         _updateCheckTimer.Start();
         _ = CheckForUpdateAsync(reportCurrent: false);
+    }
+
+    private async Task InitializeProviderSelectorAsync()
+    {
+        try
+        {
+            _providers = await _api.GetProvidersAsync();
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Provider catalog unavailable; using native fallbacks: {ex.Message}");
+            _providers =
+            [
+                new ProviderStatus { Id = "codex", Label = "Codex", Noun = "Codex session", Available = true },
+                new ProviderStatus { Id = "devin", Label = "Devin", Noun = "Devin session", Available = true },
+            ];
+        }
+
+        if (_providers.Count == 0)
+            _providers.Add(new ProviderStatus { Id = "codex", Label = "Codex", Noun = "Codex session", Available = true });
+        var selected = _providers.FirstOrDefault(provider => provider.Id == _settings.ProviderId)
+            ?? _providers.FirstOrDefault(provider => provider.Id == "codex")
+            ?? _providers[0];
+        _api.UseProvider(selected.Id);
+        _settings = _settings with { ProviderId = selected.Id };
+
+        _initializingProviderSelector = true;
+        ProviderComboBox.ItemsSource = _providers;
+        ProviderComboBox.SelectedItem = selected;
+        _initializingProviderSelector = false;
+        ApplyProviderChrome();
+    }
+
+    private async void OnProviderChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_initializingProviderSelector || ProviderComboBox.SelectedItem is not ProviderStatus provider
+            || provider.Id == _api.ProviderId) return;
+
+        ProviderComboBox.IsEnabled = false;
+        try
+        {
+            while (_refreshing) await Task.Delay(50);
+            await StopStatusFeedAsync();
+            _searchCancellation?.Cancel();
+            _api.UseProvider(provider.Id);
+            _settings = _settings with { ProviderId = provider.Id };
+            _sessions = [];
+            _archivedSessions = [];
+            _repos = [];
+            _searchResults = null;
+            _stats = null;
+            _rateLimits = null;
+            ApplyProviderChrome();
+            UpdateRepoFilter();
+            ApplySessionFilter();
+            RenderRateLimits(null);
+            SetDashboardConnectionState(false);
+            if (_dashboardStatus is not null) RenderProviderStatus(_dashboardStatus);
+            SetStatus($"Switching dashboard to {CurrentProviderLabel}…", StartingBrush);
+            await PersistSettingsAsync();
+            await RefreshAllAsync();
+            StartStatusFeed();
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Provider switch failed: {ex}");
+            SetStatus($"Could not switch provider: {ex.Message}", ErrorBrush);
+        }
+        finally
+        {
+            ProviderComboBox.IsEnabled = true;
+        }
+    }
+
+    private string CurrentProviderLabel => ProviderLabel(_api.ProviderId);
+
+    private string ProviderLabel(string? providerId) =>
+        _providers.FirstOrDefault(provider => provider.Id == providerId)?.DisplayLabel
+        ?? (providerId?.Equals("devin", StringComparison.OrdinalIgnoreCase) == true ? "Devin" : "Codex");
+
+    private string ProviderNoun(string? providerId)
+    {
+        var provider = _providers.FirstOrDefault(candidate => candidate.Id == providerId);
+        return string.IsNullOrWhiteSpace(provider?.Noun)
+            ? $"{ProviderLabel(providerId)} session"
+            : provider.Noun;
+    }
+
+    private void ApplyProviderChrome()
+    {
+        var label = CurrentProviderLabel;
+        Title = $"{label} Native Dashboard";
+        HeaderTitleText.Text = $"{label.ToUpperInvariant()} NATIVE DASHBOARD";
+        ProviderServiceHeadingText.Text = $"{label.ToUpperInvariant()} SERVICE";
+        TerminalPathText.Text = _platform.UsesWsl
+            ? $"Terminal path: native view → persistent WSL2 PTY → {label}"
+            : $"Terminal path: native view → persistent {_platform.DisplayName} PTY → {label}";
+        var newSessionShortcut = OperatingSystem.IsMacOS() ? "Cmd+Shift+N" : "Ctrl+Shift+N";
+        ToolTip.SetTip(NewSessionButton, $"New {label} or {_platform.LocalShellLabel} session ({newSessionShortcut})");
+        ToolTip.SetTip(CompactNewSessionButton, $"New {label} or {_platform.LocalShellLabel} session ({newSessionShortcut})");
+        ToolTip.SetTip(LaunchBrowserButton, $"Open the browser-based {label} dashboard");
+        if (Bounds.Width > 0) ApplyResponsiveHeaderLayout(Bounds.Width);
+        UpdateHeaderConnectionIndicator();
+    }
+
+    private void ApplyResponsiveHeaderLayout(double width)
+    {
+        var compact = width < 1100;
+        AgentLabelText.IsVisible = !compact;
+        StyleLabelText.IsVisible = !compact;
+        TextLabelText.IsVisible = !compact;
+        EnvSummaryText.IsVisible = width >= 1180;
+        HeaderTitleText.Text = compact
+            ? CurrentProviderLabel.ToUpperInvariant()
+            : $"{CurrentProviderLabel.ToUpperInvariant()} NATIVE DASHBOARD";
+        LaunchBrowserButton.Content = width < 1050 ? "Browser" : "Launch in Browser";
     }
 
     private void InitializeSelectors()
@@ -1118,18 +1253,36 @@ public sealed partial class MainWindow : Window
     private void StartStatusFeed()
     {
         if (_statusFeed is not null) return;
+        var providerId = _api.ProviderId;
         _statusFeed = new DashboardStatusFeed(_api.StatusWebSocketUri);
-        _statusFeed.SessionsReceived += sessions => Dispatcher.UIThread.Post(() => ApplyPushedSessions(sessions));
+        _statusFeed.SessionsReceived += sessions => Dispatcher.UIThread.Post(() =>
+        {
+            if (_api.ProviderId == providerId) ApplyPushedSessions(sessions);
+        });
         _statusFeed.SessionRekeyed += (temporaryKey, realId) =>
-            Dispatcher.UIThread.Post(() => ApplySessionRekey(temporaryKey, realId));
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_api.ProviderId == providerId) ApplySessionRekey(temporaryKey, realId);
+            });
         _statusFeed.PendingSessionExpired += temporaryKey =>
-            Dispatcher.UIThread.Post(() => RemoveExpiredPendingSession(temporaryKey));
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_api.ProviderId == providerId) RemoveExpiredPendingSession(temporaryKey);
+            });
         _statusFeed.ConnectionChanged += connected => Dispatcher.UIThread.Post(() =>
         {
+            if (_api.ProviderId != providerId) return;
             SetDashboardConnectionState(connected);
-            if (connected) SetStatus($"Live push connected · {_sessions.Count:N0} sessions", RunningBrush);
+            if (connected) SetStatus($"{CurrentProviderLabel} live push connected · {_sessions.Count:N0} sessions", RunningBrush);
         });
         _statusFeed.Start();
+    }
+
+    private async Task StopStatusFeedAsync()
+    {
+        var feed = _statusFeed;
+        _statusFeed = null;
+        if (feed is not null) await feed.DisposeAsync();
     }
 
     private void ApplyPushedSessions(IReadOnlyList<DashboardSession> sessions)
@@ -1182,18 +1335,18 @@ public sealed partial class MainWindow : Window
     private void ApplySessionRekey(string temporaryKey, string realId)
     {
         if (string.IsNullOrWhiteSpace(temporaryKey) || string.IsNullOrWhiteSpace(realId)
-            || !_openTabs.TryGetValue(temporaryKey, out var state)
+            || !_openTabs.TryGetValue(ProviderTabKey(_api.ProviderId, temporaryKey), out var state)
             || state.Kind != TerminalSessionKind.Codex) return;
         var session = _sessions.FirstOrDefault(candidate => candidate.Id == realId);
-        _openTabs.Remove(temporaryKey);
+        _openTabs.Remove(OpenTabRegistryKey(state));
         state.Key = realId;
         state.Session = session;
         state.TitleBlock.Text = session?.DisplayTitle ?? state.TitleBlock.Text;
-        AutomationProperties.SetName(state.Tab, state.TitleBlock.Text ?? "Codex session");
+        AutomationProperties.SetName(state.Tab, state.TitleBlock.Text ?? ProviderNoun(state.ProviderId));
         state.RenameBox.Text = session?.DisplayTitle ?? state.RenameBox.Text;
         state.ArchiveButton.IsVisible = session is not null;
         state.SummaryButton.IsVisible = session is not null;
-        _openTabs[realId] = state;
+        _openTabs[OpenTabRegistryKey(state)] = state;
         if (session is not null) _ = LoadSessionDetailsAsync(state, session);
         UpdatePaneAdaptiveControls(state.Pane);
         SetStatus($"Session registered · {realId[..Math.Min(8, realId.Length)]}", RunningBrush);
@@ -1202,16 +1355,16 @@ public sealed partial class MainWindow : Window
 
     private void RemoveExpiredPendingSession(string temporaryKey)
     {
-        if (!_openTabs.TryGetValue(temporaryKey, out var state)
+        if (!_openTabs.TryGetValue(ProviderTabKey(_api.ProviderId, temporaryKey), out var state)
             || state.Kind != TerminalSessionKind.Codex) return;
         CancelTerminalReconnect(state, suppress: true);
         state.Terminal.Kill();
         state.Pane.Tabs.Items.Remove(state.Tab);
-        _openTabs.Remove(temporaryKey);
+        _openTabs.Remove(OpenTabRegistryKey(state));
         UpdatePaneAdaptiveControls(state.Pane);
         SelectPaneFallback(state.Pane);
         UpdatePaneEmptyStates();
-        SetStatus("The new Codex session did not register and was stopped.", ErrorBrush);
+        SetStatus($"The new {ProviderLabel(state.ProviderId)} session did not register and was stopped.", ErrorBrush);
         _ = SaveWorkspaceAsync();
     }
 
@@ -1247,7 +1400,7 @@ public sealed partial class MainWindow : Window
             RenderStats(_stats);
             RenderProviderStatus(_dashboardStatus);
             if (sessionsChanged) UpdateOpenTabStatuses();
-            SetStatus($"Live · {_sessions.Count} sessions · persistent {_platform.DisplayName} terminals", RunningBrush);
+            SetStatus($"{CurrentProviderLabel} live · {_sessions.Count} sessions · persistent {_platform.DisplayName} terminals", RunningBrush);
         }
         catch (Exception ex)
         {
@@ -1386,19 +1539,24 @@ public sealed partial class MainWindow : Window
     {
         var changed = false;
         foreach (var state in _openTabs.Values
-                     .Where(state => state.Kind == TerminalSessionKind.Codex && state.Session is null && state.IsLaunched)
+                     .Where(state => state.Kind == TerminalSessionKind.Codex
+                         && state.ProviderId == _api.ProviderId
+                         && state.Session is null
+                         && state.IsLaunched)
                      .ToList())
         {
             var candidate = _sessions
                 .Where(session => session.WorkingDir == state.WorkingDirectory)
                 .Where(session => !state.KnownSessionIdsAtLaunch.Contains(session.Id))
                 .Where(session => session.CreatedAt >= state.LaunchedAt - 5)
-                .Where(session => !_openTabs.Values.Any(other => other != state && other.Session?.Id == session.Id))
+                .Where(session => !_openTabs.Values.Any(other => other != state
+                    && other.ProviderId == state.ProviderId
+                    && other.Session?.Id == session.Id))
                 .OrderBy(session => Math.Abs(session.CreatedAt - state.LaunchedAt))
                 .FirstOrDefault();
             if (candidate is null) continue;
 
-            _openTabs.Remove(state.Key);
+            _openTabs.Remove(OpenTabRegistryKey(state));
             state.Key = candidate.Id;
             state.Session = candidate;
             state.TitleBlock.Text = candidate.DisplayTitle;
@@ -1406,7 +1564,7 @@ public sealed partial class MainWindow : Window
             state.RenameBox.Text = candidate.DisplayTitle;
             state.ArchiveButton.IsVisible = true;
             state.SummaryButton.IsVisible = true;
-            _openTabs[candidate.Id] = state;
+            _openTabs[OpenTabRegistryKey(state)] = state;
             changed = true;
             _ = LoadSessionDetailsAsync(state, candidate);
             UpdatePaneAdaptiveControls(state.Pane);
@@ -1428,7 +1586,7 @@ public sealed partial class MainWindow : Window
             if (session is not null) await OpenSessionAsync(session, activate: false, launch: false, targetPane: _panes[0]);
         }
         if (!string.IsNullOrWhiteSpace(_settings.ActiveSessionId)
-            && _openTabs.TryGetValue(_settings.ActiveSessionId, out var active))
+            && _openTabs.TryGetValue(ProviderTabKey(_api.ProviderId, _settings.ActiveSessionId), out var active))
         {
             AttachTab(active);
             await EnsureTerminalLaunchedAsync(active);
@@ -1472,9 +1630,39 @@ public sealed partial class MainWindow : Window
                 _panes.Add(restoredPane);
             }
             RebuildPaneHost(equalize: false);
-            HashSet<string> activeTerminalIds;
-            try { activeTerminalIds = await _api.GetActiveTerminalIdsAsync(); }
-            catch { activeTerminalIds = []; }
+
+            static string SavedProviderId(NativePaneTabLayout tab) =>
+                string.IsNullOrWhiteSpace(tab.ProviderId) ? "codex" : tab.ProviderId;
+            var providerIds = layouts
+                .SelectMany(layout => layout.SavedTabs)
+                .Where(tab => tab.Kind is "codex" or "codex-pending" or "provider" or "provider-pending" or "preview")
+                .Select(SavedProviderId)
+                .Append(_api.ProviderId)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            var sessionsByProvider = new Dictionary<string, List<DashboardSession>>(StringComparer.Ordinal);
+            var archivedByProvider = new Dictionary<string, List<DashboardSession>>(StringComparer.Ordinal);
+            var terminalsByProvider = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var providerId in providerIds)
+            {
+                try
+                {
+                    sessionsByProvider[providerId] = providerId == _api.ProviderId
+                        ? _sessions
+                        : await _api.GetSessionsAsync(providerId: providerId);
+                    archivedByProvider[providerId] = providerId == _api.ProviderId
+                        ? _archivedSessions
+                        : await _api.GetArchivedSessionsAsync(providerId: providerId);
+                    terminalsByProvider[providerId] = await _api.GetActiveTerminalIdsAsync(providerId: providerId);
+                }
+                catch (Exception ex)
+                {
+                    NativeLog.Write($"Could not restore {providerId} workspace state: {ex.Message}");
+                    sessionsByProvider[providerId] = [];
+                    archivedByProvider[providerId] = [];
+                    terminalsByProvider[providerId] = [];
+                }
+            }
 
             for (var index = 0; index < layouts.Count && index < _panes.Count; index++)
             {
@@ -1487,16 +1675,21 @@ public sealed partial class MainWindow : Window
                         case "dashboard":
                             break;
                         case "codex":
+                        case "provider":
                         {
+                            var providerId = SavedProviderId(savedTab);
                             var sessionId = savedTab.SessionId ?? savedTab.Key;
-                            var session = _sessions.FirstOrDefault(candidate => candidate.Id == sessionId && !candidate.IsHeadless);
+                            var session = sessionsByProvider[providerId]
+                                .FirstOrDefault(candidate => candidate.Id == sessionId && !candidate.IsHeadless);
                             if (session is not null)
                                 await OpenSessionAsync(session, activate: false, launch: false, targetPane: pane);
                             break;
                         }
                         case "codex-pending":
+                        case "provider-pending":
                         {
-                            var registered = _sessions
+                            var providerId = SavedProviderId(savedTab);
+                            var registered = sessionsByProvider[providerId]
                                 .Where(candidate => candidate.WorkingDir == savedTab.WorkingDirectory)
                                 .Where(candidate => savedTab.LaunchedAt <= 0 || candidate.CreatedAt >= savedTab.LaunchedAt - 5)
                                 .OrderBy(candidate => savedTab.LaunchedAt <= 0
@@ -1505,8 +1698,8 @@ public sealed partial class MainWindow : Window
                                 .FirstOrDefault();
                             if (registered is not null)
                                 await OpenSessionAsync(registered, activate: false, launch: false, targetPane: pane);
-                            else if (activeTerminalIds.Contains(savedTab.Key))
-                                RestorePendingCodexTab(savedTab, pane);
+                            else if (terminalsByProvider[providerId].Contains(savedTab.Key))
+                                RestorePendingProviderTab(savedTab, pane);
                             break;
                         }
                         case "ubuntu":
@@ -1521,8 +1714,11 @@ public sealed partial class MainWindow : Window
                             break;
                         case "preview":
                         {
+                            var providerId = SavedProviderId(savedTab);
                             var sessionId = savedTab.SessionId ?? savedTab.Key.Replace("preview:", string.Empty, StringComparison.Ordinal);
-                            var session = _sessions.Concat(_archivedSessions).FirstOrDefault(candidate => candidate.Id == sessionId);
+                            var session = sessionsByProvider[providerId]
+                                .Concat(archivedByProvider[providerId])
+                                .FirstOrDefault(candidate => candidate.Id == sessionId);
                             if (session is not null) await OpenPreviewAsync(session, pane, activate: false);
                             break;
                         }
@@ -1549,18 +1745,20 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void RestorePendingCodexTab(NativePaneTabLayout savedTab, TerminalPaneState pane)
+    private void RestorePendingProviderTab(NativePaneTabLayout savedTab, TerminalPaneState pane)
     {
-        if (_openTabs.ContainsKey(savedTab.Key)) return;
+        var providerId = string.IsNullOrWhiteSpace(savedTab.ProviderId) ? "codex" : savedTab.ProviderId;
+        if (_openTabs.ContainsKey(ProviderTabKey(providerId, savedTab.Key))) return;
         var state = CreateTerminalTab(
             savedTab.Key,
             savedTab.Title,
             savedTab.WorkingDirectory,
             session: null,
             kind: TerminalSessionKind.Codex,
-            pane: pane);
+            pane: pane,
+            providerId: providerId);
         state.LaunchedAt = savedTab.LaunchedAt;
-        _openTabs[savedTab.Key] = state;
+        _openTabs[OpenTabRegistryKey(state)] = state;
         AddTabToPane(pane, state.Tab);
         state.IsAttached = true;
         UpdatePaneAdaptiveControls(pane);
@@ -1575,6 +1773,8 @@ public sealed partial class MainWindow : Window
             return;
         }
         var match = pane.Tabs.Items.OfType<TabItem>().FirstOrDefault(tab => TabPersistenceKey(tab) == activeTabKey);
+        match ??= pane.Tabs.Items.OfType<TabItem>().FirstOrDefault(tab =>
+            _openTabs.Values.FirstOrDefault(state => ReferenceEquals(state.Tab, tab))?.Key == activeTabKey);
         if (match is not null) pane.Tabs.SelectedItem = match;
     }
 
@@ -1587,11 +1787,13 @@ public sealed partial class MainWindow : Window
         _settings = _settings with
         {
             OpenSessionIds = _openTabs.Values
-                .Where(state => state.IsAttached && state.Session is not null)
+                .Where(state => state.IsAttached
+                    && state.Session is not null
+                    && state.ProviderId == _api.ProviderId)
                 .Select(state => state.Session!.Id)
                 .Distinct(StringComparer.Ordinal)
                 .ToList(),
-            ActiveSessionId = active?.Session?.Id,
+            ActiveSessionId = active?.ProviderId == _api.ProviderId ? active.Session?.Id : null,
             PaneLayouts = _panes.Select(CreatePaneLayout).ToList(),
             ActivePaneId = _activePane.Id,
             SidebarCollapsed = !SidebarBorder.IsVisible,
@@ -1636,23 +1838,24 @@ public sealed partial class MainWindow : Window
         {
             var kind = state.Kind == TerminalSessionKind.LocalShell
                 ? "local-shell"
-                : state.Session is null ? "codex-pending" : "codex";
+                : state.Session is null ? "provider-pending" : "provider";
             return new NativePaneTabLayout(
                 kind,
                 state.Key,
                 state.Session?.Id,
                 state.WorkingDirectory,
                 state.TitleBlock.Text ?? state.Key,
-                state.LaunchedAt);
+                state.LaunchedAt,
+                string.IsNullOrWhiteSpace(state.ProviderId) ? null : state.ProviderId);
         }
         var preview = _previewTabs.FirstOrDefault(entry => ReferenceEquals(entry.Value, tab));
         if (!string.IsNullOrWhiteSpace(preview.Key))
         {
-            var sessionId = preview.Key.Replace("preview:", string.Empty, StringComparison.Ordinal);
-            var session = _sessions.Concat(_archivedSessions).FirstOrDefault(candidate => candidate.Id == sessionId);
+            var session = _previewSessionByTab.GetValueOrDefault(tab);
+            if (session is null) return null;
             return new NativePaneTabLayout(
-                "preview", preview.Key, sessionId, session?.WorkingDir ?? string.Empty,
-                session?.DisplayTitle ?? sessionId);
+                "preview", preview.Key, session.Id, session.WorkingDir,
+                session.DisplayTitle, ProviderId: SessionProvider(session));
         }
         return null;
     }
@@ -1661,7 +1864,7 @@ public sealed partial class MainWindow : Window
     {
         if (ReferenceEquals(tab, DashboardTab)) return "dashboard";
         var state = _openTabs.Values.FirstOrDefault(candidate => ReferenceEquals(candidate.Tab, tab));
-        if (state is not null) return state.Key;
+        if (state is not null) return OpenTabRegistryKey(state);
         var preview = _previewTabs.FirstOrDefault(entry => ReferenceEquals(entry.Value, tab));
         return string.IsNullOrWhiteSpace(preview.Key) ? null : preview.Key;
     }
@@ -1726,10 +1929,18 @@ public sealed partial class MainWindow : Window
     {
         var rollup = SelectedUsageRollup(stats);
         var totals = rollup?.Totals ?? new UsageTotals();
+        var window = _settings.AnalyticsWindow;
+        stats.TokensByHour.TryGetValue(window, out var tokenWindow);
+        var activityTokens = (tokenWindow?.Input.Sum() ?? 0) + (tokenWindow?.Output.Sum() ?? 0);
+        var totalTokens = rollup is null ? activityTokens : totals.TotalTokens;
+        var creditSummary = rollup is null ? "credit estimate unavailable" : CreditEstimate(totals);
+        var providerSummary = _api.ProviderId == "codex"
+            ? $"{CohortLabel(stats.StatsFilters.StatsMode)} cohort"
+            : $"{CurrentProviderLabel} provider";
         StatsSummaryText.Text =
-            $"{rollup?.Label ?? "Usage unavailable"}: {FormatNumber(totals.TotalTokens)} tokens   ·   " +
-            $"{CreditEstimate(totals)}   ·   {stats.Activity.H24:N0} active in 24h   ·   " +
-            $"{stats.TotalSubagents:N0} subagents   ·   {CohortLabel(stats.StatsFilters.StatsMode)} cohort";
+            $"{rollup?.Label ?? SelectedWindowLabel()}: {FormatNumber(totalTokens)} tokens   ·   " +
+            $"{creditSummary}   ·   {stats.Activity.H24:N0} active in 24h   ·   " +
+            $"{stats.TotalSubagents:N0} subagents   ·   {providerSummary}";
         StatsCohortPanel.IsVisible = stats.StatsFilters.TranscriptHeadlessCount > 0;
 
         RenderUsageSummary(rollup, stats.Pricing);
@@ -1745,7 +1956,23 @@ public sealed partial class MainWindow : Window
         ProjectComboGraph.SessionsBrush = ResourceBrush("AccentBrush");
         ProjectComboGraph.GridBrush = ResourceBrush("BorderBrush");
         ProjectComboGraph.SetData(stats.Projects.OrderByDescending(project => project.Messages).Take(10).ToList());
-        PopulateModelRows((rollup?.Models ?? []).Take(10));
+        if (rollup is not null)
+        {
+            PopulateModelRows(rollup.Models.Take(10));
+        }
+        else
+        {
+            PopulateMetricRows(
+                ModelsPanel,
+                stats.Models.Take(10).Select(model =>
+                {
+                    var total = model.TotalTokens > 0
+                        ? model.TotalTokens
+                        : model.InputTokens + model.OutputTokens + model.CacheReadTokens + model.CacheWriteTokens;
+                    return (model.Model, total, $"{FormatNumber(total)} tokens · {model.Calls:N0} calls");
+                }),
+                $"No {CurrentProviderLabel} model token telemetry is available.");
+        }
         PopulateMetricRows(
             ToolsPanel,
             stats.Tools.Interactive.OrderByDescending(tool => tool.Calls).Take(12)
@@ -1773,8 +2000,6 @@ public sealed partial class MainWindow : Window
         _rateLimits = stats.RateLimits;
         RenderRateLimits(_rateLimits);
 
-        var window = _settings.AnalyticsWindow;
-        stats.TokensByHour.TryGetValue(window, out var tokenWindow);
         TokenActivityGraph.InputBrush = Brush.Parse("#38BDF8");
         TokenActivityGraph.OutputBrush = ResourceBrush("AccentBrush");
         TokenActivityGraph.GridBrush = ResourceBrush("BorderBrush");
@@ -1790,7 +2015,14 @@ public sealed partial class MainWindow : Window
 
         PopulateLeaderboard(DurationLeadersPanel, stats.TopSessionsByDuration, entry => entry.DurationSec, entry => entry.DurationStr);
         PopulateLeaderboard(MessageLeadersPanel, stats.TopSessionsByUserMsgs, entry => entry.UserMsgCount, entry => $"{entry.UserMsgCount:N0} messages");
-        PopulateTokenLeaderboard((rollup?.Sessions ?? []).Take(10));
+        if (rollup is not null)
+            PopulateTokenLeaderboard(rollup.Sessions.Take(10));
+        else
+            PopulateLeaderboard(
+                TokenLeadersPanel,
+                stats.TopSessionsByTokens,
+                entry => entry.TotalTokens,
+                entry => $"{FormatNumber(entry.TotalTokens)} tokens");
     }
 
     private UsageRollup? SelectedUsageRollup(DashboardStats stats)
@@ -1803,11 +2035,19 @@ public sealed partial class MainWindow : Window
     {
         if (rollup is null)
         {
-            UsageWindowDescriptionText.Text =
-                $"Usage data unavailable for {_settings.AnalyticsWindow}; dashboard API v{DashboardApiClient.RequiredApiVersion} is required";
+            var isCodex = _api.ProviderId == "codex";
+            UsageWindowDescriptionText.Text = isCodex
+                ? $"Usage data unavailable for {_settings.AnalyticsWindow}; dashboard API v{DashboardApiClient.RequiredApiVersion} is required"
+                : $"{CurrentProviderLabel} exposes token activity without Codex credit rollups.";
             UsageSummaryPanel.Children.Clear();
-            AddEmptyState(UsageSummaryPanel, "The connected service returned an incomplete analytics payload.");
-            UsagePricingNoteText.Text = "Restart ui-my-cli with the current code before evaluating token or credit data.";
+            AddEmptyState(
+                UsageSummaryPanel,
+                isCodex
+                    ? "The connected service returned an incomplete analytics payload."
+                    : $"Use the activity, model, project, and leaderboard panels for {CurrentProviderLabel} analytics.");
+            UsagePricingNoteText.Text = isCodex
+                ? "Restart ui-my-cli with the current code before evaluating token or credit data."
+                : $"Credit estimates are unavailable because {CurrentProviderLabel} does not expose the Codex pricing telemetry contract.";
             return;
         }
         var totals = rollup.Totals;
@@ -2079,8 +2319,11 @@ public sealed partial class MainWindow : Window
         else _hiddenTokenCategories.Add(category);
         if (_stats is null) return;
         var rollup = SelectedUsageRollup(_stats);
-        PopulateModelRows((rollup?.Models ?? []).Take(10));
-        PopulateTokenLeaderboard((rollup?.Sessions ?? []).Take(10));
+        if (rollup is not null)
+        {
+            PopulateModelRows(rollup.Models.Take(10));
+            PopulateTokenLeaderboard(rollup.Sessions.Take(10));
+        }
     }
 
     private void PopulateLeaderboard(
@@ -2142,15 +2385,15 @@ public sealed partial class MainWindow : Window
 
     private void RenderProviderStatus(DashboardStatus status)
     {
-        var codex = status.Providers.FirstOrDefault(provider => provider.Id == "codex");
-        ProviderHealthBar.Value = codex?.Available == true ? 100 : 0;
-        var summary = codex is null
-            ? $"Codex provider not reported · {status.ActivePtys:N0} persistent terminals"
-            : $"{(codex.Available ? "Available" : "Unavailable")} · {codex.Version ?? "version unknown"} · " +
+        var provider = status.Providers.FirstOrDefault(candidate => candidate.Id == _api.ProviderId);
+        ProviderHealthBar.Value = provider?.Available == true ? 100 : 0;
+        var summary = provider is null
+            ? $"{CurrentProviderLabel} provider not reported · {status.ActivePtys:N0} persistent terminals"
+            : $"{(provider.Available ? "Available" : "Unavailable")} · {provider.Version ?? "version unknown"} · " +
               $"{status.ActivePtys:N0} persistent terminal{(status.ActivePtys == 1 ? string.Empty : "s")} · " +
               $"service up {FormatDuration(status.Uptime)}";
-        var error = codex?.Available == false && !string.IsNullOrWhiteSpace(codex.Error)
-            ? codex.Error.Trim()
+        var error = provider?.Available == false && !string.IsNullOrWhiteSpace(provider.Error)
+            ? provider.Error.Trim()
             : null;
         ProviderStatusText.Text = error is null ? summary : $"{summary}\n{error}";
         ToolTip.SetTip(ProviderStatusText, error);
@@ -2160,7 +2403,7 @@ public sealed partial class MainWindow : Window
     {
         if (rateLimits is null)
         {
-            RateLimitText.Text = "Codex has not emitted rate-limit telemetry for the latest session.";
+            RateLimitText.Text = $"{CurrentProviderLabel} has not emitted rate-limit telemetry for the latest session.";
             RateLimitBar.Value = 0;
             return;
         }
@@ -2237,7 +2480,9 @@ public sealed partial class MainWindow : Window
             await OpenPreviewAsync(session, targetPane);
             return;
         }
-        if (_openTabs.TryGetValue(session.Id, out var existing))
+        var providerId = SessionProvider(session);
+        session.Provider = providerId;
+        if (_openTabs.TryGetValue(ProviderTabKey(providerId, session.Id), out var existing))
         {
             if (!ReferenceEquals(existing.Pane, targetPane)) await MoveTabToPaneAsync(existing, targetPane);
             AttachTab(existing, activate);
@@ -2247,7 +2492,7 @@ public sealed partial class MainWindow : Window
 
         var state = CreateTerminalTab(
             session.Id, session.DisplayTitle, session.WorkingDir, session, TerminalSessionKind.Codex, targetPane);
-        _openTabs.Add(session.Id, state);
+        _openTabs.Add(OpenTabRegistryKey(state), state);
         AddTabToPane(targetPane, state.Tab);
         state.IsAttached = true;
         if (activate)
@@ -2275,7 +2520,7 @@ public sealed partial class MainWindow : Window
                 key, $"New · {project}", workingDirectory, null, TerminalSessionKind.Codex, targetPane);
             state.KnownSessionIdsAtLaunch = _sessions.Select(session => session.Id).ToHashSet(StringComparer.Ordinal);
             state.LaunchedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            _openTabs.Add(key, state);
+            _openTabs.Add(OpenTabRegistryKey(state), state);
             AddTabToPane(targetPane, state.Tab);
             state.IsAttached = true;
             UpdatePaneAdaptiveControls(targetPane);
@@ -2307,7 +2552,7 @@ public sealed partial class MainWindow : Window
             var title = restoredTitle ?? $"{_platform.LocalShellLabel} · {project}";
             var state = CreateTerminalTab(
                 key, title, workingDirectory, null, TerminalSessionKind.LocalShell, targetPane);
-            _openTabs.Add(key, state);
+            _openTabs.Add(OpenTabRegistryKey(state), state);
             AddTabToPane(targetPane, state.Tab);
             state.IsAttached = true;
             if (activate)
@@ -2331,9 +2576,16 @@ public sealed partial class MainWindow : Window
         string workingDirectory,
         DashboardSession? session,
         TerminalSessionKind kind,
-        TerminalPaneState pane)
+        TerminalPaneState pane,
+        string? providerId = null)
     {
         var isLocalShell = kind == TerminalSessionKind.LocalShell;
+        providerId = isLocalShell
+            ? string.Empty
+            : string.IsNullOrWhiteSpace(providerId)
+                ? session is null ? _api.ProviderId : SessionProvider(session)
+                : providerId;
+        var providerLabel = ProviderLabel(providerId);
         var textSize = DashboardTextSize.Find(_settings.TextSizeId);
         var tabFontSize = TabHeaderFontSize(textSize);
         var terminal = new TerminalControl
@@ -2417,7 +2669,7 @@ public sealed partial class MainWindow : Window
                 },
             },
         };
-        AutomationProperties.SetName(restoreOverlay, "Restoring Codex conversation");
+        AutomationProperties.SetName(restoreOverlay, $"Restoring {providerLabel} conversation");
         AutomationProperties.SetLiveSetting(restoreOverlay, AutomationLiveSetting.Polite);
 
         var contextText = MakeDetailText(isLocalShell
@@ -2439,7 +2691,7 @@ public sealed partial class MainWindow : Window
         contextDonut.IsVisible = !isLocalShell;
         var configText = MakeDetailText(isLocalShell
             ? workingDirectory
-            : session is null ? "New session configuration is managed by Codex." : "Loading model, permissions, rules, and skills…");
+            : session is null ? $"New session configuration is managed by {providerLabel}." : "Loading model, permissions, rules, and skills…");
         var promptText = MakeDetailText(isLocalShell
             ? "Run shell commands directly. Type exit or close the tab to end this shell."
             : session?.LastUserPrompt ?? "The terminal is ready for a new prompt.");
@@ -2471,7 +2723,7 @@ public sealed partial class MainWindow : Window
         var stopButton = new Button { Content = "Stop", Padding = new Thickness(8, 3) };
         ToolTip.SetTip(stopButton, isLocalShell
             ? $"Stop the {_platform.LocalShellLabel} and remove this tab"
-            : "Stop the Codex process and remove this tab");
+            : $"Stop the {providerLabel} process and remove this tab");
         var actions = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
@@ -2769,6 +3021,7 @@ public sealed partial class MainWindow : Window
             Foreground = StartingBrush,
             VerticalAlignment = VerticalAlignment.Center,
         };
+        if (!isLocalShell) ToolTip.SetTip(statusGlyph, $"{providerLabel} terminal");
         var titleBlock = new TextBlock
         {
             Text = title,
@@ -2819,7 +3072,7 @@ public sealed partial class MainWindow : Window
             titleBlock, statusGlyph, contextText, contextBar, contextDonut,
             detailHeadings, configText,
             promptText, renameBox, renameButton, archiveButton, summaryButton, stopButton,
-            workingDirectory, session, kind, pane);
+            workingDirectory, session, kind, pane, providerId);
 
         ApplyThemeToSessionState(state, EffectivePaneTheme(pane));
         screenshotButton.Click += async (_, _) => await CaptureAndPasteScreenshotAsync(state);
@@ -3327,7 +3580,7 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> LaunchTerminalAsync(SessionTabState state, bool reconnecting = false)
     {
-        if (state.Kind == TerminalSessionKind.Codex && state.Session is not null)
+        if (IsCodexSession(state) && state.Session is not null)
         {
             BeginTerminalStartupReveal(state, reconnecting);
         }
@@ -3340,7 +3593,8 @@ public sealed partial class MainWindow : Window
                     hostExecutable,
                     _api.TerminalWebSocketUri(
                         state.Key,
-                        adaptive: state.Pane.AdaptiveEnabled).AbsoluteUri),
+                        adaptive: IsCodexSession(state) && state.Pane.AdaptiveEnabled,
+                        providerId: state.ProviderId).AbsoluteUri),
                 TerminalSessionKind.LocalShell => NativeLaunchBuilder.LocalShell(
                     _platform.Platform,
                     hostExecutable,
@@ -3418,7 +3672,7 @@ public sealed partial class MainWindow : Window
         targetPane.Tabs.SelectedItem = state.Tab;
         SetActivePane(targetPane);
         UpdatePaneEmptyStates();
-        if (adaptiveModeChanged && state.Kind == TerminalSessionKind.Codex && state.IsLaunched)
+        if (adaptiveModeChanged && IsCodexSession(state) && state.IsLaunched)
             await RestartTerminalForAdaptiveModeAsync(state);
     }
 
@@ -3483,7 +3737,7 @@ public sealed partial class MainWindow : Window
         EndTerminalStartupReveal(state);
         if (state.Kind == TerminalSessionKind.Codex)
         {
-            try { await _api.KillTerminalAsync(state.Key); }
+            try { await _api.KillTerminalAsync(state.Key, providerId: state.ProviderId); }
             catch (Exception ex) { NativeLog.Write($"Server PTY stop failed for {state.Key}: {ex.Message}"); }
         }
         state.Terminal.Kill();
@@ -3491,7 +3745,7 @@ public sealed partial class MainWindow : Window
         state.IsLaunched = false;
         state.Pane.Tabs.Items.Remove(state.Tab);
         state.IsAttached = false;
-        _openTabs.Remove(state.Key);
+        _openTabs.Remove(OpenTabRegistryKey(state));
         UpdatePaneAdaptiveControls(state.Pane);
         if (selectFallback) SelectPaneFallback(state.Pane);
         UpdatePaneEmptyStates();
@@ -3642,8 +3896,8 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var contextTask = _api.GetContextAsync(session.Id);
-            var configTask = _api.GetConfigAsync(session.Id);
+            var contextTask = _api.GetContextAsync(session.Id, providerId: state.ProviderId);
+            var configTask = _api.GetConfigAsync(session.Id, providerId: state.ProviderId);
             await Task.WhenAll(contextTask, configTask);
             var context = contextTask.Result;
             var config = configTask.Result;
@@ -3682,7 +3936,9 @@ public sealed partial class MainWindow : Window
             state.TitleBlock.Text = state.RenameBox.Text?.Trim() ?? state.TitleBlock.Text;
             AutomationProperties.SetName(
                 state.Tab,
-                state.TitleBlock.Text ?? (state.Kind == TerminalSessionKind.LocalShell ? _platform.LocalShellLabel : "New Codex session"));
+                state.TitleBlock.Text ?? (state.Kind == TerminalSessionKind.LocalShell
+                    ? _platform.LocalShellLabel
+                    : $"New {ProviderLabel(state.ProviderId)} session"));
             return;
         }
         var title = state.RenameBox.Text?.Trim();
@@ -3692,7 +3948,7 @@ public sealed partial class MainWindow : Window
         }
         try
         {
-            await _api.RenameAsync(state.Session.Id, title);
+            await _api.RenameAsync(state.Session.Id, title, providerId: state.ProviderId);
             state.TitleBlock.Text = title;
             AutomationProperties.SetName(state.Tab, title);
             await RefreshAllAsync();
@@ -3711,7 +3967,7 @@ public sealed partial class MainWindow : Window
         }
         try
         {
-            await _api.ArchiveAsync(state.Session.Id);
+            await _api.ArchiveAsync(state.Session.Id, providerId: state.ProviderId);
             await StopAndRemoveTabAsync(state);
             await RefreshAllAsync();
         }
@@ -3730,6 +3986,7 @@ public sealed partial class MainWindow : Window
             {
                 continue;
             }
+            if (state.ProviderId != _api.ProviderId) continue;
             var current = _sessions.FirstOrDefault(session => session.Id == state.Session.Id);
             if (current is not null)
             {
@@ -3890,7 +4147,7 @@ public sealed partial class MainWindow : Window
         if (sender is not Button { Tag: DashboardSession session }) return;
         try
         {
-            await _api.RestoreAsync(session.Id);
+            await _api.RestoreAsync(session.Id, providerId: SessionProvider(session));
             await RefreshAllAsync();
             ArchivedCheckBox.IsChecked = false;
             SetStatus($"Restored {session.DisplayTitle}", RunningBrush);
@@ -3907,7 +4164,9 @@ public sealed partial class MainWindow : Window
         bool activate = true)
     {
         targetPane ??= _activePane;
-        var key = $"preview:{session.Id}";
+        var providerId = SessionProvider(session);
+        session.Provider = providerId;
+        var key = PreviewTabKey(providerId, session.Id);
         if (_previewTabs.TryGetValue(key, out var existing))
         {
             var existingPane = _previewPaneByTab.GetValueOrDefault(existing) ?? _panes[0];
@@ -3949,7 +4208,7 @@ public sealed partial class MainWindow : Window
         }
         async Task RenamePreviewAsync(string title)
         {
-            await _api.RenameAsync(session.Id, title);
+            await _api.RenameAsync(session.Id, title, providerId: providerId);
             session.Title = title;
             if (header.Children.ElementAtOrDefault(1) is TextBlock titleBlock) titleBlock.Text = title;
             if (tab is not null) AutomationProperties.SetName(tab, $"Session summary: {title}");
@@ -3958,8 +4217,9 @@ public sealed partial class MainWindow : Window
         }
         async Task ArchivePreviewAsync()
         {
-            await _api.ArchiveAsync(session.Id);
-            if (_openTabs.TryGetValue(session.Id, out var openState)) await StopAndRemoveTabAsync(openState);
+            await _api.ArchiveAsync(session.Id, providerId: providerId);
+            if (_openTabs.TryGetValue(ProviderTabKey(providerId, session.Id), out var openState))
+                await StopAndRemoveTabAsync(openState);
             session.Archived = true;
             ClosePreview();
             await RefreshAllAsync();
@@ -3967,7 +4227,7 @@ public sealed partial class MainWindow : Window
         }
         async Task RestorePreviewAsync()
         {
-            await _api.RestoreAsync(session.Id);
+            await _api.RestoreAsync(session.Id, providerId: providerId);
             session.Archived = false;
             ArchivedCheckBox.IsChecked = false;
             await RefreshAllAsync();
@@ -3981,7 +4241,8 @@ public sealed partial class MainWindow : Window
                 ? _previewPaneByTab.GetValueOrDefault(tab) ?? targetPane
                 : targetPane;
             ClosePreview(selectDashboard: false);
-            var current = _sessions.FirstOrDefault(candidate => candidate.Id == session.Id) ?? session;
+            var current = _sessions.FirstOrDefault(candidate => candidate.Id == session.Id
+                && SessionProvider(candidate) == providerId) ?? session;
             await OpenSessionAsync(current, targetPane: resumePane);
         }
         preview = new SessionPreviewControl(
@@ -4000,6 +4261,7 @@ public sealed partial class MainWindow : Window
         };
         _previewTabs[key] = tab;
         _previewPaneByTab[tab] = targetPane;
+        _previewSessionByTab[tab] = session;
         AddTabToPane(targetPane, tab);
         if (activate)
         {
@@ -4015,6 +4277,7 @@ public sealed partial class MainWindow : Window
         var pane = _previewPaneByTab.GetValueOrDefault(tab) ?? _panes[0];
         pane.Tabs.Items.Remove(tab);
         _previewPaneByTab.Remove(tab);
+        _previewSessionByTab.Remove(tab);
         var preview = _previewTabs.FirstOrDefault(entry => ReferenceEquals(entry.Value, tab));
         if (!string.IsNullOrEmpty(preview.Key)) _previewTabs.Remove(preview.Key);
         if (selectFallback) SelectPaneFallback(pane);
@@ -4045,6 +4308,8 @@ public sealed partial class MainWindow : Window
             });
         }
         var selected = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir;
+        var providerLabel = CurrentProviderLabel;
+        var providerNoun = ProviderNoun(_api.ProviderId);
         candidates = candidates
             .OrderBy(repo => repo.WorkingDir == selected ? 0 : 1)
             .ThenBy(repo => repo.Project, StringComparer.OrdinalIgnoreCase)
@@ -4087,7 +4352,7 @@ public sealed partial class MainWindow : Window
                     button,
                     selectedKind == TerminalSessionKind.LocalShell
                         ? $"Start new {_platform.LocalShellLabel} session in {label}"
-                        : $"Start new Codex session in {label}");
+                        : $"Start new {providerLabel} session in {label}");
                 button.Click += async (_, _) =>
                 {
                     _newSessionFlyout?.Hide();
@@ -4104,7 +4369,7 @@ public sealed partial class MainWindow : Window
 
         var codexChoice = new Button
         {
-            Content = "Codex session",
+            Content = providerNoun,
             Padding = new Thickness(12, 8),
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
@@ -4115,7 +4380,7 @@ public sealed partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
         Grid.SetColumn(localShellChoice, 1);
-        AutomationProperties.SetName(codexChoice, "Choose Codex session");
+        AutomationProperties.SetName(codexChoice, $"Choose {providerLabel} session");
         AutomationProperties.SetName(localShellChoice, $"Choose {_platform.LocalShellLabel} session");
         var choiceHelp = new TextBlock
         {
@@ -4133,7 +4398,7 @@ public sealed partial class MainWindow : Window
             AutomationProperties.SetItemStatus(codexChoice, codexSelected ? "Selected" : "Not selected");
             AutomationProperties.SetItemStatus(localShellChoice, codexSelected ? "Not selected" : "Selected");
             choiceHelp.Text = codexSelected
-                ? "Start or register a persistent Codex CLI session in the selected project."
+                ? $"Start or register a persistent {providerLabel} CLI session in the selected project."
                 : $"Start a direct {_platform.LocalShellLabel} in the selected project. Closing its tab ends the shell.";
         }
         codexChoice.Click += (_, _) =>
@@ -4521,7 +4786,7 @@ public sealed partial class MainWindow : Window
         {
             cancellationToken.ThrowIfCancellationRequested();
             var sessions = await NativeUpdateDataServiceRecovery.RunAsync(
-                _api.GetSessionsAsync,
+                token => _api.GetSessionsAsync(token),
                 async token =>
                 {
                     NativeLog.Write(
@@ -4573,7 +4838,7 @@ public sealed partial class MainWindow : Window
             {
                 UseShellExecute = true,
             });
-            SetStatus("Opened browser-based Codex dashboard", RunningBrush);
+            SetStatus($"Opened browser-based {CurrentProviderLabel} dashboard", RunningBrush);
         }
         catch (Exception ex)
         {
@@ -4822,7 +5087,7 @@ public sealed partial class MainWindow : Window
 
     private static void ApplyAdaptiveToggleTheme(SessionTabState state, DashboardTheme theme)
     {
-        var enabled = state.Kind == TerminalSessionKind.Codex && state.Pane.AdaptiveEnabled;
+        var enabled = IsCodexSession(state) && state.Pane.AdaptiveEnabled;
         var elevated = Brush.Parse(theme.Elevated);
         var hover = Brush.Parse(theme.Hover);
         var borderBright = Brush.Parse(theme.BorderBright);
@@ -5329,7 +5594,7 @@ public sealed partial class MainWindow : Window
         var label = _isDashboardConnected ? "Dashboard connected" : "Dashboard disconnected";
         ToolTip.SetTip(HeaderConnectionIndicator, label);
         AutomationProperties.SetName(HeaderConnectionIndicator, label);
-        AutomationProperties.SetName(HomeButton, "CODEX NATIVE DASHBOARD");
+        AutomationProperties.SetName(HomeButton, $"{CurrentProviderLabel.ToUpperInvariant()} NATIVE DASHBOARD");
         AutomationProperties.SetHelpText(HomeButton, $"{label}. Go to dashboard.");
     }
 
@@ -5556,7 +5821,8 @@ public sealed partial class MainWindow : Window
         string workingDirectory,
         DashboardSession? session,
         TerminalSessionKind kind,
-        TerminalPaneState pane)
+        TerminalPaneState pane,
+        string providerId)
     {
         public string Key { get; set; } = key;
         public TabItem Tab { get; } = tab;
@@ -5600,6 +5866,7 @@ public sealed partial class MainWindow : Window
         public DashboardSession? Session { get; set; } = session;
         public TerminalSessionKind Kind { get; } = kind;
         public TerminalPaneState Pane { get; set; } = pane;
+        public string ProviderId { get; } = providerId;
         public HashSet<string> KnownSessionIdsAtLaunch { get; set; } = [];
         public long LaunchedAt { get; set; }
         public bool IsAttached { get; set; }

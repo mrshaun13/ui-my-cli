@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace CodexNative;
 
 /// <summary>
-/// Reconnecting client for the dashboard's Codex status feed. The server pushes
+/// Reconnecting client for a dashboard provider's status feed. The server pushes
 /// file-system changes immediately and also emits a three-second heartbeat.
 /// </summary>
 public sealed class DashboardStatusFeed : IAsyncDisposable

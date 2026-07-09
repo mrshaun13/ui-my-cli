@@ -27,7 +27,8 @@ public sealed record NativeSettings(
     string? ActivePaneId = null,
     string? ScreenshotCaptureDirectory = null,
     int ScreenshotRetentionDays = 3,
-    int ScreenshotMaximumMegapixels = 32)
+    int ScreenshotMaximumMegapixels = 32,
+    string ProviderId = "codex")
 {
     public static NativeSettings Default { get; } = CreateDefault();
 
@@ -119,7 +120,8 @@ public sealed record NativePaneTabLayout(
     string? SessionId,
     string WorkingDirectory,
     string Title,
-    long LaunchedAt = 0);
+    long LaunchedAt = 0,
+    string? ProviderId = null);
 
 public sealed class NativeSettingsStore
 {

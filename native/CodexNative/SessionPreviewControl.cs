@@ -43,6 +43,8 @@ public sealed class SessionPreviewControl : UserControl
     private CancellationTokenSource? _conversationSearchCancellation;
     private int _conversationTotal;
     private int _nextConversationBatch = 50;
+    private string ProviderId => string.IsNullOrWhiteSpace(_session.Provider) ? "codex" : _session.Provider;
+    private string ProviderLabel => ProviderId.Equals("devin", StringComparison.OrdinalIgnoreCase) ? "DEVIN" : "CODEX";
 
     public SessionPreviewControl(
         DashboardApiClient api,
@@ -155,9 +157,9 @@ public sealed class SessionPreviewControl : UserControl
         _root.Children.Add(_status);
         try
         {
-            var previewTask = _api.GetPreviewAsync(_session.Id, cancellationToken);
-            var configTask = _api.GetConfigAsync(_session.Id, cancellationToken);
-            var contextTask = _api.GetContextAsync(_session.Id, cancellationToken);
+            var previewTask = _api.GetPreviewAsync(_session.Id, cancellationToken, ProviderId);
+            var configTask = _api.GetConfigAsync(_session.Id, cancellationToken, ProviderId);
+            var contextTask = _api.GetContextAsync(_session.Id, cancellationToken, ProviderId);
             await Task.WhenAll(previewTask, configTask, contextTask);
             cancellationToken.ThrowIfCancellationRequested();
             var preview = previewTask.Result;
@@ -584,7 +586,8 @@ public sealed class SessionPreviewControl : UserControl
                 ConversationLoad.More => "Loading older exchanges…",
                 _ => "Loading recent conversation…",
             };
-            var data = await _api.GetConversationAsync(_session.Id, offset, limit, cancellationToken);
+            var data = await _api.GetConversationAsync(
+                _session.Id, offset, limit, cancellationToken, ProviderId);
             cancellationToken.ThrowIfCancellationRequested();
             if (mode == ConversationLoad.More)
             {
@@ -628,7 +631,7 @@ public sealed class SessionPreviewControl : UserControl
             if (!string.IsNullOrWhiteSpace(turn.UserText))
                 _conversation.Children.Add(MessageBubble("YOU", turn.UserText, true, turn.CreatedAt));
             if (!string.IsNullOrWhiteSpace(turn.AssistantText))
-                _conversation.Children.Add(MessageBubble("CODEX", turn.AssistantText, false, turn.AssistantCreatedAt));
+                _conversation.Children.Add(MessageBubble(ProviderLabel, turn.AssistantText, false, turn.AssistantCreatedAt));
         }
         if (visible.Count == 0)
         {
@@ -659,7 +662,7 @@ public sealed class SessionPreviewControl : UserControl
     {
         try
         {
-            var subagents = await _api.GetSubagentsAsync(_session.Id, cancellationToken);
+            var subagents = await _api.GetSubagentsAsync(_session.Id, cancellationToken, ProviderId);
             cancellationToken.ThrowIfCancellationRequested();
             if (subagents.Count == 0) return;
             var completed = subagents.Count(subagent => subagent.Status.Equals("completed", StringComparison.OrdinalIgnoreCase));
