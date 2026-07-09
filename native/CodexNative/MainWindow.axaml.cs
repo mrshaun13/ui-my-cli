@@ -1115,6 +1115,7 @@ public sealed partial class MainWindow : Window
                 SetStatus($"Switching dashboard to {CurrentProviderLabel}…", StartingBrush);
                 await PersistSettingsAsync();
                 await RefreshAllCoreAsync(providerId, epoch);
+                if (!string.IsNullOrWhiteSpace(SearchTextBox.Text)) await RefreshSearchAsync();
             }
             finally
             {
@@ -1134,6 +1135,7 @@ public sealed partial class MainWindow : Window
                 ApplyProviderChrome();
                 await PersistSettingsAsync();
                 await RefreshAllAsync();
+                if (!string.IsNullOrWhiteSpace(SearchTextBox.Text)) await RefreshSearchAsync();
             }
             catch (Exception rollbackEx)
             {
