@@ -590,6 +590,22 @@ Check("terminal pane layout equalizes until minimum width then overflows", () =>
     Equal((460d, 540d), TerminalPaneLayoutMath.ResizePair(500, 500, -100, 460));
 });
 
+Check("terminal pane layout follows viewport changes while preserving usable proportions", () =>
+{
+    SequenceEqual(
+        new[] { 900d, 600d },
+        TerminalPaneLayoutMath.FitPaneWidths([600d, 400d], 1505, 460, 5));
+    SequenceEqual(
+        new[] { 540d, 460d },
+        TerminalPaneLayoutMath.FitPaneWidths([900d, 600d], 1005, 460, 5));
+    SequenceEqual(
+        new[] { 460d, 460d },
+        TerminalPaneLayoutMath.FitPaneWidths([900d, 600d], 800, 460, 5));
+    SequenceEqual(
+        new[] { 1200d },
+        TerminalPaneLayoutMath.FitPaneWidths([460d], 1200, 460, 5));
+});
+
 Check("clipboard screenshot paths become standalone host composer references", () =>
 {
     var wslPath = ScreenshotAttachmentPath.ToWslPath(

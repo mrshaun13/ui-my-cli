@@ -598,8 +598,23 @@ public sealed partial class MainWindow : Window
     private void UpdatePaneWorkspaceSize()
     {
         if (_panes.Count == 0 || _updatingPaneLayout) return;
-        if (_panes.Count == 1) RebuildPaneHost(equalize: true);
+        FitPaneWidthsToViewport();
+        RebuildPaneHost(equalize: false);
         UpdateTerminalTabContentHeights();
+    }
+
+    private void FitPaneWidthsToViewport()
+    {
+        var viewportWidth = Math.Max(
+            MinimumPaneWidth,
+            Math.Max(PaneWorkspaceScroll.Viewport.Width, PaneWorkspaceScroll.Bounds.Width));
+        var fitted = TerminalPaneLayoutMath.FitPaneWidths(
+            _panes.Select(pane => pane.Width),
+            viewportWidth,
+            MinimumPaneWidth,
+            PaneSplitterWidth);
+        for (var index = 0; index < _panes.Count; index++)
+            _panes[index].Width = fitted[index];
     }
 
     private void UpdateTerminalTabContentHeights()
@@ -689,6 +704,7 @@ public sealed partial class MainWindow : Window
     {
         SyncPaneThemeSelector(pane);
         var theme = EffectivePaneTheme(pane);
+        ApplyScopedScrollbarTheme(pane.Root, theme);
         var baseBrush = Brush.Parse(theme.Base);
         var elevated = Brush.Parse(theme.Elevated);
         var border = Brush.Parse(theme.Border);
@@ -1629,6 +1645,7 @@ public sealed partial class MainWindow : Window
                 ApplyPaneTheme(restoredPane);
                 _panes.Add(restoredPane);
             }
+            FitPaneWidthsToViewport();
             RebuildPaneHost(equalize: false);
 
             static string SavedProviderId(NativePaneTabLayout tab) =>
@@ -5112,6 +5129,22 @@ public sealed partial class MainWindow : Window
 
     private static void ApplyScopedScrollbarTheme(Control scope, DashboardTheme theme)
     {
+        // The window-level ScrollBar styles use the dashboard palette keys for
+        // their normal, pointer-over, expanded, and pressed states. Keep those
+        // keys in the pane's resource scope as well as Fluent's scrollbar keys;
+        // otherwise the template-specific brushes change while our style
+        // setters continue resolving colors from the dashboard theme.
+        scope.Resources["BaseBrush"] = Brush.Parse(theme.Base);
+        scope.Resources["SurfaceBrush"] = Brush.Parse(theme.Surface);
+        scope.Resources["ElevatedBrush"] = Brush.Parse(theme.Elevated);
+        scope.Resources["HoverBrush"] = Brush.Parse(theme.Hover);
+        scope.Resources["BorderBrush"] = Brush.Parse(theme.Border);
+        scope.Resources["BorderBrightBrush"] = Brush.Parse(theme.BorderBright);
+        scope.Resources["PrimaryBrush"] = Brush.Parse(theme.Primary);
+        scope.Resources["SecondaryBrush"] = Brush.Parse(theme.Secondary);
+        scope.Resources["MutedBrush"] = Brush.Parse(theme.Muted);
+        scope.Resources["AccentBrush"] = Brush.Parse(theme.Accent);
+        scope.Resources["TerminalBrush"] = Brush.Parse(theme.Terminal);
         scope.Resources["ScrollBarBackground"] = Brush.Parse(theme.Elevated);
         scope.Resources["ScrollBarForeground"] = Brush.Parse(theme.Secondary);
         scope.Resources["ScrollBarBorderBrush"] = Brush.Parse(theme.Border);
