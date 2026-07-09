@@ -4408,8 +4408,8 @@ public sealed partial class MainWindow : Window
                 SessionCountText.Text = "Dashboard setup required";
                 return;
             }
-            StartStatusFeed();
         }
+        if (_statusFeed is null) StartStatusFeed();
         await RefreshAllAsync();
         if (_availableUpdate is null) _ = CheckForUpdateAsync(reportCurrent: false);
     }
@@ -5118,8 +5118,8 @@ public sealed partial class MainWindow : Window
         if (!await _api.IsAvailableAsync())
         {
             if (!await EnsureDashboardServiceAsync()) return;
-            StartStatusFeed();
         }
+        if (_statusFeed is null) StartStatusFeed();
         await RefreshSessionsAsync();
         _refreshTick++;
         if (_refreshTick % 2 == 0)
