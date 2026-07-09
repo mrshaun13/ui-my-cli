@@ -61,3 +61,23 @@ test('PTY helper leaves an executable helper untouched', () => {
   assert.equal(changed, false)
   assert.equal(chmodCalled, false)
 })
+
+test('PTY helper I/O failures return false instead of throwing', () => {
+  assert.equal(ensurePtySpawnHelperIsExecutable({
+    platform: 'darwin',
+    arch: 'arm64',
+    nodePtyDirectory: '/checkout/node_modules/node-pty',
+    existsSync: () => true,
+    statSync: () => { throw new Error('EACCES') },
+    chmodSync: () => { throw new Error('should not chmod') },
+  }), false)
+
+  assert.equal(ensurePtySpawnHelperIsExecutable({
+    platform: 'darwin',
+    arch: 'arm64',
+    nodePtyDirectory: '/checkout/node_modules/node-pty',
+    existsSync: () => true,
+    statSync: () => ({ mode: 0o100644 }),
+    chmodSync: () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }) },
+  }), false)
+})

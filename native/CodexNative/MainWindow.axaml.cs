@@ -1100,6 +1100,15 @@ public sealed partial class MainWindow : Window
             _settings.DashboardWorkingDirectory);
         if (string.Equals(resolved, _settings.DashboardWorkingDirectory, StringComparison.Ordinal)) return;
 
+        var readiness = DashboardRepositoryLocator.Inspect(resolved);
+        if (!readiness.IsReady)
+        {
+            NativeLog.Write(
+                $"Keeping configured dashboard checkout '{_settings.DashboardWorkingDirectory}' " +
+                $"instead of incomplete candidate '{resolved}'.");
+            return;
+        }
+
         var previous = _settings.DashboardWorkingDirectory;
         _settings = _settings with { DashboardWorkingDirectory = resolved };
         await _settingsStore.SaveAsync(_settings);
@@ -5108,7 +5117,8 @@ public sealed partial class MainWindow : Window
         if (_serviceStopRequested) return;
         if (!await _api.IsAvailableAsync())
         {
-            await EnsureDashboardServiceAsync();
+            if (!await EnsureDashboardServiceAsync()) return;
+            StartStatusFeed();
         }
         await RefreshSessionsAsync();
         _refreshTick++;
@@ -5179,44 +5189,12 @@ public sealed partial class MainWindow : Window
 
     public async Task StopOwnedServiceFromMenuBarAsync()
     {
-        if (!_serviceManager.OwnsRunningService)
+        var outcome = await TryStopOwnedServiceAsync(allowStopWhenProbeFails: false);
+        if (outcome == OwnedServiceStopOutcome.Stopped)
         {
-            SetStatus("This UI is connected to an existing service and cannot stop it.", StartingBrush);
-            ShowFromMenuBar();
-            return;
+            SetStatus("Local dashboard service stopped. Use the menu-bar icon to start it.", StartingBrush);
+            SessionCountText.Text = "Service stopped";
         }
-        try
-        {
-            var active = await _api.GetActiveTerminalIdsAsync();
-            if (active.Count > 0)
-            {
-                SetStatus($"Close {active.Count} active terminal{(active.Count == 1 ? string.Empty : "s")} before stopping the service.", StartingBrush);
-                ShowFromMenuBar();
-                return;
-            }
-        }
-        catch (Exception ex)
-        {
-            NativeLog.Write($"Could not verify active terminals before stopping service: {ex}");
-            SetStatus("Could not verify active terminals; the service was not stopped.", ErrorBrush);
-            ShowFromMenuBar();
-            return;
-        }
-
-        if (!_serviceManager.StopOwnedService())
-        {
-            SetStatus("No native-managed service is running.", StartingBrush);
-            ShowFromMenuBar();
-            return;
-        }
-        _serviceStopRequested = true;
-        if (_statusFeed is not null)
-        {
-            await _statusFeed.DisposeAsync();
-            _statusFeed = null;
-        }
-        SetStatus("Local dashboard service stopped. Use the menu-bar icon to start it.", StartingBrush);
-        SessionCountText.Text = "Service stopped";
         ShowFromMenuBar();
     }
 
@@ -5224,11 +5202,78 @@ public sealed partial class MainWindow : Window
     {
         if (_serviceManager.OwnsRunningService)
         {
-            await StopOwnedServiceFromMenuBarAsync();
-            if (_serviceManager.OwnsRunningService) return;
+            var outcome = await TryStopOwnedServiceAsync(allowStopWhenProbeFails: true);
+            if (outcome == OwnedServiceStopOutcome.RefusedActiveTerminals) return;
+            if (_serviceManager.OwnsRunningService
+                && outcome != OwnedServiceStopOutcome.ProbeFailedBestEffort)
+            {
+                return;
+            }
         }
         _shutdownConfirmed = true;
         Close();
+    }
+
+    private enum OwnedServiceStopOutcome
+    {
+        Stopped,
+        NotOwned,
+        RefusedActiveTerminals,
+        ProbeFailed,
+        StopFailed,
+        ProbeFailedBestEffort,
+    }
+
+    private async Task<OwnedServiceStopOutcome> TryStopOwnedServiceAsync(bool allowStopWhenProbeFails)
+    {
+        if (!_serviceManager.OwnsRunningService)
+        {
+            SetStatus("This UI is connected to an existing service and cannot stop it.", StartingBrush);
+            return OwnedServiceStopOutcome.NotOwned;
+        }
+
+        var probeFailed = false;
+        try
+        {
+            var active = await _api.GetActiveTerminalIdsAsync();
+            if (active.Count > 0)
+            {
+                SetStatus(
+                    $"Close {active.Count} active terminal{(active.Count == 1 ? string.Empty : "s")} before stopping the service.",
+                    StartingBrush);
+                return OwnedServiceStopOutcome.RefusedActiveTerminals;
+            }
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Could not verify active terminals before stopping service: {ex}");
+            if (!allowStopWhenProbeFails)
+            {
+                SetStatus("Could not verify active terminals; the service was not stopped.", ErrorBrush);
+                return OwnedServiceStopOutcome.ProbeFailed;
+            }
+            probeFailed = true;
+            NativeLog.Write("Proceeding with best-effort service stop because terminal probe failed during quit.");
+        }
+
+        if (!_serviceManager.StopOwnedService())
+        {
+            if (!probeFailed)
+                SetStatus("No native-managed service is running.", StartingBrush);
+            return probeFailed
+                ? OwnedServiceStopOutcome.ProbeFailedBestEffort
+                : OwnedServiceStopOutcome.StopFailed;
+        }
+
+        _serviceStopRequested = true;
+        if (_statusFeed is not null)
+        {
+            await _statusFeed.DisposeAsync();
+            _statusFeed = null;
+        }
+        return probeFailed
+            ? OwnedServiceStopOutcome.ProbeFailedBestEffort
+            : OwnedServiceStopOutcome.Stopped;
     }
 
     private void ShutdownNativeResources()

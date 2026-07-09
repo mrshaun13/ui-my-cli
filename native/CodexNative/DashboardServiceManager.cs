@@ -134,20 +134,41 @@ public sealed class DashboardServiceManager : IDisposable
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
-                process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds);
+                if (!process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds)
+                    && !process.HasExited)
+                {
+                    NativeLog.Write("Dashboard service did not exit within the stop timeout; retaining ownership.");
+                    return false;
+                }
             }
             NativeLog.Write("Stopped the dashboard service started by this native UI.");
+            ClearOwnedProcess(process);
             return true;
         }
         catch (InvalidOperationException)
         {
+            try
+            {
+                if (process.HasExited)
+                {
+                    NativeLog.Write("Stopped the dashboard service started by this native UI.");
+                    ClearOwnedProcess(process);
+                    return true;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            NativeLog.Write("Failed to stop the dashboard service; retaining ownership for a later retry.");
             return false;
         }
-        finally
-        {
+    }
+
+    private void ClearOwnedProcess(Process process)
+    {
+        if (ReferenceEquals(_process, process))
             _process = null;
-            process.Dispose();
-        }
+        process.Dispose();
     }
 
     public void Dispose()

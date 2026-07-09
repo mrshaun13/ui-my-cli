@@ -120,21 +120,25 @@ function getShell() {
  * checkout copied from another machine or restored from an archive self-heals.
  */
 function ensurePtySpawnHelperIsExecutable(options = {}) {
-  const platform = options.platform ?? process.platform;
-  if (platform === 'win32') return false;
-  const arch = options.arch ?? process.arch;
-  const nodePtyDirectory = options.nodePtyDirectory
-    ?? path.dirname(require.resolve('node-pty/package.json'));
-  const helper = path.join(nodePtyDirectory, 'prebuilds', `${platform}-${arch}`, 'spawn-helper');
-  const existsSync = options.existsSync ?? fs.existsSync;
-  const statSync = options.statSync ?? fs.statSync;
-  const chmodSync = options.chmodSync ?? fs.chmodSync;
-  if (!existsSync(helper)) return false;
+  try {
+    const platform = options.platform ?? process.platform;
+    if (platform === 'win32') return false;
+    const arch = options.arch ?? process.arch;
+    const nodePtyDirectory = options.nodePtyDirectory
+      ?? path.dirname(require.resolve('node-pty/package.json'));
+    const helper = path.join(nodePtyDirectory, 'prebuilds', `${platform}-${arch}`, 'spawn-helper');
+    const existsSync = options.existsSync ?? fs.existsSync;
+    const statSync = options.statSync ?? fs.statSync;
+    const chmodSync = options.chmodSync ?? fs.chmodSync;
+    if (!existsSync(helper)) return false;
 
-  const mode = statSync(helper).mode;
-  if ((mode & 0o111) !== 0) return false;
-  chmodSync(helper, mode | 0o755);
-  return true;
+    const mode = statSync(helper).mode;
+    if ((mode & 0o111) !== 0) return false;
+    chmodSync(helper, mode | 0o755);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function ptyKey(providerId, sessionId) {
