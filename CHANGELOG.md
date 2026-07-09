@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Documentation
+
+- Documented the supported portable Windows installation under
+  `%LOCALAPPDATA%\Programs\CodexNative`, including SHA-256 verification,
+  keeping all three executables together, pinning the stable executable path,
+  and avoiding Desktop, Downloads, OneDrive, and network-synchronized folders
+  that can block atomic updates.
+- Documented the Windows Properties **Unblock** step for the currently unsigned
+  executables only after release-origin and checksum verification, without
+  advising users to bypass organization policy.
 ### Native desktop 1.1.2 hotfix
 
 - Fixed native self-update failures when the loopback dashboard service stopped

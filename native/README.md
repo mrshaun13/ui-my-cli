@@ -131,8 +131,51 @@ notarization before distribution outside a development machine.
 
 ## Run
 
-On Windows, keep `CodexNative.TerminalHost.exe` beside `CodexNative.exe` and run
-`CodexNative.exe`.
+### Windows portable installation
+
+The Windows release is intentionally a portable application rather than an
+installer. Download the versioned `win-x64` ZIP and its `.sha256` manifest from
+the repository's GitHub Releases page. Verify that the ZIP's SHA-256 matches the
+manifest before extracting or unblocking any executable.
+
+From PowerShell in the download directory, compare the calculated hash with the
+first value in the manifest. Stop if they differ:
+
+```powershell
+$zip = "CodexNative-v<version>-win-x64.zip"
+$expected = (Get-Content "$zip.sha256").Split()[0].ToLowerInvariant()
+$actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "Codex Native ZIP checksum mismatch" }
+```
+
+Extract the complete archive to a stable, local, user-writable directory:
+
+```text
+%LOCALAPPDATA%\Programs\CodexNative
+```
+
+Do not run the application from inside the ZIP, the Downloads directory, the
+Desktop, OneDrive, or another synchronized/network directory. The updater
+atomically renames and replaces the installation directory; sync clients can
+deny that operation or leave stale folder entries. Keep all three executables
+together:
+
+```text
+CodexNative.exe
+CodexNative.TerminalHost.exe
+CodexNative.Updater.exe
+```
+
+The binaries are not currently code-signed. After verifying the GitHub origin
+and SHA-256, right-click each executable, select **Properties**, check
+**Unblock**, and select **Apply**. If Windows or an organization policy does not
+offer or permit Unblock, do not bypass that policy; use an approved build or ask
+the administrator responsible for the device.
+
+Run `CodexNative.exe` from that stable directory and pin that executable to the
+taskbar if desired. Updates replace the same directory in place, preserve the
+shortcut target, retain the previous payload long enough to roll back a failed
+handoff, and automatically restart the new version.
 
 On macOS, copy the matching `CodexNative.app` to `Applications` or run it from
 the artifact directory. An unsigned local development build may require an

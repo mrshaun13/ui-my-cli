@@ -410,6 +410,16 @@ Versioned release downloads are published in
 request workflow artifacts use the same unambiguous names but are temporary
 validation outputs rather than stable releases.
 
+The Windows ZIP is a portable application. After verifying its SHA-256, extract
+the complete archive to \`%LOCALAPPDATA%\\Programs\\CodexNative\`, keep all three
+executables together, and run or pin \`CodexNative.exe\` from that location. Do
+not install it on the Desktop, in Downloads, or under OneDrive/network sync:
+the in-place updater needs to atomically replace the installation directory.
+Because the current binaries are unsigned, Windows users must verify the
+GitHub origin and checksum before using each executable's **Properties →
+Unblock** control. See \`native/README.md\` for the complete trust and update
+procedure.
+
 ### Development Mode (hot reload)
 
 \`\`\`bash
