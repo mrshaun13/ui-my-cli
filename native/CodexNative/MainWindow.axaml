@@ -282,7 +282,7 @@
   <Grid RowDefinitions="Auto,*,Auto">
     <Border Grid.Row="0" x:Name="AppHeader" Background="{DynamicResource SurfaceBrush}"
             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto,Auto">
         <Button Grid.Column="0" x:Name="HomeButton" Click="OnHomeClicked" Margin="0,0,12,0"
                 Background="Transparent" BorderThickness="0" Padding="4">
           <StackPanel Orientation="Horizontal" Spacing="8">
@@ -294,36 +294,42 @@
                        Fill="{DynamicResource ErrorBrush}"
                        HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Grid>
-            <TextBlock Text="CODEX NATIVE DASHBOARD" Foreground="{DynamicResource PrimaryBrush}"
+            <TextBlock x:Name="HeaderTitleText" Text="CODEX NATIVE DASHBOARD" Foreground="{DynamicResource PrimaryBrush}"
                        FontWeight="Bold" FontSize="15" VerticalAlignment="Center" />
           </StackPanel>
         </Button>
 
-        <TextBlock Grid.Column="1" Text="Style" Foreground="{DynamicResource SecondaryBrush}"
+        <TextBlock Grid.Column="1" x:Name="AgentLabelText" Text="Agent" Foreground="{DynamicResource SecondaryBrush}"
                    VerticalAlignment="Center" Margin="0,0,6,0" />
-        <ComboBox Grid.Column="2" x:Name="ThemeComboBox" Width="150" SelectionChanged="OnThemeChanged"
+        <ComboBox Grid.Column="2" x:Name="ProviderComboBox" Width="128" SelectionChanged="OnProviderChanged"
+                  DropDownOpened="OnProviderDropDownOpened"
+                  ToolTip.Tip="Switch the dashboard agent provider" Margin="0,0,14,0" />
+
+        <TextBlock Grid.Column="3" x:Name="StyleLabelText" Text="Style" Foreground="{DynamicResource SecondaryBrush}"
+                   VerticalAlignment="Center" Margin="0,0,6,0" />
+        <ComboBox Grid.Column="4" x:Name="ThemeComboBox" Width="150" SelectionChanged="OnThemeChanged"
                   Margin="0,0,14,0" />
 
-        <TextBlock Grid.Column="3" Text="Text" Foreground="{DynamicResource SecondaryBrush}"
+        <TextBlock Grid.Column="5" x:Name="TextLabelText" Text="Text" Foreground="{DynamicResource SecondaryBrush}"
                    VerticalAlignment="Center" Margin="0,0,6,0" />
-        <ComboBox Grid.Column="4" x:Name="TextSizeComboBox" Width="105" SelectionChanged="OnTextSizeChanged"
+        <ComboBox Grid.Column="6" x:Name="TextSizeComboBox" Width="105" SelectionChanged="OnTextSizeChanged"
                   Margin="0,0,14,0" />
 
-        <TextBlock Grid.Column="5" x:Name="EnvSummaryText" Foreground="{DynamicResource SecondaryBrush}"
+        <TextBlock Grid.Column="7" x:Name="EnvSummaryText" Foreground="{DynamicResource SecondaryBrush}"
                    VerticalAlignment="Center" Text="Loading MCP · skills · plugins…" />
 
-        <Button Grid.Column="6" x:Name="UpdateButton" Content="Check updates"
+        <Button Grid.Column="8" x:Name="UpdateButton" Content="Check updates"
                 IsVisible="False" HorizontalAlignment="Right" Margin="8,0"
                 Click="OnUpdateClicked" Padding="12,5"
                 ToolTip.Tip="Check GitHub Releases for a newer native app" />
-        <Button Grid.Column="7" x:Name="SidebarToggleButton" Content="☰" Click="OnSidebarToggleClicked"
+        <Button Grid.Column="9" x:Name="SidebarToggleButton" Content="☰" Click="OnSidebarToggleClicked"
                 ToolTip.Tip="Show or hide session sidebar" Padding="10,5" Margin="0,0,8,0" />
-        <Button Grid.Column="8" x:Name="RefreshButton" Content="Refresh" Click="OnRefreshClicked"
+        <Button Grid.Column="10" x:Name="RefreshButton" Content="Refresh" Click="OnRefreshClicked"
                 ToolTip.Tip="Refresh dashboard (Ctrl+R)"
                 Padding="12,5" Margin="0,0,8,0" />
-        <Button Grid.Column="9" x:Name="LaunchBrowserButton" Content="Launch in Browser"
+        <Button Grid.Column="11" x:Name="LaunchBrowserButton" Content="Launch in Browser"
                 Click="OnLaunchBrowserClicked"
-                ToolTip.Tip="Open the browser-based Codex dashboard"
+                ToolTip.Tip="Open the browser-based agent dashboard"
                 Padding="12,5" />
       </Grid>
     </Border>
@@ -338,7 +344,7 @@
               <TextBlock x:Name="SessionCountText" Text="Connecting…" FontSize="11"
                          Foreground="{DynamicResource SecondaryBrush}" />
             </StackPanel>
-            <Button Grid.Column="1" x:Name="NewSessionButton" Content="＋" ToolTip.Tip="New Codex or local shell session (Ctrl+Shift+N)" Click="OnNewSessionClicked"
+            <Button Grid.Column="1" x:Name="NewSessionButton" Content="＋" ToolTip.Tip="New agent or local shell session (Ctrl+Shift+N)" Click="OnNewSessionClicked"
                     FontSize="18" Padding="8,2" />
           </Grid>
 
@@ -475,7 +481,7 @@
               BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
         <Grid RowDefinitions="Auto,*,Auto">
           <Button Grid.Row="0" x:Name="CompactNewSessionButton" Content="＋" FontSize="18" Padding="5,3" Margin="6,8,6,6"
-                  ToolTip.Tip="New Codex or local shell session (Ctrl+Shift+N)" Click="OnNewSessionClicked" />
+                  ToolTip.Tip="New agent or local shell session (Ctrl+Shift+N)" Click="OnNewSessionClicked" />
           <ListBox Grid.Row="1" x:Name="CompactSessionsList" SelectionChanged="OnCompactSessionSelected"
                    Background="Transparent" BorderThickness="0" Padding="3,0">
             <ListBox.ItemTemplate>
@@ -538,8 +544,8 @@
                 <Border Grid.Column="0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
                         BorderThickness="1" CornerRadius="6" Padding="14">
                   <StackPanel Spacing="7">
-                    <TextBlock Text="CODEX SERVICE" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
-                    <TextBlock x:Name="ProviderStatusText" Text="Checking Codex provider…"
+                    <TextBlock x:Name="ProviderServiceHeadingText" Text="AGENT SERVICE" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                    <TextBlock x:Name="ProviderStatusText" Text="Checking agent provider…"
                                Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
                     <ProgressBar x:Name="ProviderHealthBar" Minimum="0" Maximum="100" Value="0" Height="7" />
                   </StackPanel>
@@ -548,7 +554,7 @@
                         BorderThickness="1" CornerRadius="6" Padding="14">
                   <StackPanel Spacing="7">
                     <TextBlock Text="RATE LIMITS &amp; CREDITS" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
-                    <TextBlock x:Name="RateLimitText" Text="Loading current Codex quota…"
+                    <TextBlock x:Name="RateLimitText" Text="Loading current provider quota…"
                                Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
                     <ProgressBar x:Name="RateLimitBar" Minimum="0" Maximum="100" Value="0" Height="7" />
                   </StackPanel>
@@ -743,7 +749,7 @@
                  VerticalAlignment="Center" Margin="0,0,8,0" />
         <TextBlock Grid.Column="1" x:Name="StatusText" Text="Starting native dashboard…"
                    Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center" />
-        <TextBlock Grid.Column="2" x:Name="TerminalPathText" Text="Terminal path: native view → persistent PTY → Codex"
+        <TextBlock Grid.Column="2" x:Name="TerminalPathText" Text="Terminal path: native view → persistent PTY → agent"
                    Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" />
       </Grid>
     </Border>

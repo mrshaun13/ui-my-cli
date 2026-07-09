@@ -5,12 +5,12 @@ using System.Text.Json;
 namespace CodexNative;
 
 /// <summary>
-/// Reconnecting client for the dashboard's Codex status feed. The server pushes
+/// Reconnecting client for a dashboard provider's status feed. The server pushes
 /// file-system changes immediately and also emits a three-second heartbeat.
 /// </summary>
-public sealed class DashboardStatusFeed : IAsyncDisposable
+public sealed class DashboardStatusFeed(Uri endpoint) : IAsyncDisposable
 {
-    private readonly Uri _endpoint;
+    private readonly Uri _endpoint = endpoint;
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _runTask;
 
@@ -18,8 +18,6 @@ public sealed class DashboardStatusFeed : IAsyncDisposable
     public event Action<string, string>? SessionRekeyed;
     public event Action<string>? PendingSessionExpired;
     public event Action<bool>? ConnectionChanged;
-
-    public DashboardStatusFeed(Uri endpoint) => _endpoint = endpoint;
 
     public void Start() => _runTask ??= RunAsync(_lifetime.Token);
 

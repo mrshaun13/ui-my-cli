@@ -50,7 +50,12 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 | `client/src/hooks/useStatusFeed.js` | How the client receives live session updates |
 | `client/src/components/Terminal.jsx` | xterm.js + PTY WebSocket bridge |
 | `server/pty-manager.js` | node-pty lifecycle, scrollback buffer, WSL env handling, Unix spawn-helper executable repair |
+| `native/CodexNative/MainWindow.axaml.cs` | Native Agent provider switcher, provider-scoped tabs, analytics, and preferences |
+| `native/CodexNative/DashboardApiClient.cs` | Provider-scoped native REST/WebSocket client for the loopback dashboard API |
+| `Directory.Build.props` | Native version source of truth (`Version` / assembly / file versions) for packaging and CI |
+| `CHANGELOG.md` | Hand-edited release notes under `## Unreleased` — required on every user-facing native PR |
 | `scripts/doc-prose.js` | Editorial prose for auto-generated docs |
+| `native/README.md` | Native install, update contract, and platform notes (hand-edited) |
 
 ## Status Values (Canonical)
 
@@ -94,9 +99,11 @@ list". Archive behavior is provider-owned: Codex uses `codex archive` /
 - Session status values are lowercase strings: `active`, `question`, `finished`, `idle`. The value `archived` is used by the API but not stored in the database.
 - All server modules use CommonJS (`require` / `module.exports`).
 - The client uses ES modules with React 19 + Vite.
-- The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback.
+- The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback. The native Agent selector persists `ProviderId` in `CodexNative/settings.json` and stores each pane tab's `ProviderId` so open tabs reattach to the correct provider after reloads and provider switches.
 - Native desktop releases are versioned by `Directory.Build.props`; every artifact is named `CodexNative-v<version>-<runtime>.zip`. Stable `vX.Y.Z` tags must match that version. A matching tag, or an explicit `publish_release=true` workflow dispatch on `main`, publishes immutable Windows x64, macOS Intel, and macOS Apple Silicon ZIP/checksum pairs to GitHub Releases. GitHub Packages is intentionally not used for generic desktop archives.
+- **Release hygiene is mandatory on every user-facing native PR** — see **Native release process** below. At minimum: bump `Directory.Build.props`, add bullets under `CHANGELOG.md` → `## Unreleased`, update release-facing docs (`native/README.md` / `scripts/doc-prose.js` as needed), run `npm run docs` and `npm run native:version:check`. A PR that ships native behavior without a version + changelog entry is incomplete.
 - The portable Windows native release belongs under `%LOCALAPPDATA%\Programs\CodexNative`, not Desktop, Downloads, OneDrive, or a network-synchronized directory. Users must verify the GitHub release SHA-256 before using Windows Properties to unblock each currently unsigned executable; organization security policy must not be bypassed. Keep all three executables together so in-place update, rollback, restart, and taskbar shortcuts remain valid.
+- Never commit local tool caches under `.tools/`, NuGet/HTTP caches, or SDK installs. Keep `.tools/` gitignored. Accidental commits of these trees break GitHub PR file views (often showing 0 files changed) and must be purged before merge.
 - Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).
 - Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Native Codex titles are stored in Codex `state_*.sqlite`; external transcript-pipeline headless title and hide/restore metadata is stored in `~/.codex/ui-my-cli-dashboard.db`.
 - Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.
@@ -130,6 +137,40 @@ Before writing code, run through these questions:
 - Am I reaching for a pattern because it's familiar, or because it's optimal for this project?
 - If I were starting this feature from scratch today, would I build it the same way?
 - What does this change make easier to do next? What does it make harder?
+- If this touches native desktop, server PTY, packaging, or user-visible behavior: did I bump `Directory.Build.props` and update `CHANGELOG.md` under Unreleased?
+
+## Native release process
+
+User-facing native (and related server) work is not done when the feature compiles. Every PR that changes shippable desktop behavior must leave the tree ready for a versioned GitHub Release: version source of truth, changelog entry, release docs, and clean CI artifacts. `CHANGELOG.md` is hand-edited (not auto-generated). `Directory.Build.props` is the only native version source used by packaging and CI.
+
+### When a PR must follow this process
+
+- Any change under `native/` that users will receive via the desktop app or updater.
+- Server/PTY/API changes the native app or updater depends on for a correct release.
+- Packaging, CI release workflow, `scripts/publish-native.sh`, or `scripts/package-native-release.py` changes.
+- Docs that describe install, update, portable paths, signing, or release contract changes.
+
+### PR checklist (do these before merge)
+
+- **Bump the native version** in `Directory.Build.props` (`Version`, `AssemblyVersion`, `FileVersion` together). Patch for fixes; minor for features; major only for intentional breaks. Stacked PRs each get their own bump if they ship separately (e.g. 1.1.5 then 1.1.6).
+- **Update `CHANGELOG.md`** under `## Unreleased` with a new `### Native desktop X.Y.Z` (or Documentation) section matching that version. Write user-visible bullets: what changed, why it matters, remaining non-goals. Do not leave Unreleased empty for a version you just bumped.
+- **Sync release-facing docs**: update `native/README.md` when install/update/validation steps change; put browser/agent prose in `scripts/doc-prose.js` and run `npm run docs` so `README.md` / `AGENTS.md` / `docs/*` stay in sync.
+- **Run `npm run native:version:check`** so the three-part version parses; CI uses the same source.
+- **Do not commit `.tools/`**, NuGet caches, or SDK trees. Confirm `git status` and PR file count look sane before push.
+- **Native desktop CI** on the PR must build win-x64 / osx-x64 / osx-arm64 and run per-RID `native:verify-artifacts`. Green Actions artifacts are validation only—not the public release.
+
+### Publishing a stable release (after merge to `main`)
+
+1. Merge the PR to `main` only after version + changelog + docs + CI are complete.
+2. Publish a stable release in either controlled way: (1) push exact tag `vX.Y.Z` matching `Directory.Build.props`, or (2) run **Native desktop** workflow on `main` with `publish_release=true` (creates matching tag + release).
+3. Confirm GitHub Releases has `CodexNative-vX.Y.Z-{win-x64,osx-x64,osx-arm64}.zip` plus `.sha256` manifests. Existing releases are immutable—never reuse a version number.
+4. Optional: after publish, move the released section out of `## Unreleased` into a dated heading if you want a frozen historical section (keep Unreleased for the next cycle).
+
+### Non-goals / traps
+
+- PR Actions artifacts are not production installs; only tagged / `publish_release` GitHub Releases are.
+- GitHub Packages is not used for desktop ZIPs.
+- macOS signing and notarization remain separate from the version/changelog process until those pipelines exist.
 
 ## Adding a New REST Endpoint
 

@@ -1,13 +1,16 @@
 # Codex Native for Windows and macOS
 
-Codex Native is a browser-free Avalonia frontend for the local Codex CLI. It
-keeps the dashboard service as the authoritative owner of persistent PTYs, so
-the browser and desktop clients can reconnect to the same live sessions.
+Codex Native is a browser-free Avalonia frontend for local headless-agent
+providers (Codex and Devin). It keeps the dashboard service as the authoritative
+owner of persistent PTYs, so the browser and desktop clients can reconnect to
+the same live sessions. An Agent selector loads `/api/providers` and scopes the
+dashboard list, search, analytics, archives, and terminal bridges to the
+selected provider—matching the browser's hard provider switch.
 
 The native frontend is currently a development preview, not a standalone
 desktop distribution. Its package contains the Avalonia UI and terminal/update
 helpers; it does not contain the Node.js dashboard service, npm dependencies,
-or Codex state. A prepared local ui-my-cli checkout remains required.
+or provider state. A prepared local ui-my-cli checkout remains required.
 
 ## macOS v1.1.4 runtime recovery
 
@@ -33,24 +36,30 @@ the app as damaged. Until a follow-up release closes these gaps, macOS support
 must be treated as experimental and not fully functional.
 
 ```text
-Windows: Avalonia PTY -> terminal host -> WebSocket -> persistent WSL2 PTY -> Codex
-macOS:   Avalonia PTY -> terminal host -> WebSocket -> persistent local PTY -> Codex
+Agent:   Avalonia Agent selector -> GET /api/providers -> /api/:providerId/* + /ws/:providerId/*
+Windows: Avalonia PTY -> terminal host -> provider-scoped WebSocket -> persistent WSL2 PTY -> selected provider CLI
+macOS:   Avalonia PTY -> terminal host -> provider-scoped WebSocket -> persistent local PTY -> selected provider CLI
 shell:   Avalonia PTY -> validated project path -> platform login shell
 ```
 
 Closing the native UI detaches its terminal views without killing server-owned
-Codex processes. On macOS, the private local service is launched through
+provider PTYs. On macOS, the private local service is launched through
 `nohup` so it can survive Finder/LaunchServices closing the UI and the next
 native or browser UI can reconnect. Closing the macOS window hides it and keeps
 the app visible in the menu bar; use that icon to reopen the dashboard, start
 or reconnect the service, stop a service started by this app, or quit. Stopping
 is refused while a terminal is active so an explicit service action cannot
-silently interrupt Codex work. Direct local-shell tabs are intentionally
+silently interrupt agent work. Direct local-shell tabs are intentionally
 UI-owned and end when their tab or the app closes.
 
 ## Features
 
-- Conversation-aware search across active and optionally archived sessions.
+- Agent provider switcher (Codex / Devin) backed by `/api/providers`, with
+  provider-scoped REST, WebSocket status feeds, terminals, search, archives,
+  and session actions. The selected provider persists in settings; open tabs
+  retain their provider identity across switches and reloads.
+- Conversation-aware search across active and optionally archived sessions for
+  the selected provider.
 - Multi-project filter chips plus waiting-for-input, headless, and age filters.
 - Multiple simultaneous session tabs backed by persistent platform PTYs.
 - Unlimited horizontally scrollable terminal panes, each with its own tab strip
@@ -60,13 +69,13 @@ UI-owned and end when their tab or the app closes.
   native application exits.
 - Automatic terminal-bridge reconnect with bounded backoff and a manual
   "Retry now" action when a terminal view disconnects unexpectedly.
-- New-session chooser with Codex and platform-shell modes plus searchable known
-  projects and paths. Shell tabs open a direct login shell in the selected
-  project and close the shell when the tab or application closes.
-- Automatic reconciliation of new terminals with their saved Codex session ID.
-- Per-terminal Adaptive model routing. When enabled, a native prompt composer
-  uses local task-shape rules first, calls a small ephemeral classifier only
-  for low-confidence requests, validates the decision against Codex's live
+- New-session chooser with selected-provider agent and platform-shell modes plus
+  searchable known projects and paths. Shell tabs open a direct login shell in
+  the selected project and close the shell when the tab or application closes.
+- Automatic reconciliation of new terminals with their saved provider session ID.
+- Per-terminal Adaptive model routing for Codex. When enabled, a native prompt
+  composer uses local task-shape rules first, calls a small ephemeral classifier
+  only for low-confidence requests, validates the decision against Codex's live
   `model/list` catalog, and submits the turn with a supported model and
   reasoning effort. Non-Adaptive terminals retain the existing direct PTY path.
 - Clipboard-aware screenshot paste: copy a Windows or macOS image, press
@@ -88,23 +97,27 @@ UI-owned and end when their tab or the app closes.
   incremental history loading, loaded-history search, detailed rules/skills,
   and expanded token/context telemetry.
 - Headless-run summaries plus archived-session browsing and restore.
-- Push-driven session updates over the dashboard status feed, with polling as a
-  health fallback.
+- Push-driven session updates over the selected provider's status feed, with
+  polling as a health fallback.
 - Animated, hoverable and keyboard-explorable workspace analytics for hourly
   token activity, weekday/hour heatmaps, toggleable project trends, all six
-  token categories, tools, environment, and three session leaderboards.
-- Clickable latest-prompt navigation and analytics cohort switching across
+  token categories, tools, environment, and three session leaderboards. Non-Codex
+  providers surface token activity without Codex credit rollups or pricing
+  telemetry.
+- Clickable latest-prompt navigation and Codex analytics cohort switching across
   combined, transcript-triage-only, and native-Codex-only data.
-- Codex provider health, persistent PTY count, CLI version, rate-limit windows,
-  reset times, plan, and credit status.
-- Persistent tabs, active session, sidebar width/collapse state, project,
-  search, multi-project, waiting, headless, archive, analytics-window, and
-  age-filter preferences.
+- Selected-provider service health, persistent PTY count, CLI version, and
+  (when available) rate-limit windows, reset times, plan, and credit status.
+- Persistent selected provider, tabs (with per-tab provider), active session,
+  sidebar width/collapse state, project, search, multi-project, waiting,
+  headless, archive, analytics-window, and age-filter preferences.
 - A compact collapsed session rail that preserves status visibility and quick
   switching without consuming the full sidebar width, with rich native
   tooltips for project, activity time, status, and latest prompt.
 - Responsive dashboard, terminal-inspector, and session-preview layouts that
-  reflow cards and actions as the native window narrows.
+  reflow cards and actions as the native window narrows, including a compact
+  header (Agent/Style/Text labels collapse under ~1100px) and viewport-fitted
+  terminal pane widths.
 - Nineteen native dashboard styles, including black-terminal neon red, blue,
   green, and purple variants, plus four text/terminal size options. All use
   theme-owned input, dropdown, button, checkbox, scrollbar,
@@ -117,13 +130,14 @@ UI-owned and end when their tab or the app closes.
 - A custom transparent pixel-art C identity used by the Windows executable,
   title bar, and in-app header.
 - Reuses a compatible ui-my-cli metadata service on port 7575 so the browser
-  and native clients do not duplicate Codex-state scans. If 7575 is unavailable,
+  and native clients do not duplicate provider-state scans. If 7575 is unavailable,
   it starts a private platform service on the first open port from 7577–7596.
-- Remembers the distribution where applicable, working directory, style, text
-  size, and pane workspace in the platform-local `CodexNative/settings.json`.
+- Remembers the selected provider, distribution where applicable, working
+  directory, style, text size, and pane workspace in the platform-local
+  `CodexNative/settings.json`.
 - Desktop shortcuts: `Ctrl` on Windows or `Cmd` on macOS plus `K` for search,
-  `Shift+N` for a new Codex or platform-shell session, `R` for refresh, and `W`
-  to detach a Codex tab or close a shell; `Esc` returns home.
+  `Shift+N` for a new agent or platform-shell session, `R` for refresh, and `W`
+  to detach a provider tab or close a shell; `Esc` returns home.
 
 ### Screenshot storage settings
 
@@ -320,7 +334,7 @@ the behavior matches the Windows client.
 
 `Directory.Build.props` is the native version source. Every CI artifact and
 updater archive includes that version and runtime, such as
-`CodexNative-v1.1.4-osx-arm64.zip`. Pull requests retain these versioned Actions
+`CodexNative-v1.1.5-osx-arm64.zip`. Pull requests retain these versioned Actions
 artifacts for short-term validation; they are not production releases.
 
 The pinned GitHub Actions workflow tests native command policy, builds Windows

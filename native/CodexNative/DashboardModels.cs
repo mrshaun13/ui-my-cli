@@ -5,7 +5,7 @@ namespace CodexNative;
 public class DashboardSession
 {
     public string Id { get; set; } = string.Empty;
-    public string Provider { get; set; } = "codex";
+    public string Provider { get; set; } = string.Empty;
     public string Source { get; set; } = "cli";
     public string ThreadSource { get; set; } = "user";
     public string Title { get; set; } = "Untitled session";
@@ -97,9 +97,18 @@ public sealed class ProviderStatus
 {
     public string Id { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
+    public string Noun { get; set; } = string.Empty;
+    public string DashboardTitle { get; set; } = string.Empty;
+    public string Command { get; set; } = string.Empty;
+    public string Accent { get; set; } = string.Empty;
     public bool Available { get; set; }
     public string? Version { get; set; }
     public string? Error { get; set; }
+
+    [JsonIgnore]
+    public string DisplayLabel => string.IsNullOrWhiteSpace(Label) ? Id : Label;
+
+    public override string ToString() => Available ? DisplayLabel : $"{DisplayLabel} (unavailable)";
 }
 
 public sealed class AdaptiveRouteResult

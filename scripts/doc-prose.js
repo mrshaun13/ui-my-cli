@@ -21,8 +21,8 @@ module.exports = {
 
   features: [
     '**Live status badges** — ⚡ Question / ⚙ Running / ✓ Finished / · Idle, updated every 3 seconds',
-    '**Provider switch** — top-level Codex / Devin toggle; sessions, repo filters, tabs, stats, archives, and terminals are scoped to the selected provider',
-    '**Native Windows and macOS frontend (development preview)** — Avalonia dashboard with push updates, deferred crash-safe conversation search, a compact functional project/age/visibility filter, actionable rich previews, responsive layouts, theme-aware control chrome, a custom pixel-art app identity, a rich compact session rail, a searchable Codex-or-local-shell project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics, latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent Codex terminal reattachment; the current desktop package still requires a prepared local ui-my-cli checkout and is not a standalone distribution, while macOS signing, notarization, and production updater distribution remain incomplete and macOS must be treated as experimental',
+    '**Provider switch** — top-level Codex / Devin toggle in the browser and native Agent selector; sessions, repo filters, tabs, stats, archives, and terminals are scoped to the selected provider on both surfaces',
+    '**Native Windows and macOS frontend (development preview)** — Avalonia dashboard with a persistent Agent provider switcher (`/api/providers`), provider-scoped REST/WebSocket/tabs/session actions, push updates, deferred crash-safe conversation search, a compact functional project/age/visibility filter, actionable rich previews, responsive header and pane sizing, theme-aware control chrome and pane scrollbars, a custom pixel-art app identity, a rich compact session rail, a searchable agent-or-local-shell project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics (Codex credit rollups only when Codex is selected), latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent provider terminal reattachment; the current desktop package still requires a prepared local ui-my-cli checkout and is not a standalone distribution, while macOS signing, notarization, and production updater distribution remain incomplete and macOS must be treated as experimental',
     '**Real terminals** — xterm.js + node-pty: identical to running the selected provider CLI in your shell (`codex resume <id>` or `devin --resume <id>`)',
     '**Click to switch** — click any agent in the sidebar to attach its live terminal; ' +
       'switching is instant with scrollback preserved',
@@ -34,8 +34,8 @@ module.exports = {
       '(native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)',
     '**Needs-your-input filter** — one click to show only agents waiting for a reply',
     '**Project filter** — compact count-labelled project selection replaces the unbounded native pill wall; selection persists across reloads',
-    '**Persistent native terminals** — Codex PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback. On macOS the private service is launched through `nohup`, window close hides to the menu bar, and the menu-bar icon can reopen, reconnect, stop an idle app-managed service, or quit',
-    '**Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for all active Codex sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically',
+    '**Persistent native terminals** — provider-scoped PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback. On macOS the private service is launched through `nohup`, window close hides to the menu bar, and the menu-bar icon can reopen, reconnect, stop an idle app-managed service, or quit',
+    '**Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for active provider sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically',
     '**Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider',
     '**Archive / restore** — hide sessions from the list without deleting them; ' +
       'restore from the collapsible drawer at the bottom of the sidebar',
@@ -101,19 +101,20 @@ module.exports = {
   architecture_overview:
     'The browser dashboard server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. ' +
     'Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. ' +
-    'The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. ' +
+    'The React client and the Avalonia native shell each expose a hard provider switch so Codex and Devin sessions never mix in one dashboard view; both load the catalog from `/api/providers` and scope list/search/stats/archive/PTY traffic to the selected provider. ' +
     'The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. ' +
-    'The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Windows keeps Codex and project files in WSL2; macOS uses the local Node service and Codex state, recovers a ready ui-my-cli checkout with installed Node dependencies when a configured path is stale, launches its private service through `nohup`, and exposes a menu-bar lifecycle for hide/reopen/stop/quit. The Node PTY manager self-heals a missing executable bit on node-pty\'s Unix spawn-helper before spawn. Direct login-shell tabs run in validated project paths and end when their tab or the application closes. Native updates consume platform-specific GitHub Release archives, verify their SHA-256 manifests, stage them outside the installation, wait for active work to drain, and hand replacement/restart to an external helper with rollback.',
+    'The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches provider-scoped session tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Tabs and previews retain their provider identity across switches; native settings persist the selected provider and each pane tab\'s provider. Windows keeps provider CLIs and project files in WSL2; macOS uses the local Node service and provider state, recovers a ready ui-my-cli checkout with installed Node dependencies when a configured path is stale, launches its private service through `nohup`, and exposes a menu-bar lifecycle for hide/reopen/stop/quit. Non-Codex analytics omit Codex-only credit rollups and pricing telemetry. The Node PTY manager self-heals a missing executable bit on node-pty\'s Unix spawn-helper before spawn. Direct login-shell tabs run in validated project paths and end when their tab or the application closes. Native updates consume platform-specific GitHub Release archives, verify their SHA-256 manifests, stage them outside the installation, wait for active work to drain across open provider tabs, and hand replacement/restart to an external helper with rollback.',
 
   data_flow: [
-    'Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  Codex provider adapter  →  WebSocket push  →  React client',
-    'transcript-pipeline Codex headless ledger  →  data/headless-sessions status/events files  →  Codex provider external-read adapter  →  React client',
-    'Devin CLI  →  Devin sessions.db + dashboard.db  →  Devin provider adapter  →  WebSocket push  →  React client',
+    'Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  Codex provider adapter  →  WebSocket push  →  React client / native app',
+    'transcript-pipeline Codex headless ledger  →  data/headless-sessions status/events files  →  Codex provider external-read adapter  →  React client / native app',
+    'Devin CLI  →  Devin sessions.db + dashboard.db  →  Devin provider adapter  →  WebSocket push  →  React client / native app',
     'Browser  →  xterm.js keystrokes  →  provider-scoped WebSocket  →  node-pty  →  selected provider resume command',
-    'Windows native app  →  Avalonia terminal control  →  ConPTY  →  console bridge  →  WebSocket  →  persistent WSL2 PTY  →  Codex CLI',
+    'Native app Agent selector  →  GET /api/providers  →  provider-scoped /api/:providerId/* and /ws/:providerId/*',
+    'Windows native app  →  Avalonia terminal control  →  ConPTY  →  console bridge  →  provider-scoped WebSocket  →  persistent WSL2 PTY  →  selected provider CLI',
     'Windows native app  →  Avalonia terminal control  →  ConPTY  →  validated WSL2 launch  →  Ubuntu login shell',
-    'Windows native dashboard controls  →  localhost provider API  →  session/context/stats readers  →  Codex state in WSL2',
-    'macOS native app  →  Avalonia terminal control  →  local PTY  →  console bridge  →  WebSocket  →  persistent macOS PTY  →  Codex CLI',
+    'Windows native dashboard controls  →  localhost /api/:providerId  →  session/context/stats readers  →  selected provider state in WSL2',
+    'macOS native app  →  Avalonia terminal control  →  local PTY  →  console bridge  →  provider-scoped WebSocket  →  persistent macOS PTY  →  selected provider CLI',
     'macOS native app  →  Avalonia terminal control  →  validated project path  →  local login shell',
   ].join('\n'),
 
@@ -122,9 +123,11 @@ module.exports = {
       ' The value `archived` is used by the API but not stored in the database.',
     'All server modules use CommonJS (`require` / `module.exports`).',
     'The client uses ES modules with React 19 + Vite.',
-    'The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback.',
+    'The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback. The native Agent selector persists `ProviderId` in `CodexNative/settings.json` and stores each pane tab\'s `ProviderId` so open tabs reattach to the correct provider after reloads and provider switches.',
     'Native desktop releases are versioned by `Directory.Build.props`; every artifact is named `CodexNative-v<version>-<runtime>.zip`. Stable `vX.Y.Z` tags must match that version. A matching tag, or an explicit `publish_release=true` workflow dispatch on `main`, publishes immutable Windows x64, macOS Intel, and macOS Apple Silicon ZIP/checksum pairs to GitHub Releases. GitHub Packages is intentionally not used for generic desktop archives.',
+    '**Release hygiene is mandatory on every user-facing native PR** — see **Native release process** below. At minimum: bump `Directory.Build.props`, add bullets under `CHANGELOG.md` → `## Unreleased`, update release-facing docs (`native/README.md` / `scripts/doc-prose.js` as needed), run `npm run docs` and `npm run native:version:check`. A PR that ships native behavior without a version + changelog entry is incomplete.',
     'The portable Windows native release belongs under `%LOCALAPPDATA%\\Programs\\CodexNative`, not Desktop, Downloads, OneDrive, or a network-synchronized directory. Users must verify the GitHub release SHA-256 before using Windows Properties to unblock each currently unsigned executable; organization security policy must not be bypassed. Keep all three executables together so in-place update, rollback, restart, and taskbar shortcuts remain valid.',
+    'Never commit local tool caches under `.tools/`, NuGet/HTTP caches, or SDK installs. Keep `.tools/` gitignored. Accidental commits of these trees break GitHub PR file views (often showing 0 files changed) and must be purged before merge.',
     'Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).',
     'Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Native Codex titles are stored in Codex `state_*.sqlite`; external transcript-pipeline headless title and hide/restore metadata is stored in `~/.codex/ui-my-cli-dashboard.db`.',
     'Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.',
@@ -179,6 +182,48 @@ module.exports = {
       'Am I reaching for a pattern because it\'s familiar, or because it\'s optimal for this project?',
       'If I were starting this feature from scratch today, would I build it the same way?',
       'What does this change make easier to do next? What does it make harder?',
+      'If this touches native desktop, server PTY, packaging, or user-visible behavior: did I bump `Directory.Build.props` and update `CHANGELOG.md` under Unreleased?',
+    ],
+  },
+
+  // ── Native release process (AGENTS.md) ─────────────────────────────────────
+  // Full checklist so agents do not ship native PRs without version/changelog/docs.
+
+  release_process: {
+    overview:
+      'User-facing native (and related server) work is not done when the feature compiles. ' +
+      'Every PR that changes shippable desktop behavior must leave the tree ready for a ' +
+      'versioned GitHub Release: version source of truth, changelog entry, release docs, ' +
+      'and clean CI artifacts. `CHANGELOG.md` is hand-edited (not auto-generated). ' +
+      '`Directory.Build.props` is the only native version source used by packaging and CI.',
+
+    when_required: [
+      'Any change under `native/` that users will receive via the desktop app or updater.',
+      'Server/PTY/API changes the native app or updater depends on for a correct release.',
+      'Packaging, CI release workflow, `scripts/publish-native.sh`, or `scripts/package-native-release.py` changes.',
+      'Docs that describe install, update, portable paths, signing, or release contract changes.',
+    ],
+
+    pr_checklist: [
+      '**Bump the native version** in `Directory.Build.props` (`Version`, `AssemblyVersion`, `FileVersion` together). Patch for fixes; minor for features; major only for intentional breaks. Stacked PRs each get their own bump if they ship separately (e.g. 1.1.5 then 1.1.6).',
+      '**Update `CHANGELOG.md`** under `## Unreleased` with a new `### Native desktop X.Y.Z` (or Documentation) section matching that version. Write user-visible bullets: what changed, why it matters, remaining non-goals. Do not leave Unreleased empty for a version you just bumped.',
+      '**Sync release-facing docs**: update `native/README.md` when install/update/validation steps change; put browser/agent prose in `scripts/doc-prose.js` and run `npm run docs` so `README.md` / `AGENTS.md` / `docs/*` stay in sync.',
+      '**Run `npm run native:version:check`** so the three-part version parses; CI uses the same source.',
+      '**Do not commit `.tools/`**, NuGet caches, or SDK trees. Confirm `git status` and PR file count look sane before push.',
+      '**Native desktop CI** on the PR must build win-x64 / osx-x64 / osx-arm64 and run per-RID `native:verify-artifacts`. Green Actions artifacts are validation only—not the public release.',
+    ],
+
+    publish_steps: [
+      'Merge the PR to `main` only after version + changelog + docs + CI are complete.',
+      'Publish a stable release in either controlled way: (1) push exact tag `vX.Y.Z` matching `Directory.Build.props`, or (2) run **Native desktop** workflow on `main` with `publish_release=true` (creates matching tag + release).',
+      'Confirm GitHub Releases has `CodexNative-vX.Y.Z-{win-x64,osx-x64,osx-arm64}.zip` plus `.sha256` manifests. Existing releases are immutable—never reuse a version number.',
+      'Optional: after publish, move the released section out of `## Unreleased` into a dated heading if you want a frozen historical section (keep Unreleased for the next cycle).',
+    ],
+
+    non_goals: [
+      'PR Actions artifacts are not production installs; only tagged / `publish_release` GitHub Releases are.',
+      'GitHub Packages is not used for desktop ZIPs.',
+      'macOS signing and notarization remain separate from the version/changelog process until those pipelines exist.',
     ],
   },
 
