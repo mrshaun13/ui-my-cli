@@ -43,8 +43,10 @@ public sealed class SessionPreviewControl : UserControl
     private CancellationTokenSource? _conversationSearchCancellation;
     private int _conversationTotal;
     private int _nextConversationBatch = 50;
-    private string ProviderId => string.IsNullOrWhiteSpace(_session.Provider) ? "codex" : _session.Provider;
-    private string ProviderLabel => ProviderId.Equals("devin", StringComparison.OrdinalIgnoreCase) ? "DEVIN" : "CODEX";
+    private string ProviderId =>
+        string.IsNullOrWhiteSpace(_session.Provider) ? _api.ProviderId : _session.Provider;
+    private string ProviderLabel =>
+        string.IsNullOrWhiteSpace(ProviderId) ? "CODEX" : ProviderId.ToUpperInvariant();
 
     public SessionPreviewControl(
         DashboardApiClient api,

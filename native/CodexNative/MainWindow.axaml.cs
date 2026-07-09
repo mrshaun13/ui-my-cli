@@ -1026,11 +1026,12 @@ public sealed partial class MainWindow : Window
 
         if (_providers.Count == 0)
             _providers.Add(new ProviderStatus { Id = "codex", Label = "Codex", Noun = "Codex session", Available = true });
-        var selected = _providers.FirstOrDefault(provider => provider.Id == _settings.ProviderId)
-            ?? _providers.FirstOrDefault(provider => provider.Id == "codex")
-            ?? _providers[0];
+        var previousProviderId = _settings.ProviderId;
+        var selected = ResolveSelectableProvider(previousProviderId);
         _api.UseProvider(selected.Id);
         _settings = _settings with { ProviderId = selected.Id };
+        if (!string.Equals(previousProviderId, selected.Id, StringComparison.Ordinal))
+            await PersistSettingsAsync();
 
         _initializingProviderSelector = true;
         ProviderComboBox.ItemsSource = _providers;
@@ -1039,11 +1040,50 @@ public sealed partial class MainWindow : Window
         ApplyProviderChrome();
     }
 
+    private ProviderStatus ResolveSelectableProvider(string? preferredProviderId)
+    {
+        var preferred = _providers.FirstOrDefault(provider =>
+            provider.Id == preferredProviderId && provider.Available);
+        if (preferred is not null) return preferred;
+
+        var firstAvailable = _providers.FirstOrDefault(provider => provider.Available);
+        if (firstAvailable is not null) return firstAvailable;
+
+        return _providers.FirstOrDefault(provider => provider.Id == "codex")
+            ?? _providers[0];
+    }
+
+    private void SelectProviderInComboBox(string providerId)
+    {
+        var item = _providers.FirstOrDefault(provider => provider.Id == providerId)
+            ?? ResolveSelectableProvider(providerId);
+        _initializingProviderSelector = true;
+        try
+        {
+            ProviderComboBox.SelectedItem = item;
+        }
+        finally
+        {
+            _initializingProviderSelector = false;
+        }
+    }
+
     private async void OnProviderChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_initializingProviderSelector || ProviderComboBox.SelectedItem is not ProviderStatus provider
             || provider.Id == _api.ProviderId) return;
 
+        if (!provider.Available)
+        {
+            SelectProviderInComboBox(_api.ProviderId);
+            SetStatus(
+                $"{provider.DisplayLabel} is unavailable and cannot be selected"
+                    + (string.IsNullOrWhiteSpace(provider.Error) ? "." : $": {provider.Error}"),
+                ErrorBrush);
+            return;
+        }
+
+        var previousProviderId = _api.ProviderId;
         ProviderComboBox.IsEnabled = false;
         try
         {
@@ -1067,15 +1107,28 @@ public sealed partial class MainWindow : Window
             SetStatus($"Switching dashboard to {CurrentProviderLabel}…", StartingBrush);
             await PersistSettingsAsync();
             await RefreshAllAsync();
-            StartStatusFeed();
         }
         catch (Exception ex)
         {
             NativeLog.Write($"Provider switch failed: {ex}");
+            try
+            {
+                _api.UseProvider(previousProviderId);
+                _settings = _settings with { ProviderId = previousProviderId };
+                SelectProviderInComboBox(previousProviderId);
+                ApplyProviderChrome();
+                await PersistSettingsAsync();
+                await RefreshAllAsync();
+            }
+            catch (Exception rollbackEx)
+            {
+                NativeLog.Write($"Provider switch rollback failed: {rollbackEx}");
+            }
             SetStatus($"Could not switch provider: {ex.Message}", ErrorBrush);
         }
         finally
         {
+            if (_statusFeed is null) StartStatusFeed();
             ProviderComboBox.IsEnabled = true;
         }
     }
@@ -4796,24 +4849,55 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private IReadOnlyList<string> UpdateDrainProviderIds()
+    {
+        var providerIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var provider in _providers.Where(candidate => candidate.Available
+            && !string.IsNullOrWhiteSpace(candidate.Id)))
+        {
+            providerIds.Add(candidate.Id);
+        }
+
+        foreach (var state in _openTabs.Values)
+        {
+            if (state.Kind == TerminalSessionKind.LocalShell) continue;
+            if (!string.IsNullOrWhiteSpace(state.ProviderId))
+                providerIds.Add(state.ProviderId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_api.ProviderId))
+            providerIds.Add(_api.ProviderId);
+
+        if (providerIds.Count == 0)
+            providerIds.Add("codex");
+
+        return providerIds.ToList();
+    }
+
     private async Task WaitForUpdateDrainAsync(CancellationToken cancellationToken)
     {
         var consecutiveClearChecks = 0;
+        var providerIds = UpdateDrainProviderIds();
         while (consecutiveClearChecks < 2)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var sessions = await NativeUpdateDataServiceRecovery.RunAsync(
-                token => _api.GetSessionsAsync(token),
-                async token =>
-                {
-                    NativeLog.Write(
-                        $"Dashboard service on port {_api.ConnectedPort} stopped during update drain; attempting recovery.");
-                    SetStatus("Update downloaded · reconnecting to verify active sessions…", StartingBrush);
-                    return await EnsureDashboardServiceAsync(token);
-                },
-                cancellationToken);
-            var blockingSessions = NativeUpdatePolicy.CountBlockingSessions(
-                sessions.Select(session => (session.Status, session.IsHeadless)));
+            var blockingSessions = 0;
+            foreach (var providerId in providerIds)
+            {
+                var sessions = await NativeUpdateDataServiceRecovery.RunAsync(
+                    token => _api.GetSessionsAsync(token, providerId: providerId),
+                    async token =>
+                    {
+                        NativeLog.Write(
+                            $"Dashboard service on port {_api.ConnectedPort} stopped during update drain; attempting recovery.");
+                        SetStatus("Update downloaded · reconnecting to verify active sessions…", StartingBrush);
+                        return await EnsureDashboardServiceAsync(token);
+                    },
+                    cancellationToken);
+                blockingSessions += NativeUpdatePolicy.CountBlockingSessions(
+                    sessions.Select(session => (session.Status, session.IsHeadless)));
+            }
+
             var localShells = _openTabs.Values.Count(state =>
                 state.Kind == TerminalSessionKind.LocalShell && state.IsRunning);
             if (blockingSessions == 0 && localShells == 0)
@@ -4829,7 +4913,13 @@ public sealed partial class MainWindow : Window
 
             consecutiveClearChecks = 0;
             var details = new List<string>();
-            if (blockingSessions > 0) details.Add($"{blockingSessions} active Codex session(s)");
+            if (blockingSessions > 0)
+            {
+                var sessionLabel = providerIds.Count == 1
+                    ? ProviderLabel(providerIds[0])
+                    : "provider";
+                details.Add($"{blockingSessions} active {sessionLabel} session(s)");
+            }
             if (localShells > 0) details.Add($"{localShells} local shell tab(s) to close");
             UpdateButton.Content = "Cancel update";
             SetStatus($"Update ready · waiting for {string.Join(" and ", details)}", StartingBrush);
