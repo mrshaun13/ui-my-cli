@@ -19,3 +19,6 @@ Thumbs.db
 native/**/bin/
 native/**/obj/
 native/artifacts/
+
+# Local agent/tool caches (must never be committed)
+.tools/
