@@ -878,7 +878,7 @@ public sealed partial class MainWindow : Window
             {
                 var sessionId = route.SessionId
                     ?? throw new InvalidDataException("Adaptive did not return the new Codex session ID.");
-                if (state.Key == temporaryKey) ApplySessionRekey(temporaryKey, sessionId);
+                if (state.Key == temporaryKey) ApplySessionRekey(temporaryKey, sessionId, state.ProviderId);
                 await RestartTerminalForAdaptiveModeAsync(state);
             }
             state.AdaptivePromptBox.Text = string.Empty;
@@ -1011,22 +1011,7 @@ public sealed partial class MainWindow : Window
 
     private async Task InitializeProviderSelectorAsync()
     {
-        try
-        {
-            _providers = await _api.GetProvidersAsync();
-        }
-        catch (Exception ex)
-        {
-            NativeLog.Write($"Provider catalog unavailable; using native fallbacks: {ex.Message}");
-            _providers =
-            [
-                new ProviderStatus { Id = "codex", Label = "Codex", Noun = "Codex session", Available = true },
-                new ProviderStatus { Id = "devin", Label = "Devin", Noun = "Devin session", Available = true },
-            ];
-        }
-
-        if (_providers.Count == 0)
-            _providers.Add(new ProviderStatus { Id = "codex", Label = "Codex", Noun = "Codex session", Available = true });
+        await LoadProviderCatalogAsync(useFallbacksOnError: true);
         var previousProviderId = _settings.ProviderId;
         var selected = ResolveSelectableProvider(previousProviderId);
         _api.UseProvider(selected.Id);
@@ -1034,11 +1019,83 @@ public sealed partial class MainWindow : Window
         if (!string.Equals(previousProviderId, selected.Id, StringComparison.Ordinal))
             await PersistSettingsAsync();
 
-        _initializingProviderSelector = true;
-        ProviderComboBox.ItemsSource = _providers;
-        ProviderComboBox.SelectedItem = selected;
-        _initializingProviderSelector = false;
+        BindProviderComboBox(selected);
         ApplyProviderChrome();
+    }
+
+    private async Task LoadProviderCatalogAsync(bool useFallbacksOnError)
+    {
+        try
+        {
+            var providers = await _api.GetProvidersAsync();
+            if (providers.Count == 0)
+                providers.Add(new ProviderStatus { Id = "codex", Label = "Codex", Noun = "Codex session", Available = true });
+            _providers = providers;
+        }
+        catch (Exception ex)
+        {
+            if (!useFallbacksOnError && _providers.Count > 0)
+            {
+                NativeLog.Write($"Provider catalog refresh failed; keeping current list: {ex.Message}");
+                return;
+            }
+
+            NativeLog.Write($"Provider catalog unavailable; using native fallbacks: {ex.Message}");
+            _providers =
+            [
+                new ProviderStatus { Id = "codex", Label = "Codex", Noun = "Codex session", Available = true },
+                new ProviderStatus { Id = "devin", Label = "Devin", Noun = "Devin session", Available = true },
+            ];
+        }
+    }
+
+    private void BindProviderComboBox(ProviderStatus? selected)
+    {
+        _initializingProviderSelector = true;
+        try
+        {
+            ProviderComboBox.ItemsSource = _providers;
+            ProviderComboBox.SelectedItem = selected
+                ?? _providers.FirstOrDefault(provider => provider.Id == _api.ProviderId)
+                ?? ResolveSelectableProvider(_api.ProviderId);
+        }
+        finally
+        {
+            _initializingProviderSelector = false;
+        }
+    }
+
+    private async Task RefreshProviderCatalogAsync(bool fallBackIfCurrentUnavailable)
+    {
+        var preferredId = ProviderComboBox.SelectedItem is ProviderStatus selected
+            ? selected.Id
+            : _api.ProviderId;
+        await LoadProviderCatalogAsync(useFallbacksOnError: false);
+        var preferred = _providers.FirstOrDefault(provider => provider.Id == preferredId);
+        if (preferred is not null && preferred.Available)
+        {
+            BindProviderComboBox(preferred);
+            return;
+        }
+
+        var resolved = ResolveSelectableProvider(preferredId ?? _api.ProviderId);
+        if (!fallBackIfCurrentUnavailable
+            || string.Equals(resolved.Id, _api.ProviderId, StringComparison.Ordinal))
+        {
+            BindProviderComboBox(resolved);
+            return;
+        }
+
+        _initializingProviderSelector = true;
+        try
+        {
+            ProviderComboBox.ItemsSource = _providers;
+        }
+        finally
+        {
+            _initializingProviderSelector = false;
+        }
+        ProviderComboBox.SelectedItem = resolved;
     }
 
     private ProviderStatus ResolveSelectableProvider(string? preferredProviderId)
@@ -1069,25 +1126,50 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void OnProviderDropDownOpened(object? sender, EventArgs e)
+    {
+        try
+        {
+            await RefreshProviderCatalogAsync(fallBackIfCurrentUnavailable: true);
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Provider catalog dropdown refresh failed: {ex.Message}");
+        }
+    }
+
     private async void OnProviderChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_initializingProviderSelector || ProviderComboBox.SelectedItem is not ProviderStatus provider
             || provider.Id == _api.ProviderId) return;
 
-        if (!provider.Available)
-        {
-            SelectProviderInComboBox(_api.ProviderId);
-            SetStatus(
-                $"{provider.DisplayLabel} is unavailable and cannot be selected"
-                    + (string.IsNullOrWhiteSpace(provider.Error) ? "." : $": {provider.Error}"),
-                ErrorBrush);
-            return;
-        }
-
+        var requestedProviderId = provider.Id;
         var previousProviderId = _api.ProviderId;
         ProviderComboBox.IsEnabled = false;
         try
         {
+            await LoadProviderCatalogAsync(useFallbacksOnError: false);
+            var fresh = _providers.FirstOrDefault(candidate => candidate.Id == requestedProviderId);
+            BindProviderComboBox(fresh is { Available: true }
+                ? fresh
+                : _providers.FirstOrDefault(candidate => candidate.Id == previousProviderId)
+                    ?? ResolveSelectableProvider(previousProviderId));
+
+            if (fresh is null || !fresh.Available)
+            {
+                SelectProviderInComboBox(previousProviderId);
+                SetStatus(
+                    $"{provider.DisplayLabel} is unavailable and cannot be selected"
+                        + (string.IsNullOrWhiteSpace(fresh?.Error ?? provider.Error)
+                            ? "."
+                            : $": {fresh?.Error ?? provider.Error}"),
+                    ErrorBrush);
+                return;
+            }
+
+            provider = fresh;
+            if (provider.Id == _api.ProviderId) return;
+
             while (_refreshing) await Task.Delay(50);
             _refreshing = true;
             RefreshButton.IsEnabled = false;
@@ -1356,13 +1438,13 @@ public sealed partial class MainWindow : Window
             Dispatcher.UIThread.Post(() =>
             {
                 if (!ReferenceEquals(_statusFeed, feed) || !IsCurrentProviderData(providerId, epoch)) return;
-                ApplySessionRekey(temporaryKey, realId);
+                ApplySessionRekey(temporaryKey, realId, providerId);
             });
         feed.PendingSessionExpired += temporaryKey =>
             Dispatcher.UIThread.Post(() =>
             {
                 if (!ReferenceEquals(_statusFeed, feed) || !IsCurrentProviderData(providerId, epoch)) return;
-                RemoveExpiredPendingSession(temporaryKey);
+                RemoveExpiredPendingSession(temporaryKey, providerId);
             });
         feed.ConnectionChanged += connected => Dispatcher.UIThread.Post(() =>
         {
@@ -1427,12 +1509,15 @@ public sealed partial class MainWindow : Window
         return true;
     }
 
-    private void ApplySessionRekey(string temporaryKey, string realId)
+    private void ApplySessionRekey(string temporaryKey, string realId, string? providerId = null)
     {
+        providerId = string.IsNullOrWhiteSpace(providerId) ? _api.ProviderId : providerId;
         if (string.IsNullOrWhiteSpace(temporaryKey) || string.IsNullOrWhiteSpace(realId)
-            || !_openTabs.TryGetValue(ProviderTabKey(_api.ProviderId, temporaryKey), out var state)
+            || !_openTabs.TryGetValue(ProviderTabKey(providerId, temporaryKey), out var state)
             || state.Kind != TerminalSessionKind.Codex) return;
-        var session = _sessions.FirstOrDefault(candidate => candidate.Id == realId);
+        var session = string.Equals(state.ProviderId, _api.ProviderId, StringComparison.Ordinal)
+            ? _sessions.FirstOrDefault(candidate => candidate.Id == realId)
+            : null;
         _openTabs.Remove(OpenTabRegistryKey(state));
         state.Key = realId;
         state.Session = session;
@@ -1448,9 +1533,10 @@ public sealed partial class MainWindow : Window
         _ = SaveWorkspaceAsync();
     }
 
-    private void RemoveExpiredPendingSession(string temporaryKey)
+    private void RemoveExpiredPendingSession(string temporaryKey, string? providerId = null)
     {
-        if (!_openTabs.TryGetValue(ProviderTabKey(_api.ProviderId, temporaryKey), out var state)
+        providerId = string.IsNullOrWhiteSpace(providerId) ? _api.ProviderId : providerId;
+        if (!_openTabs.TryGetValue(ProviderTabKey(providerId, temporaryKey), out var state)
             || state.Kind != TerminalSessionKind.Codex) return;
         CancelTerminalReconnect(state, suppress: true);
         state.Terminal.Kill();
@@ -2633,11 +2719,23 @@ public sealed partial class MainWindow : Window
         targetPane ??= _activePane;
         try
         {
-            var key = await _api.CreateSessionAsync(workingDirectory, targetPane.AdaptiveEnabled);
+            var providerId = _api.ProviderId;
+            var adaptive = targetPane.AdaptiveEnabled;
+            var knownSessionIds = _sessions.Select(session => session.Id).ToHashSet(StringComparer.Ordinal);
+            var key = await _api.CreateSessionAsync(
+                workingDirectory,
+                adaptive,
+                providerId: providerId);
             var project = workingDirectory.TrimEnd('/').Split('/').LastOrDefault() ?? workingDirectory;
             var state = CreateTerminalTab(
-                key, $"New · {project}", workingDirectory, null, TerminalSessionKind.Codex, targetPane);
-            state.KnownSessionIdsAtLaunch = _sessions.Select(session => session.Id).ToHashSet(StringComparer.Ordinal);
+                key,
+                $"New · {project}",
+                workingDirectory,
+                null,
+                TerminalSessionKind.Codex,
+                targetPane,
+                providerId);
+            state.KnownSessionIdsAtLaunch = knownSessionIds;
             state.LaunchedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             _openTabs.Add(OpenTabRegistryKey(state), state);
             AddTabToPane(targetPane, state.Tab);

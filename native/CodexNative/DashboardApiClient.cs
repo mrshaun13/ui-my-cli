@@ -166,10 +166,11 @@ public sealed class DashboardApiClient : IDisposable
     public async Task<string> CreateSessionAsync(
         string workingDirectory,
         bool adaptive = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? providerId = null)
     {
         using var response = await _http.PostAsJsonAsync(
-            ProviderUri("sessions/create"),
+            ProviderUri("sessions/create", providerId),
             new { workingDir = workingDirectory, adaptive },
             cancellationToken);
         response.EnsureSuccessStatusCode();
