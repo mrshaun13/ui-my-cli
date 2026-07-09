@@ -1465,7 +1465,11 @@ public sealed partial class MainWindow : Window
     private void ApplyPushedSessions(IReadOnlyList<DashboardSession> sessions)
     {
         var ordered = sessions.OrderByDescending(session => session.LastActivityAt).ToList();
-        if (SessionListsMateriallyEqual(_sessions, ordered)) return;
+        if (SessionListsMateriallyEqual(_sessions, ordered))
+        {
+            ReconcilePendingSessions();
+            return;
+        }
 
         _sessions = ordered;
         ReconcilePendingSessions();
@@ -1590,6 +1594,7 @@ public sealed partial class MainWindow : Window
             _repos = reposTask.Result;
             _stats = statsTask.Result;
             _dashboardStatus = statusTask.Result;
+            ReconcilePendingSessions();
             UpdateRepoFilter();
             if (sessionsChanged || archivedSessionsChanged) ApplySessionFilter();
             RenderLatestPrompt();
