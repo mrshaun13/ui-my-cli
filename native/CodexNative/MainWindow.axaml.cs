@@ -5023,7 +5023,7 @@ public sealed partial class MainWindow : Window
         foreach (var provider in _providers.Where(candidate => candidate.Available
             && !string.IsNullOrWhiteSpace(candidate.Id)))
         {
-            providerIds.Add(candidate.Id);
+            providerIds.Add(provider.Id);
         }
 
         foreach (var state in _openTabs.Values)
