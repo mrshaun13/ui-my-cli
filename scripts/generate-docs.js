@@ -222,15 +222,15 @@ function collect() {
   fileDescs['native/CodexNative/App.axaml.cs'] =
     'Avalonia application entry; on macOS configures the menu-bar icon for open, service start/reconnect, managed stop, and quit.';
   fileDescs['native/CodexNative/MainWindow.axaml.cs'] =
-    'Cross-platform native dashboard shell, persistent Codex tabs, direct local shell tabs, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.';
+    'Cross-platform native dashboard shell with Agent provider switcher, provider-scoped persistent session tabs, direct local shell tabs, responsive header/pane layout, themed pane scrollbars, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.';
   fileDescs['native/CodexNative/MainWindow.axaml'] =
-    'Native dashboard layout with theme-aware control chrome and the in-app pixel C identity.';
+    'Native dashboard layout with Agent provider selector, theme-aware control chrome, and the in-app pixel C identity.';
   fileDescs['native/CodexNative/Assets/codex-native-icon.png'] =
     'Transparent generated pixel-art C used by the native dashboard header.';
   fileDescs['native/CodexNative/Assets/codex-native-icon.ico'] =
     'Multi-resolution Windows executable and title-bar icon bundle.';
   fileDescs['native/CodexNative/DashboardApiClient.cs'] =
-    'Typed localhost client for sessions, repos, stats, context, configuration, rename, and archive metadata.';
+    'Typed localhost client that loads `/api/providers` and scopes sessions, terminals, repos, stats, context, configuration, rename, and archive calls to the selected provider.';
   fileDescs['native/CodexNative/DashboardTheme.cs'] =
     'Native equivalents of the browser dashboard themes and text-size choices.';
   fileDescs['native/CodexNative/DashboardServiceManager.cs'] =
@@ -251,6 +251,8 @@ function collect() {
     'Exact native-client/server API compatibility policy that rejects stale services with incomplete analytics contracts.';
   fileDescs['native/CodexNative.Core/DashboardServicePorts.cs'] =
     'Bounded private-service port policy used to bypass incompatible or orphaned loopback services safely.';
+  fileDescs['native/CodexNative.Core/TerminalPaneLayoutMath.cs'] =
+    'Pure layout math for fitting and resizing horizontally scrollable native terminal panes to the viewport.';
   fileDescs['native/CodexNative.Core/TokenChartMath.cs'] =
     'Shared-scale chart math that keeps native input/output token comparisons proportional.';
   fileDescs['native/CodexNative.Core/GitHubReleaseClient.cs'] =
@@ -264,13 +266,15 @@ function collect() {
   fileDescs['native/CodexNative.Updater/Program.cs'] =
     'Out-of-process atomic installation, rollback, and native-app restart helper.';
   fileDescs['native/CodexNative/DashboardStatusFeed.cs'] =
-    'Reconnecting Codex status-feed client for push-driven native session updates and rekey events.';
+    'Reconnecting provider-scoped status-feed client for push-driven native session updates and rekey events.';
   fileDescs['native/CodexNative/AnalyticsControls.cs'] =
     'Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition.';
   fileDescs['native/CodexNative/SessionPreviewControl.cs'] =
-    'Rich native session summary with conversation history, context composition, model changes, and Codex subagent timelines.';
+    'Rich native session summary with provider-scoped conversation history, context composition, model changes, and Codex subagent timelines.';
   fileDescs['native/CodexNative/DashboardModels.cs'] =
-    'Typed Codex dashboard, context, analytics, conversation, rate-limit, and subagent payload models.';
+    'Typed multi-provider dashboard, context, analytics, conversation, rate-limit, provider-catalog, and subagent payload models.';
+  fileDescs['native/CodexNative/NativeSettings.cs'] =
+    'Persisted native preferences including selected provider, pane layouts, and per-tab provider identity.';
 
   const statusJsdoc  = extractStatusJsdoc(sessionsSrc);
   const statusRows   = parseStatusTable(statusJsdoc);
@@ -386,15 +390,17 @@ Open **http://localhost:7575** in your browser.
 
 The native frontend uses a real operating-system PTY terminal view attached
 through a small console bridge to persistent PTYs owned by the dashboard service.
-Windows runs the service and Codex in WSL2; macOS runs both locally.
-Its Avalonia shell adds push-driven sessions, multi-project and archived search,
-rich previews, interactive cohort analytics, latest-prompt navigation, context
-composition, Codex subagent timelines, desktop shortcuts, provider/quota health,
-styles, and text resizing.
-Closing the native UI leaves Codex running; reopening it reattaches with recent
-scrollback. A private loopback service is started automatically when needed.
-On macOS the service is launched through \`nohup\`, window close hides to the
-menu bar, and a ready local checkout with installed Node dependencies is
+Windows runs the service and provider CLIs in WSL2; macOS runs both locally.
+Its Avalonia shell adds an Agent provider switcher backed by \`/api/providers\`,
+provider-scoped sessions/tabs/actions, push-driven updates, multi-project and
+archived search, rich previews, interactive cohort analytics (Codex credit
+rollups only on Codex), latest-prompt navigation, context composition, Codex
+subagent timelines, desktop shortcuts, provider/quota health, styles, and text
+resizing.
+Closing the native UI leaves provider PTYs running; reopening it reattaches
+with recent scrollback. A private loopback service is started automatically when
+needed. On macOS the service is launched through \`nohup\`, window close hides to
+the menu bar, and a ready local checkout with installed Node dependencies is
 preferred over a stale configured path.
 
 \`\`\`bash
@@ -798,6 +804,8 @@ ${scriptList}
 | \`client/src/hooks/useStatusFeed.js\` | How the client receives live session updates |
 | \`client/src/components/Terminal.jsx\` | xterm.js + PTY WebSocket bridge |
 | \`server/pty-manager.js\` | node-pty lifecycle, scrollback buffer, WSL env handling, Unix spawn-helper executable repair |
+| \`native/CodexNative/MainWindow.axaml.cs\` | Native Agent provider switcher, provider-scoped tabs, analytics, and preferences |
+| \`native/CodexNative/DashboardApiClient.cs\` | Provider-scoped native REST/WebSocket client for the loopback dashboard API |
 | \`scripts/doc-prose.js\` | Editorial prose for auto-generated docs |
 
 ## Status Values (Canonical)

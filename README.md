@@ -5,8 +5,8 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 ## Features
 
 - **Live status badges** — ⚡ Question / ⚙ Running / ✓ Finished / · Idle, updated every 3 seconds
-- **Provider switch** — top-level Codex / Devin toggle; sessions, repo filters, tabs, stats, archives, and terminals are scoped to the selected provider
-- **Native Windows and macOS frontend (development preview)** — Avalonia dashboard with push updates, deferred crash-safe conversation search, a compact functional project/age/visibility filter, actionable rich previews, responsive layouts, theme-aware control chrome, a custom pixel-art app identity, a rich compact session rail, a searchable Codex-or-local-shell project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics, latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent Codex terminal reattachment; the current desktop package still requires a prepared local ui-my-cli checkout and is not a standalone distribution, while macOS signing, notarization, and production updater distribution remain incomplete and macOS must be treated as experimental
+- **Provider switch** — top-level Codex / Devin toggle in the browser and native Agent selector; sessions, repo filters, tabs, stats, archives, and terminals are scoped to the selected provider on both surfaces
+- **Native Windows and macOS frontend (development preview)** — Avalonia dashboard with a persistent Agent provider switcher (`/api/providers`), provider-scoped REST/WebSocket/tabs/session actions, push updates, deferred crash-safe conversation search, a compact functional project/age/visibility filter, actionable rich previews, responsive header and pane sizing, theme-aware control chrome and pane scrollbars, a custom pixel-art app identity, a rich compact session rail, a searchable agent-or-local-shell project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics (Codex credit rollups only when Codex is selected), latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent provider terminal reattachment; the current desktop package still requires a prepared local ui-my-cli checkout and is not a standalone distribution, while macOS signing, notarization, and production updater distribution remain incomplete and macOS must be treated as experimental
 - **Real terminals** — xterm.js + node-pty: identical to running the selected provider CLI in your shell (`codex resume <id>` or `devin --resume <id>`)
 - **Click to switch** — click any agent in the sidebar to attach its live terminal; switching is instant with scrollback preserved
 - **New session** — floating "+" button in the sidebar lets you start a new Codex or Devin session in any previously-used repo; the terminal opens automatically
@@ -14,8 +14,8 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - **Inline rename** — double-click any session title to rename it (native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)
 - **Needs-your-input filter** — one click to show only agents waiting for a reply
 - **Project filter** — compact count-labelled project selection replaces the unbounded native pill wall; selection persists across reloads
-- **Persistent native terminals** — Codex PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback. On macOS the private service is launched through `nohup`, window close hides to the menu bar, and the menu-bar icon can reopen, reconnect, stop an idle app-managed service, or quit
-- **Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for all active Codex sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically
+- **Persistent native terminals** — provider-scoped PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback. On macOS the private service is launched through `nohup`, window close hides to the menu bar, and the menu-bar icon can reopen, reconnect, stop an idle app-managed service, or quit
+- **Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for active provider sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
 - **Archive / restore** — hide sessions from the list without deleting them; restore from the collapsible drawer at the bottom of the sidebar
 - **Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), 24-hour through all-time token and estimated-credit rollups by model, project, and session, tool call breakdown, model distribution, and Codex stats cohort switching, shown when no session is selected
@@ -53,15 +53,17 @@ Open **http://localhost:7575** in your browser.
 
 The native frontend uses a real operating-system PTY terminal view attached
 through a small console bridge to persistent PTYs owned by the dashboard service.
-Windows runs the service and Codex in WSL2; macOS runs both locally.
-Its Avalonia shell adds push-driven sessions, multi-project and archived search,
-rich previews, interactive cohort analytics, latest-prompt navigation, context
-composition, Codex subagent timelines, desktop shortcuts, provider/quota health,
-styles, and text resizing.
-Closing the native UI leaves Codex running; reopening it reattaches with recent
-scrollback. A private loopback service is started automatically when needed.
-On macOS the service is launched through `nohup`, window close hides to the
-menu bar, and a ready local checkout with installed Node dependencies is
+Windows runs the service and provider CLIs in WSL2; macOS runs both locally.
+Its Avalonia shell adds an Agent provider switcher backed by `/api/providers`,
+provider-scoped sessions/tabs/actions, push-driven updates, multi-project and
+archived search, rich previews, interactive cohort analytics (Codex credit
+rollups only on Codex), latest-prompt navigation, context composition, Codex
+subagent timelines, desktop shortcuts, provider/quota health, styles, and text
+resizing.
+Closing the native UI leaves provider PTYs running; reopening it reattaches
+with recent scrollback. A private loopback service is started automatically when
+needed. On macOS the service is launched through `nohup`, window close hides to
+the menu bar, and a ready local checkout with installed Node dependencies is
 preferred over a stale configured path.
 
 ```bash
@@ -207,11 +209,11 @@ client/src/
 
 native/
   native/CodexNative/App.axaml.cs                  Avalonia application entry; on macOS configures the menu-bar icon for open, service start/reconnect, managed stop, and quit.
-  native/CodexNative/MainWindow.axaml.cs           Cross-platform native dashboard shell, persistent Codex tabs, direct local shell tabs, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.
-  native/CodexNative/MainWindow.axaml              Native dashboard layout with theme-aware control chrome and the in-app pixel C identity.
+  native/CodexNative/MainWindow.axaml.cs           Cross-platform native dashboard shell with Agent provider switcher, provider-scoped persistent session tabs, direct local shell tabs, responsive header/pane layout, themed pane scrollbars, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.
+  native/CodexNative/MainWindow.axaml              Native dashboard layout with Agent provider selector, theme-aware control chrome, and the in-app pixel C identity.
   native/CodexNative/Assets/codex-native-icon.png  Transparent generated pixel-art C used by the native dashboard header.
   native/CodexNative/Assets/codex-native-icon.ico  Multi-resolution Windows executable and title-bar icon bundle.
-  native/CodexNative/DashboardApiClient.cs         Typed localhost client for sessions, repos, stats, context, configuration, rename, and archive metadata.
+  native/CodexNative/DashboardApiClient.cs         Typed localhost client that loads `/api/providers` and scopes sessions, terminals, repos, stats, context, configuration, rename, and archive calls to the selected provider.
   native/CodexNative/DashboardTheme.cs             Native equivalents of the browser dashboard themes and text-size choices.
   native/CodexNative/DashboardServiceManager.cs    Starts the local ui-my-cli service in WSL2 or macOS when port 7575 is unavailable; on macOS launches through nohup and can stop an app-owned idle service.
   native/CodexNative.Core/NativeLaunchBuilder.cs   Validated launch specifications for the loopback terminal bridge, local shells, and private Windows/macOS service.
@@ -222,16 +224,18 @@ native/
   native/CodexNative.Core/DashboardRepositoryLocator.cs Finds a ready ui-my-cli checkout (sources plus express/node-pty) from configuration, app location, or conventional home paths, preferring dependency-ready paths over stale configured ones.
   native/CodexNative.Core/DashboardApiCompatibility.cs Exact native-client/server API compatibility policy that rejects stale services with incomplete analytics contracts.
   native/CodexNative.Core/DashboardServicePorts.cs Bounded private-service port policy used to bypass incompatible or orphaned loopback services safely.
+  native/CodexNative.Core/TerminalPaneLayoutMath.cs Pure layout math for fitting and resizing horizontally scrollable native terminal panes to the viewport.
   native/CodexNative.Core/TokenChartMath.cs        Shared-scale chart math that keeps native input/output token comparisons proportional.
   native/CodexNative.Core/GitHubReleaseClient.cs   Selects a newer stable GitHub Release and its exact platform archive/checksum through trusted HTTPS URLs.
   native/CodexNative.Core/NativeUpdatePackage.cs   Downloads bounded release assets, verifies SHA-256, and rejects traversal, links, or incomplete native payloads.
   native/CodexNative.Core/NativeInstallRequest.cs  Validated structured update handoff arguments and installed-app layout resolution.
   native/CodexNative/NativeUpdateService.cs        Native release check, verified staging, and external updater launch orchestration.
   native/CodexNative.Updater/Program.cs            Out-of-process atomic installation, rollback, and native-app restart helper.
-  native/CodexNative/DashboardStatusFeed.cs        Reconnecting Codex status-feed client for push-driven native session updates and rekey events.
+  native/CodexNative/DashboardStatusFeed.cs        Reconnecting provider-scoped status-feed client for push-driven native session updates and rekey events.
   native/CodexNative/AnalyticsControls.cs          Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition.
-  native/CodexNative/SessionPreviewControl.cs      Rich native session summary with conversation history, context composition, model changes, and Codex subagent timelines.
-  native/CodexNative/DashboardModels.cs            Typed Codex dashboard, context, analytics, conversation, rate-limit, and subagent payload models.
+  native/CodexNative/SessionPreviewControl.cs      Rich native session summary with provider-scoped conversation history, context composition, model changes, and Codex subagent timelines.
+  native/CodexNative/DashboardModels.cs            Typed multi-provider dashboard, context, analytics, conversation, rate-limit, provider-catalog, and subagent payload models.
+  native/CodexNative/NativeSettings.cs             Persisted native preferences including selected provider, pane layouts, and per-tab provider identity.
 ```
 
 ### WebSocket Protocol

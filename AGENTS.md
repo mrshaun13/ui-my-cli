@@ -50,6 +50,8 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 | `client/src/hooks/useStatusFeed.js` | How the client receives live session updates |
 | `client/src/components/Terminal.jsx` | xterm.js + PTY WebSocket bridge |
 | `server/pty-manager.js` | node-pty lifecycle, scrollback buffer, WSL env handling, Unix spawn-helper executable repair |
+| `native/CodexNative/MainWindow.axaml.cs` | Native Agent provider switcher, provider-scoped tabs, analytics, and preferences |
+| `native/CodexNative/DashboardApiClient.cs` | Provider-scoped native REST/WebSocket client for the loopback dashboard API |
 | `scripts/doc-prose.js` | Editorial prose for auto-generated docs |
 
 ## Status Values (Canonical)
@@ -94,7 +96,7 @@ list". Archive behavior is provider-owned: Codex uses `codex archive` /
 - Session status values are lowercase strings: `active`, `question`, `finished`, `idle`. The value `archived` is used by the API but not stored in the database.
 - All server modules use CommonJS (`require` / `module.exports`).
 - The client uses ES modules with React 19 + Vite.
-- The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback.
+- The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback. The native Agent selector persists `ProviderId` in `CodexNative/settings.json` and stores each pane tab's `ProviderId` so open tabs reattach to the correct provider after reloads and provider switches.
 - Native desktop releases are versioned by `Directory.Build.props`; every artifact is named `CodexNative-v<version>-<runtime>.zip`. Stable `vX.Y.Z` tags must match that version. A matching tag, or an explicit `publish_release=true` workflow dispatch on `main`, publishes immutable Windows x64, macOS Intel, and macOS Apple Silicon ZIP/checksum pairs to GitHub Releases. GitHub Packages is intentionally not used for generic desktop archives.
 - The portable Windows native release belongs under `%LOCALAPPDATA%\Programs\CodexNative`, not Desktop, Downloads, OneDrive, or a network-synchronized directory. Users must verify the GitHub release SHA-256 before using Windows Properties to unblock each currently unsigned executable; organization security policy must not be bypassed. Keep all three executables together so in-place update, rollback, restart, and taskbar shortcuts remain valid.
 - Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).
