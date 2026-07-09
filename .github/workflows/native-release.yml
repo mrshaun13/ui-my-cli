@@ -1,0 +1,177 @@
+name: Native desktop
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-release.yml'
+      - 'Directory.Build.props'
+      - 'client/**'
+      - 'native/**'
+      - 'server/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/check-native-version.mjs'
+      - 'scripts/doc-prose.js'
+      - 'scripts/generate-docs.js'
+      - 'scripts/package-native-release.py'
+      - 'scripts/publish-native.sh'
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish this main-branch build as the stable version from Directory.Build.props
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  source-validation:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.native-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.109'
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: npm
+      - id: native-version
+        name: Read native version
+        run: echo "version=$(node scripts/check-native-version.mjs --print)" >> "$GITHUB_OUTPUT"
+      - run: node scripts/check-native-version.mjs "${GITHUB_REF_NAME:-}"
+        if: startsWith(github.ref, 'refs/tags/')
+      - run: node scripts/check-native-version.mjs
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - run: npm ci
+      - run: npm run docs:check
+      - run: node --test tests/*.test.mjs tests/unit/*.test.js
+      - run: npm run build
+      - run: npm run native:test
+
+  build:
+    needs: source-validation
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            rid: win-x64
+          - runner: macos-15-intel
+            rid: osx-x64
+          - runner: macos-15
+            rid: osx-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.109'
+      - run: npm run native:test
+      - run: bash scripts/publish-native.sh "${{ matrix.rid }}"
+      - name: Validate macOS bundle on native hardware
+        if: startsWith(matrix.rid, 'osx-')
+        run: |
+          bundle="native/artifacts/${{ matrix.rid }}/CodexNative.app"
+          plutil -lint "$bundle/Contents/Info.plist"
+          file "$bundle/Contents/MacOS/CodexNative" | grep -q 'Mach-O 64-bit'
+          file "$bundle/Contents/MacOS/CodexNative.TerminalHost" | grep -q 'Mach-O 64-bit'
+          file "$bundle/Contents/MacOS/CodexNative.Updater" | grep -q 'Mach-O 64-bit'
+          test -x "$bundle/Contents/MacOS/CodexNative"
+          test -x "$bundle/Contents/MacOS/CodexNative.TerminalHost"
+          test -x "$bundle/Contents/MacOS/CodexNative.Updater"
+          set +e
+          "$bundle/Contents/MacOS/CodexNative.TerminalHost" --invalid
+          host_exit=$?
+          "$bundle/Contents/MacOS/CodexNative.Updater" --invalid
+          updater_exit=$?
+          set -e
+          test "$host_exit" -eq 1
+          test "$updater_exit" -eq 1
+      - name: Validate Windows executables
+        if: matrix.rid == 'win-x64'
+        run: |
+          file native/artifacts/win-x64/CodexNative.exe | grep -q 'PE32+ executable (GUI)'
+          file native/artifacts/win-x64/CodexNative.TerminalHost.exe | grep -q 'PE32+ executable (console)'
+          file native/artifacts/win-x64/CodexNative.Updater.exe | grep -q 'PE32+ executable (console)'
+      - run: python3 scripts/package-native-release.py "${{ matrix.rid }}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CodexNative-v${{ needs.source-validation.outputs.version }}-${{ matrix.rid }}
+          path: |
+            native/artifacts/releases/CodexNative-v${{ needs.source-validation.outputs.version }}-${{ matrix.rid }}.zip
+            native/artifacts/releases/CodexNative-v${{ needs.source-validation.outputs.version }}-${{ matrix.rid }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: >-
+      startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release && github.ref == 'refs/heads/main')
+    needs: [source-validation, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: CodexNative-v${{ needs.source-validation.outputs.version }}-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create legacy updater aliases
+        env:
+          NATIVE_VERSION: ${{ needs.source-validation.outputs.version }}
+        run: |
+          for rid in win-x64 osx-x64 osx-arm64; do
+            versioned="release-assets/CodexNative-v${NATIVE_VERSION}-${rid}.zip"
+            legacy="release-assets/CodexNative-${rid}.zip"
+            cp -- "${versioned}" "${legacy}"
+            (
+              cd release-assets
+              sha256sum "CodexNative-${rid}.zip" > "CodexNative-${rid}.zip.sha256"
+            )
+          done
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_VERSION: ${{ needs.source-validation.outputs.version }}
+        run: |
+          release_tag="v${NATIVE_VERSION}"
+          if [[ "${GITHUB_REF}" == refs/tags/* && "${GITHUB_REF_NAME}" != "${release_tag}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match native version ${release_tag}." >&2
+            exit 1
+          fi
+          if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${release_tag} already exists; refusing to replace published binaries." >&2
+            exit 1
+          fi
+          release_ref=(--target "${GITHUB_SHA}")
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            release_ref=(--verify-tag)
+          fi
+          gh release create "${release_tag}" \
+            release-assets/CodexNative-v${NATIVE_VERSION}-*.zip \
+            release-assets/CodexNative-v${NATIVE_VERSION}-*.zip.sha256 \
+            release-assets/CodexNative-win-x64.zip \
+            release-assets/CodexNative-win-x64.zip.sha256 \
+            release-assets/CodexNative-osx-x64.zip \
+            release-assets/CodexNative-osx-x64.zip.sha256 \
+            release-assets/CodexNative-osx-arm64.zip \
+            release-assets/CodexNative-osx-arm64.zip.sha256 \
+            --repo "${GITHUB_REPOSITORY}" \
+            "${release_ref[@]}" \
+            --generate-notes \
+            --latest \
+            --title "Codex Native ${NATIVE_VERSION}"

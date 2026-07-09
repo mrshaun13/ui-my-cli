@@ -7,15 +7,15 @@ with an appropriate HTTP status code.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/api/status` | Server health check — returns `ok`, default provider, provider availability, active PTY count, uptime seconds |
+| `GET` | `/api/status` | Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds |
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
 | `GET` | `/api/native/launch/status` | Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching. |
-| `POST` | `/api/native/launch` | Focus the installed Codex Native Windows dashboard, or start it when not already running (Windows/WSL2 only). |
+| `POST` | `/api/native/launch` | Focus or start the installed Codex Native app through Windows/WSL2 PowerShell or macOS LaunchServices. |
 | `GET` | `/api/codex/adaptive/models` | Authenticated Codex model catalog used by native Adaptive routing, including each visible model's supported reasoning efforts and service tiers. |
 | `POST` | `/api/codex/sessions/:id/adaptive/submit` | Classify and submit one native Adaptive prompt through the shared Codex app-server thread. For a pending session, body `{ text, preference?, workingDir }` starts the first turn before returning its real `sessionId`; later turns use `{ text, preference? }`. |
 | `GET` | `/api/:providerId/terminals` |  |
 | `GET` | `/api/terminals` |  |
-| `GET` | `/api/:providerId/stats` | Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex supports `statsMode=combined|triage|codex` to switch chart cohorts while leaving tool-call columns stable. |
+| `GET` | `/api/:providerId/stats` | Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex includes 1d/2d/7d/14d/30d/all-time token and credit-estimate rollups by model, project, and session, and supports `statsMode=combined|triage|codex` cohort switching. |
 | `GET` | `/api/stats` | Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default; accepts the same stats query params |
 | `GET` | `/api/:providerId/latest-prompt` | Most recent user prompt from the selected provider local state |
 | `GET` | `/api/latest-prompt` | Compatibility alias for the default provider latest prompt |
@@ -105,7 +105,9 @@ Compatibility alias: `/ws/status` uses the default provider.
 | `TRANSCRIPT_PIPELINE_HEADLESS_SESSIONS_DIR` | `—` | Override the exact transcript-pipeline `data/headless-sessions` ledger directory |
 | `TRANSCRIPT_PIPELINE_DIR` | `—` | Override the transcript-pipeline checkout used to discover Codex headless run ledgers |
 | `UI_MY_CLI_DEFAULT_PROVIDER` | `codex` | Override the compatibility/default provider for legacy `/api/...` and `/ws/...` aliases (default: `codex`) |
-| `CODEX_BIN` | `—` |  |
+| `CODEX_BIN` | `—` | Override Codex executable discovery; otherwise checks `~/.local/bin`, PATH, Homebrew, and nvm locations |
+| `PATH` | `—` | Inherited executable search path; native macOS startup also checks Homebrew and nvm locations explicitly |
+| `HOME` | `—` | User home used for Codex, local installs, and nvm discovery |
 | `DEVIN_DB_PATH` | `—` | Override the auto-detected Devin `sessions.db` path |
 | `DEVIN_DASHBOARD_DB_PATH` | `—` | Override the Devin dashboard metadata database path |
 | `XDG_DATA_HOME` | `—` | Override the XDG data directory (default: `~/.local/share`); affects DB path on all platforms |

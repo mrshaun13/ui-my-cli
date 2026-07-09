@@ -26,10 +26,14 @@ const { WebSocketServer } = require('ws');
 
 const { attachClient, killPty, isPtyActive, isPtyAdaptive, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
 const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./providers');
-const { launchWindowsNativeDashboard } = require('./native-launcher');
+const { isTrustedLaunchRequest, launchNativeDashboard, nativeLaunchCapability } = require('./native-launcher');
 const { CodexAppServer } = require('./codex-app-server');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
+// v2 adds the complete native analytics contract: usageRollups, pricing,
+// six token windows, and matching heatmap windows. Native clients must not
+// silently reuse a pre-v2 process and render missing telemetry as zero.
+const API_VERSION = 2;
 const IS_DEV = process.env.NODE_ENV !== 'production';
 const CLIENT_DIST = path.resolve(__dirname, '..', 'client', 'dist');
 
@@ -61,6 +65,7 @@ app.use(cors({
 app.get('/api/status', (_req, res) => {
   res.json({
     ok: true,
+    apiVersion: API_VERSION,
     defaultProvider: DEFAULT_PROVIDER_ID,
     providers: safeListProviders(),
     activePtys: activePtySessions().length,
@@ -73,12 +78,19 @@ app.get('/api/providers', (_req, res) => {
 });
 
 app.get('/api/native/launch/status', (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, ...nativeLaunchCapability() });
 });
 
-app.post('/api/native/launch', async (_req, res) => {
+app.post('/api/native/launch', async (req, res) => {
+  if (!isTrustedLaunchRequest({
+    origin: req.get('origin'),
+    host: req.get('host'),
+    fetchSite: req.get('sec-fetch-site'),
+  })) {
+    return res.status(403).json({ error: 'Native launch requires a same-origin local dashboard request.' });
+  }
   try {
-    const action = await launchWindowsNativeDashboard();
+    const action = await launchNativeDashboard();
     res.json({ ok: true, action });
   } catch (err) {
     const unavailable = err.code === 'NATIVE_LAUNCH_UNAVAILABLE';
@@ -109,6 +121,14 @@ function providerRoute(handler) {
 
 function pendingKey(providerId, tempKey) {
   return `${providerId}:${tempKey}`;
+}
+
+function isExistingDirectory(candidate) {
+  try {
+    return fs.statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 app.get(['/api/:providerId/stats', '/api/stats'], providerRoute((provider, req, res) => {
@@ -174,8 +194,8 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
   if (!workingDir || typeof workingDir !== 'string') {
     return res.status(400).json({ error: 'workingDir is required' });
   }
-  if (!fs.existsSync(workingDir)) {
-    return res.status(400).json({ error: 'workingDir does not exist on disk' });
+  if (!isExistingDirectory(workingDir)) {
+    return res.status(400).json({ error: 'workingDir must be an existing directory' });
   }
 
   try {
@@ -255,11 +275,14 @@ app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
   if (text.length > 100000) return res.status(413).json({ error: 'Adaptive prompt is too large' });
   try {
     if (sessionId.startsWith('pending-')) {
-      if (!workingDir || !fs.existsSync(workingDir)) {
+      if (!workingDir || !isExistingDirectory(workingDir)) {
         return res.status(400).json({ error: 'A valid workingDir is required for the first Adaptive prompt.' });
       }
       if (!isPtyActive('codex', sessionId)) {
         return res.status(404).json({ error: 'Pending Codex terminal not found.' });
+      }
+      if (!isPtyAdaptive('codex', sessionId)) {
+        return res.status(409).json({ error: 'Enable Adaptive before submitting a routed prompt.' });
       }
       const route = await codexAppServer.startAdaptiveTurn(workingDir, text, preference);
       const realId = route.threadId;

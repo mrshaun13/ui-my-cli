@@ -5,6 +5,9 @@ using Avalonia.Controls.Shapes;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using CodexNative.Core;
 
 namespace CodexNative;
 
@@ -24,6 +27,7 @@ public sealed class SessionPreviewControl : UserControl
     private readonly TextBox _conversationSearch = new()
     {
         Width = 230,
+        MaxLength = ConversationSearch.MaximumQueryLength,
         PlaceholderText = "Find in loaded conversation…",
     };
     private readonly Button _loadMoreButton = new() { Content = "Load more", Padding = new Thickness(12, 6), IsVisible = false };
@@ -36,6 +40,7 @@ public sealed class SessionPreviewControl : UserControl
         VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
     };
     private CancellationTokenSource? _reloadCancellation;
+    private CancellationTokenSource? _conversationSearchCancellation;
     private int _conversationTotal;
     private int _nextConversationBatch = 50;
 
@@ -61,7 +66,7 @@ public sealed class SessionPreviewControl : UserControl
             await LoadConversationAsync(ConversationLoad.More, _reloadCancellation?.Token ?? CancellationToken.None);
         _loadAllButton.Click += async (_, _) =>
             await LoadConversationAsync(ConversationLoad.All, _reloadCancellation?.Token ?? CancellationToken.None);
-        _conversationSearch.TextChanged += (_, _) => RenderConversation();
+        _conversationSearch.TextChanged += OnConversationSearchChanged;
         AutomationProperties.SetName(_conversationSearch, "Find in loaded conversation");
         _conversationCount.VerticalAlignment = VerticalAlignment.Center;
         _conversationCount.Margin = new Thickness(0, 0, 10, 7);
@@ -75,7 +80,47 @@ public sealed class SessionPreviewControl : UserControl
         SizeChanged += (_, args) => _root.Width = Math.Max(0, args.NewSize.Width - 36);
         _scroll.Content = _root;
         Content = _scroll;
+        DetachedFromVisualTree += OnDetachedFromVisualTree;
         _ = ReloadAsync();
+    }
+
+    private void OnConversationSearchChanged(object? sender, TextChangedEventArgs e)
+    {
+        var previous = _conversationSearchCancellation;
+        var current = new CancellationTokenSource();
+        _conversationSearchCancellation = current;
+        previous?.Cancel();
+        previous?.Dispose();
+        _ = RenderConversationAfterDelayAsync(current);
+    }
+
+    private async Task RenderConversationAfterDelayAsync(CancellationTokenSource owner)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(120), owner.Token);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (!owner.IsCancellationRequested && ReferenceEquals(owner, _conversationSearchCancellation))
+                    RenderConversation();
+            }, DispatcherPriority.Background);
+        }
+        catch (OperationCanceledException) when (owner.IsCancellationRequested)
+        {
+            // A newer keystroke owns the next render.
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Conversation search render failed for {_session.Id}: {ex}");
+        }
+    }
+
+    private void OnDetachedFromVisualTree(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        _conversationSearchCancellation?.Cancel();
+        _conversationSearchCancellation?.Dispose();
+        _conversationSearchCancellation = null;
+        _reloadCancellation?.Cancel();
     }
 
     public async Task ReloadAsync()
@@ -122,6 +167,7 @@ public sealed class SessionPreviewControl : UserControl
 
             _root.Children.Add(Header(preview));
             _root.Children.Add(Actions(preview));
+            _root.Children.Add(BillingSummary(preview));
             _root.Children.Add(Metrics(preview));
             _root.Children.Add(ContextComposition(context));
             _root.Children.Add(Details(preview, config));
@@ -310,17 +356,99 @@ public sealed class SessionPreviewControl : UserControl
         AddMetric(wrap, "Nodes", preview.TotalNodes.ToString("N0"));
         AddMetric(wrap, "Peak context", FormatNumber(preview.PeakContextTokens));
         AddMetric(wrap, "Context window", FormatNumber(preview.ModelContextWindow));
-        AddMetric(wrap, "Fresh input", FormatNumber(preview.InputTokens));
-        AddMetric(wrap, "Cached input", FormatNumber(preview.CachedInputTokens));
         if (preview.CacheWriteTokens > 0) AddMetric(wrap, "Cache write", FormatNumber(preview.CacheWriteTokens));
-        AddMetric(wrap, "Visible output", FormatNumber(preview.VisibleOutputTokens));
-        AddMetric(wrap, "Reasoning", FormatNumber(preview.ReasoningOutputTokens));
         if (preview.UnclassifiedTokens > 0) AddMetric(wrap, "Unclassified", FormatNumber(preview.UnclassifiedTokens));
-        AddMetric(wrap, "Total tokens", FormatNumber(preview.TotalTokens));
         AddMetric(wrap, "Model calls", preview.Calls.ToString("N0"));
         AddMetric(wrap, "Subagents", preview.SubagentCount.ToString("N0"));
         AddMetric(wrap, "Telemetry", string.IsNullOrWhiteSpace(preview.TokenTelemetrySource) ? "unknown" : preview.TokenTelemetrySource);
         return wrap;
+    }
+
+    private Control BillingSummary(SessionPreviewData preview)
+    {
+        var panel = new StackPanel { Spacing = 9 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "TOKEN & CREDIT COST",
+            FontSize = 16,
+            FontWeight = FontWeight.Bold,
+            Foreground = _brush("AccentBrush"),
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"Session total · {preview.CurrentModel} · reasoning {preview.ReasoningEffort}",
+            Foreground = _brush("SecondaryBrush"),
+            FontSize = 11,
+        });
+        var metrics = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddBillingMetric(metrics, "FRESH INPUT", FormatNumber(preview.InputTokens), "full input rate");
+        AddBillingMetric(metrics, "CACHED INPUT", FormatNumber(preview.CachedInputTokens), "discounted input rate");
+        AddBillingMetric(metrics, "TOTAL INPUT", FormatNumber(preview.TotalInputTokens), "fresh + cached");
+        AddBillingMetric(metrics, "TOTAL OUTPUT", FormatNumber(preview.OutputTokens), "includes reasoning");
+        AddBillingMetric(metrics, "REASONING", FormatNumber(preview.ReasoningOutputTokens), "included in output");
+        AddBillingMetric(metrics, "TOTAL TOKENS", FormatNumber(preview.TotalTokens), $"{preview.Calls:N0} model calls");
+        AddBillingMetric(metrics, "EST. CREDITS", SessionCreditValue(preview), SessionPricingCoverage(preview));
+        panel.Children.Add(metrics);
+        panel.Children.Add(new TextBlock
+        {
+            Text = preview.UnpricedTokens > 0
+                ? $"Partial estimate: {FormatNumber(preview.UnpricedTokens)} tokens use model rates absent from the public Codex rate card. " +
+                  "Reasoning tokens use the output rate; the reasoning level does not add a separate published multiplier. " +
+                  "This is a Standard-mode estimate because stored telemetry does not identify Fast mode."
+                : "Reasoning tokens use the output-token rate and are already included in total output; the reasoning level does not add a separate published multiplier. " +
+                  "This is a Standard-mode estimate because stored telemetry does not identify Fast mode.",
+            Foreground = _brush("SecondaryBrush"),
+            FontSize = 10,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        return new Border
+        {
+            Background = _brush("ElevatedBrush"),
+            BorderBrush = _brush("AccentBrush"),
+            BorderThickness = new Thickness(2),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(14),
+            Child = panel,
+        };
+    }
+
+    private void AddBillingMetric(Panel panel, string label, string value, string detail)
+    {
+        panel.Children.Add(new Border
+        {
+            Width = 150,
+            MinHeight = 72,
+            Margin = new Thickness(0, 0, 7, 7),
+            Padding = new Thickness(9, 7),
+            Background = _brush("SurfaceBrush"),
+            BorderBrush = _brush("BorderBrightBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Child = new StackPanel
+            {
+                Spacing = 2,
+                Children =
+                {
+                    new TextBlock { Text = value, FontSize = 18, FontWeight = FontWeight.Bold, Foreground = _brush("PrimaryBrush") },
+                    new TextBlock { Text = label, FontSize = 9, FontWeight = FontWeight.Bold, Foreground = _brush("AccentBrush") },
+                    new TextBlock { Text = detail, FontSize = 9, Foreground = _brush("MutedBrush"), TextWrapping = TextWrapping.Wrap },
+                },
+            },
+        });
+    }
+
+    private static string SessionCreditValue(SessionPreviewData preview)
+    {
+        if (preview.TotalTokens <= 0) return "0";
+        return preview.PricedTokens > 0 ? $"~{preview.EstimatedCredits:0.###}" : "—";
+    }
+
+    private static string SessionPricingCoverage(SessionPreviewData preview)
+    {
+        if (preview.TotalTokens <= 0) return "no token usage";
+        return preview.PricedTokens > 0
+            ? $"{preview.PricingCoverage:P0} pricing coverage"
+            : "rate not publicly priced";
     }
 
     private Control Details(SessionPreviewData preview, SessionConfigData config)
@@ -490,12 +618,11 @@ public sealed class SessionPreviewControl : UserControl
     private void RenderConversation()
     {
         _conversation.Children.Clear();
-        var query = (_conversationSearch.Text ?? string.Empty).Trim();
+        var query = ConversationSearch.Normalize(_conversationSearch.Text);
         var visible = string.IsNullOrWhiteSpace(query)
             ? _conversationTurns
             : _conversationTurns.Where(turn =>
-                turn.UserText.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || turn.AssistantText.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+                ConversationSearch.Matches(query, turn.UserText, turn.AssistantText)).ToList();
         foreach (var turn in visible)
         {
             if (!string.IsNullOrWhiteSpace(turn.UserText))

@@ -2,12 +2,12 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 
-namespace CodexNative.WslHost;
+namespace CodexNative.TerminalHost;
 
 /// <summary>
-/// Bridges the native ConPTY console to ui-my-cli's persistent server PTY.
-/// The bridge may exit with the Windows UI while the WSL Codex process and its
-/// scrollback remain owned by the dashboard server for later reattachment.
+/// Bridges the native Avalonia PTY to ui-my-cli's persistent server PTY.
+/// The bridge may exit with the desktop UI while the Codex process and its
+/// scrollback remain owned by the dashboard service for later reattachment.
 /// </summary>
 internal static class TerminalBridge
 {

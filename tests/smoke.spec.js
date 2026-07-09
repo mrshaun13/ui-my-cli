@@ -16,6 +16,7 @@ test.describe('Dashboard smoke tests', () => {
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
     expect(body.ok).toBe(true);
+    expect(body.apiVersion).toBe(2);
     expect(body).toHaveProperty('activePtys');
     expect(body).toHaveProperty('uptime');
   });
@@ -54,6 +55,31 @@ test.describe('Dashboard smoke tests', () => {
       expect(row.outputTokens).toBe((row.visibleOutputTokens || 0) + (row.reasoningOutputTokens || 0));
       expect(row.totalTokens).toBe((row.totalInputTokens || 0) + (row.outputTokens || 0));
     }
+  });
+
+  test('Codex usage rollups expose token and credit coverage by window and dimension', async ({ request }) => {
+    const response = await request.get('/api/codex/stats?statsMode=codex');
+    expect(response.ok()).toBeTruthy();
+    const stats = await response.json();
+    expect(stats.tokenHeatmap).toHaveLength(7);
+    for (const row of stats.tokenHeatmap) expect(row).toHaveLength(24);
+    for (const window of ['1d', '2d', '7d', '14d', '30d', 'all']) {
+      const rollup = stats.usageRollups?.[window];
+      expect(rollup).toBeTruthy();
+      expect(rollup.label).not.toBe('');
+      expect(rollup.totals.totalTokens).toBeGreaterThanOrEqual(0);
+      expect(rollup.totals.pricingCoverage).toBeGreaterThanOrEqual(0);
+      expect(rollup.totals.pricingCoverage).toBeLessThanOrEqual(1);
+      expect(Array.isArray(rollup.models)).toBeTruthy();
+      expect(Array.isArray(rollup.projects)).toBeTruthy();
+      expect(Array.isArray(rollup.sessions)).toBeTruthy();
+      expect(stats.tokensByHour?.[window]?.input).toHaveLength(24);
+      expect(stats.tokensByHour?.[window]?.output).toHaveLength(24);
+      for (const row of stats.tokenHeatmap || []) {
+        for (const cell of row) expect(cell.windows).toHaveProperty(window);
+      }
+    }
+    expect(stats.pricing?.source).toContain('developers.openai.com/codex/pricing');
   });
 
   test('dashboard loads and renders sidebar + topbar', async ({ page }) => {

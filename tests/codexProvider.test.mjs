@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -16,6 +16,7 @@ test('Codex provider prefers the user install over an older PATH binary', () => 
   const previousBin = process.env.CODEX_BIN
   mkdirSync(binDir, { recursive: true })
   writeFileSync(executable, '')
+  chmodSync(executable, 0o755)
 
   try {
     process.env.HOME = home

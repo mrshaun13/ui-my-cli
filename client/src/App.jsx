@@ -380,6 +380,7 @@ export default function App() {
   const [coldDays, setColdDaysState] = useState(() => loadColdDays(providerId))
   const [nativeLaunchPending, setNativeLaunchPending] = useState(false)
   const [nativeLaunchError, setNativeLaunchError] = useState('')
+  const [nativeLaunchCapability, setNativeLaunchCapability] = useState(null)
   const env = useEnv(providerId, providerSessionsReady)
 
   const setSelectedProviderId = useCallback((nextProviderId) => {
@@ -462,25 +463,25 @@ export default function App() {
 
   const goHome = useCallback(() => dispatch({ type: 'deactivate' }), [])
 
-  const handleLaunchWindows = useCallback(async () => {
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/native/launch/status')
+      .then(response => response.ok ? response.json() : null)
+      .then(capability => {
+        if (!cancelled) setNativeLaunchCapability(capability)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const handleLaunchNative = useCallback(async () => {
     setNativeLaunchPending(true)
     setNativeLaunchError('')
     try {
       const response = await fetch('/api/native/launch', { method: 'POST' })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
-        // A long-running dashboard can serve a freshly built client while its
-        // in-memory routes still predate this endpoint. Bridge through the
-        // other known loopback dashboard without restarting its live PTYs.
-        if (response.status === 404) {
-          const alternatePort = window.location.port === '7576' ? '7575' : '7576'
-          await fetch(`http://127.0.0.1:${alternatePort}/api/native/launch`, {
-            method: 'POST',
-            mode: 'no-cors',
-          })
-          return
-        }
-        throw new Error(data.error || 'Windows could not launch Codex Native.')
+        throw new Error(data.error || 'The operating system could not launch Codex Native.')
       }
     } catch (error) {
       setNativeLaunchError(error.message)
@@ -778,16 +779,18 @@ export default function App() {
               <span style={{ color: 'var(--yellow)' }}>⚡ {needsYouCount}</span> waiting
             </div>
           )}
-          <button
-            type="button"
-            className="surface-launch-btn"
-            onClick={handleLaunchWindows}
-            disabled={nativeLaunchPending}
-            aria-busy={nativeLaunchPending}
-            title={nativeLaunchError || 'Open the Codex Native Windows dashboard'}
-          >
-            Launch in Windows
-          </button>
+          {nativeLaunchCapability?.supported && (
+            <button
+              type="button"
+              className="surface-launch-btn"
+              onClick={handleLaunchNative}
+              disabled={nativeLaunchPending}
+              aria-busy={nativeLaunchPending}
+              title={nativeLaunchError || 'Open Codex Native'}
+            >
+              {nativeLaunchCapability.label || 'Launch native app'}
+            </button>
+          )}
           {nativeLaunchError && (
             <span className="surface-launch-error" role="status">{nativeLaunchError}</span>
           )}

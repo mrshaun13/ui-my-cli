@@ -14,15 +14,15 @@ module.exports = {
     title: 'Agent Dashboard',
     tagline:
       'A browser dashboard for managing multiple local headless-agent sessions across Codex and Devin, ' +
-      'plus a browser-free Windows frontend for Codex in WSL2. Both surfaces share persistent server PTYs, ' +
+      'plus a browser-free native frontend for Windows and macOS. Both surfaces share persistent server PTYs, ' +
       'live status, analytics, search, and session metadata; the native surface renders terminals through ' +
-      'Windows ConPTY and can reattach after the UI exits.',
+      'an Avalonia PTY view and can reattach after the UI exits.',
   },
 
   features: [
     '**Live status badges** — ⚡ Question / ⚙ Running / ✓ Finished / · Idle, updated every 3 seconds',
     '**Provider switch** — top-level Codex / Devin toggle; sessions, repo filters, tabs, stats, archives, and terminals are scoped to the selected provider',
-    '**Native Windows frontend** — standalone Avalonia dashboard with push updates, multi-project and archive search, actionable rich previews, responsive layouts, theme-aware control chrome, a custom pixel-art app identity, a rich compact session rail, a searchable Codex-or-Ubuntu WSL project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics, latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent Codex terminal reattachment through a Windows ConPTY view',
+    '**Native Windows and macOS frontend (development preview)** — Avalonia dashboard with push updates, deferred crash-safe conversation search, a compact functional project/age/visibility filter, actionable rich previews, responsive layouts, theme-aware control chrome, a custom pixel-art app identity, a rich compact session rail, a searchable Codex-or-local-shell project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics, latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent Codex terminal reattachment; the current desktop package still requires a prepared local ui-my-cli checkout and is not a standalone distribution, while macOS session discovery, terminal behavior, updates, signing, and notarization remain incomplete and macOS must be treated as experimental',
     '**Real terminals** — xterm.js + node-pty: identical to running the selected provider CLI in your shell (`codex resume <id>` or `devin --resume <id>`)',
     '**Click to switch** — click any agent in the sidebar to attach its live terminal; ' +
       'switching is instant with scrollback preserved',
@@ -33,13 +33,15 @@ module.exports = {
     '**Inline rename** — double-click any session title to rename it ' +
       '(native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)',
     '**Needs-your-input filter** — one click to show only agents waiting for a reply',
-    '**Repo filter pills** — filter sessions by project; selection persists across reloads',
-    '**Persistent native terminals** — Codex PTYs stay in WSL2 when the Windows UI closes; reopening the native app reattaches with buffered scrollback',
+    '**Project filter** — compact count-labelled project selection replaces the unbounded native pill wall; selection persists across reloads',
+    '**Persistent native terminals** — Codex PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback',
+    '**Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for all active Codex sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically',
     '**Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider',
     '**Archive / restore** — hide sessions from the list without deleting them; ' +
       'restore from the collapsible drawer at the bottom of the sidebar',
     '**Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), ' +
-      'token usage, tool call breakdown, model distribution, and Codex stats cohort switching, shown when no session is selected',
+      '24-hour through all-time token and estimated-credit rollups by model, project, and session, tool call breakdown, model distribution, and Codex stats cohort switching, shown when no session is selected',
+    '**Transparent Codex credit estimates** — session and dashboard summaries apply the published per-million-token Codex Standard-mode rate card to fresh input, cached input, and output tokens, show pricing coverage, leave unpublished model aliases unpriced, and explain that reasoning tokens are already billed as output rather than through a separate effort multiplier; Fast-mode multipliers are not guessed because stored telemetry does not identify that mode',
     '**Context window pie chart** — per-session donut chart showing context window composition ' +
       '(system prompt, user messages, assistant messages, tool calls, tool results, free capacity)',
     '**Environment banner** — global config overview on the dashboard home page showing active ' +
@@ -50,7 +52,7 @@ module.exports = {
 
   prerequisites: [
     '**Node.js 18+** — `node --version` to check',
-    '**.NET 10 SDK** — optional; required only to build or publish the native Windows frontend',
+    '**.NET 10 SDK** — optional; required only to build or publish the native Windows/macOS frontend',
     '**Codex CLI installed and run at least once** — creates the Codex state database',
     '**Devin CLI installed and run at least once** — optional, required only for the Devin dashboard/provider',
     '**Native build tools** for node-pty compilation:',
@@ -85,7 +87,7 @@ module.exports = {
     'regress us onto a vulnerable copy. Other deps stay on their floated ' +
     'ranges to keep up with non-security patches automatically. Currently ' +
     'pinned for this reason:\n\n' +
-    '- `vite` pinned to `6.4.2` in `client/package.json` (fixes the WebSocket ' +
+    '- `vite` pinned to `6.4.3` in `client/package.json` (fixes the WebSocket ' +
     '`fetchModule` and `.map` traversal advisories in earlier 6.x).\n' +
     '- `postcss` pinned to `8.5.12` via `client/package.json#overrides` ' +
     '(fixes the `</style>` XSS advisory). The `overrides` block is scoped to ' +
@@ -101,7 +103,7 @@ module.exports = {
     'Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. ' +
     'The React client exposes a hard provider switch so Codex and Devin sessions never mix in one dashboard view. ' +
     'The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. ' +
-    'The Windows native frontend uses Avalonia for the dashboard and Windows ConPTY for terminal rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so Codex and project files remain in WSL2 and sessions can outlive either UI. It can also launch direct Ubuntu login-shell tabs in validated WSL project paths; those shells end when their tab or the application closes.',
+    'The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches Codex tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Windows keeps Codex and project files in WSL2; macOS uses the local Node service and Codex state. Direct login-shell tabs run in validated project paths and end when their tab or the application closes. Native updates consume platform-specific GitHub Release archives, verify their SHA-256 manifests, stage them outside the installation, wait for active work to drain, and hand replacement/restart to an external helper with rollback.',
 
   data_flow: [
     'Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  Codex provider adapter  →  WebSocket push  →  React client',
@@ -111,6 +113,8 @@ module.exports = {
     'Windows native app  →  Avalonia terminal control  →  ConPTY  →  console bridge  →  WebSocket  →  persistent WSL2 PTY  →  Codex CLI',
     'Windows native app  →  Avalonia terminal control  →  ConPTY  →  validated WSL2 launch  →  Ubuntu login shell',
     'Windows native dashboard controls  →  localhost provider API  →  session/context/stats readers  →  Codex state in WSL2',
+    'macOS native app  →  Avalonia terminal control  →  local PTY  →  console bridge  →  WebSocket  →  persistent macOS PTY  →  Codex CLI',
+    'macOS native app  →  Avalonia terminal control  →  validated project path  →  local login shell',
   ].join('\n'),
 
   conventions: [
@@ -118,7 +122,9 @@ module.exports = {
       ' The value `archived` is used by the API but not stored in the database.',
     'All server modules use CommonJS (`require` / `module.exports`).',
     'The client uses ES modules with React 19 + Vite.',
-    'The native Windows frontend uses .NET 10, Avalonia, an XTerm-compatible terminal control, and ConPTY; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback.',
+    'The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback.',
+    'Native desktop releases are versioned by `Directory.Build.props`; every artifact is named `CodexNative-v<version>-<runtime>.zip`. Stable `vX.Y.Z` tags must match that version. A matching tag, or an explicit `publish_release=true` workflow dispatch on `main`, publishes immutable Windows x64, macOS Intel, and macOS Apple Silicon ZIP/checksum pairs to GitHub Releases. GitHub Packages is intentionally not used for generic desktop archives.',
+    'The portable Windows native release belongs under `%LOCALAPPDATA%\\Programs\\CodexNative`, not Desktop, Downloads, OneDrive, or a network-synchronized directory. Users must verify the GitHub release SHA-256 before using Windows Properties to unblock each currently unsigned executable; organization security policy must not be bypassed. Keep all three executables together so in-place update, rollback, restart, and taskbar shortcuts remain valid.',
     'Provider routes are scoped as `/api/:providerId/...` and `/ws/:providerId/...`; legacy `/api/...` and `/ws/...` aliases point to the default provider (`codex`).',
     'Codex archive state is changed through `codex archive` / `codex unarchive` for native Codex sessions. Native Codex titles are stored in Codex `state_*.sqlite`; external transcript-pipeline headless title and hide/restore metadata is stored in `~/.codex/ui-my-cli-dashboard.db`.',
     'Devin archive state remains dashboard-local in the Devin dashboard metadata database next to Devin `sessions.db`.',
@@ -128,6 +134,9 @@ module.exports = {
       ' After any server-side code change, always run `npm run pm2:restart`' +
       ' (which rebuilds the client and restarts the process).' +
       ' A bare `npm run build` is **not enough** — the running Node process still executes the old code.',
+    '**Plan artifacts** — Files under `plans/` are working documents and must remain local/untracked by default. ' +
+      'Do not stage or commit a plan unless the user explicitly asks for that specific plan to be committed. ' +
+      'A generated or review plan is not release content.',
   ],
 
   // ── Decision-making philosophy ───────────────────────────────────────────────
@@ -176,10 +185,10 @@ module.exports = {
   // Descriptions for REST routes — keyed as "METHOD /path"
   routeDescriptions: {
     'GET /api/native/launch/status': 'Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching.',
-    'POST /api/native/launch':       'Focus the installed Codex Native Windows dashboard, or start it when not already running (Windows/WSL2 only).',
-    'GET /api/status':               'Server health check — returns `ok`, default provider, provider availability, active PTY count, uptime seconds',
+    'POST /api/native/launch':       'Focus or start the installed Codex Native app through Windows/WSL2 PowerShell or macOS LaunchServices.',
+    'GET /api/status':               'Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds',
     'GET /api/providers':            'Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata',
-    'GET /api/:providerId/stats':    'Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex supports `statsMode=combined|triage|codex` to switch chart cohorts while leaving tool-call columns stable.',
+    'GET /api/:providerId/stats':    'Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex includes 1d/2d/7d/14d/30d/all-time token and credit-estimate rollups by model, project, and session, and supports `statsMode=combined|triage|codex` cohort switching.',
     'GET /api/stats':                'Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default; accepts the same stats query params',
     'GET /api/:providerId/latest-prompt': 'Most recent user prompt from the selected provider local state',
     'GET /api/latest-prompt':        'Compatibility alias for the default provider latest prompt',
@@ -222,6 +231,9 @@ module.exports = {
     PORT:                    'HTTP server port',
     NODE_ENV:                'Set to `production` to enable static file serving from `client/dist/`',
     CODEX_HOME:              'Override the Codex home directory (default: `~/.codex`)',
+    CODEX_BIN:               'Override Codex executable discovery; otherwise checks `~/.local/bin`, PATH, Homebrew, and nvm locations',
+    PATH:                    'Inherited executable search path; native macOS startup also checks Homebrew and nvm locations explicitly',
+    HOME:                    'User home used for Codex, local installs, and nvm discovery',
     CODEX_STATE_DB_PATH:     'Override the auto-detected Codex state SQLite database path',
     TRANSCRIPT_PIPELINE_DIR:  'Override the transcript-pipeline checkout used to discover Codex headless run ledgers',
     TRANSCRIPT_PIPELINE_HEADLESS_SESSIONS_DIR: 'Override the exact transcript-pipeline `data/headless-sessions` ledger directory',
@@ -273,6 +285,8 @@ module.exports = {
         'The Playwright config and helpers both read `process.env.PORT`.',
       '**Chromium only.** Firefox and WebKit are not installed. The Playwright config has a ' +
         'single `chromium` project. Run `npx playwright install` to add other browsers.',
+      '**Serial live-service tests.** Playwright intentionally uses one worker locally and in CI because ' +
+        'the suite shares one PM2 service and persistent PTY state; parallel workers can race terminal and navigation assertions.',
     ],
 
     writing_tests: [

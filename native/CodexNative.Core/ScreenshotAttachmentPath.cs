@@ -23,16 +23,16 @@ public static class ScreenshotAttachmentPath
         return $"/mnt/{drive}/{remainder}";
     }
 
-    public static string ComposerReference(string wslPath)
+    public static string ComposerReference(string attachmentPath)
     {
-        if (string.IsNullOrWhiteSpace(wslPath)
-            || !wslPath.StartsWith("/", StringComparison.Ordinal)
-            || wslPath.Any(char.IsControl)
-            || wslPath.Contains('`'))
+        if (string.IsNullOrWhiteSpace(attachmentPath)
+            || !attachmentPath.StartsWith("/", StringComparison.Ordinal)
+            || attachmentPath.Any(char.IsControl)
+            || attachmentPath.Contains('`'))
         {
-            throw new ArgumentException("Screenshot WSL path is invalid.", nameof(wslPath));
+            throw new ArgumentException("Screenshot attachment path is invalid.", nameof(attachmentPath));
         }
 
-        return $"`{wslPath}` ";
+        return $"`{attachmentPath}` ";
     }
 }

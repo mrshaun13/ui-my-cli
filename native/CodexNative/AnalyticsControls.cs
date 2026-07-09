@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
+using CodexNative.Core;
 
 namespace CodexNative;
 
@@ -147,8 +148,7 @@ public sealed class TokenActivityChart : AccessibleChartControl
         }
         var count = Math.Max(_displayInput.Length, _displayOutput.Length);
         if (count == 0) return;
-        var inputMax = Math.Max(1, _displayInput.DefaultIfEmpty().Max());
-        var outputMax = Math.Max(1, _displayOutput.DefaultIfEmpty().Max());
+        var maximum = TokenChartMath.CommonMaximum(_displayInput, _displayOutput);
         var slot = width / count;
         var barWidth = Math.Max(2, slot * .34);
         for (var index = 0; index < count; index++)
@@ -157,8 +157,8 @@ public sealed class TokenActivityChart : AccessibleChartControl
                 context.DrawRectangle(new SolidColorBrush(Color.FromArgb(24, 255, 255, 255)), null, new Rect(index * slot, 0, slot, height));
             var input = index < _displayInput.Length ? _displayInput[index] : 0;
             var output = index < _displayOutput.Length ? _displayOutput[index] : 0;
-            var inputHeight = (height - 6) * input / inputMax;
-            var outputHeight = (height - 6) * output / outputMax;
+            var inputHeight = (height - 6) * input / maximum;
+            var outputHeight = (height - 6) * output / maximum;
             var x = index * slot + Math.Max(0, (slot - barWidth * 2) / 2);
             context.DrawRectangle(InputBrush, null, new Rect(x, height - inputHeight, barWidth, inputHeight));
             context.DrawRectangle(OutputBrush, null, new Rect(x + barWidth + 1, height - outputHeight, barWidth, outputHeight));
