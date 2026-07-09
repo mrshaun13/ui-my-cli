@@ -626,8 +626,8 @@ public sealed class SessionPreviewControl : UserControl
         var query = ConversationSearch.Normalize(_conversationSearch.Text);
         var visible = string.IsNullOrWhiteSpace(query)
             ? _conversationTurns
-            : _conversationTurns.Where(turn =>
-                ConversationSearch.Matches(query, turn.UserText, turn.AssistantText)).ToList();
+            : [.. _conversationTurns.Where(turn =>
+                ConversationSearch.Matches(query, turn.UserText, turn.AssistantText))];
         foreach (var turn in visible)
         {
             if (!string.IsNullOrWhiteSpace(turn.UserText))
@@ -812,7 +812,7 @@ public sealed class SessionPreviewControl : UserControl
             Width = 138,
             Height = 138,
             HorizontalAlignment = HorizontalAlignment.Center,
-            SegmentBrushes = segments.Select(segment => segment.Brush).ToList(),
+            SegmentBrushes = [.. segments.Select(segment => segment.Brush)],
         };
         donut.SetData(segments.Select(segment => (segment.Label, segment.Value)));
         var legend = new StackPanel { Spacing = 5, VerticalAlignment = VerticalAlignment.Center };

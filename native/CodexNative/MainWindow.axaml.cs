@@ -87,7 +87,7 @@ public sealed partial class MainWindow : Window
     private bool _initializingAnalytics;
     private bool _shutdownConfirmed;
     private bool _closePromptOpen;
-    private bool _uiReady;
+    private readonly bool _uiReady;
     private bool _workspaceReady;
     private bool _isDashboardConnected;
     private bool _serviceStopRequested;
@@ -490,7 +490,7 @@ public sealed partial class MainWindow : Window
                 Grid.SetColumn(pane.Root, index * 2);
                 PaneHost.Children.Add(pane.Root);
                 pane.AddButton.IsVisible = index == _panes.Count - 1;
-                if (pane.RemoveButton is not null) pane.RemoveButton.IsVisible = index > 0;
+                pane.RemoveButton?.IsVisible = index > 0;
                 AutomationProperties.SetName(pane.Root, PaneLabel(pane));
                 AutomationProperties.SetName(pane.AddButton, $"Add terminal pane after {PaneLabel(pane)}");
                 if (pane.RemoveButton is not null) AutomationProperties.SetName(pane.RemoveButton, $"Remove {PaneLabel(pane)}");
@@ -541,13 +541,13 @@ public sealed partial class MainWindow : Window
                 {
                     if (!horizontalDragActive) return;
                     var requestedChange = args.GetPosition(PaneHost).X - horizontalDragStartX;
-                    var resized = TerminalPaneLayoutMath.ResizePair(
+                    var (Left, Right) = TerminalPaneLayoutMath.ResizePair(
                         leftStartWidth,
                         rightStartWidth,
                         requestedChange,
                         MinimumPaneWidth);
-                    pendingLeftWidth = resized.Left;
-                    pendingRightWidth = resized.Right;
+                    pendingLeftWidth = Left;
+                    pendingRightWidth = Right;
                     previewTransform.X = pendingLeftWidth - leftStartWidth;
                     args.Handled = true;
                 };
@@ -889,7 +889,7 @@ public sealed partial class MainWindow : Window
             ToolTip.SetTip(
                 state.AdaptiveRouteText,
                 $"{route.Reason} · confidence {route.Confidence:P0}");
-            if (state.Session is not null) state.Session.Status = "active";
+            state.Session?.Status = "active";
             SetStatus(
                 $"Adaptive sent · {modelLabel} · {route.Effort} · {route.Level}",
                 RunningBrush);
@@ -911,7 +911,7 @@ public sealed partial class MainWindow : Window
     private void UpdatePaneEmptyStates()
     {
         foreach (var pane in _panes)
-            if (pane.EmptyState is not null) pane.EmptyState.IsVisible = !PaneContentTabs(pane).Any();
+            pane.EmptyState?.IsVisible = !PaneContentTabs(pane).Any();
     }
 
     private void ConstrainMainContentHeight()
@@ -1886,32 +1886,32 @@ public sealed partial class MainWindow : Window
                             break;
                         case "codex":
                         case "provider":
-                        {
-                            var providerId = SavedProviderId(savedTab);
-                            var sessionId = savedTab.SessionId ?? savedTab.Key;
-                            var session = sessionsByProvider[providerId]
-                                .FirstOrDefault(candidate => candidate.Id == sessionId && !candidate.IsHeadless);
-                            if (session is not null)
-                                await OpenSessionAsync(session, activate: false, launch: false, targetPane: pane);
-                            break;
-                        }
+                            {
+                                var providerId = SavedProviderId(savedTab);
+                                var sessionId = savedTab.SessionId ?? savedTab.Key;
+                                var session = sessionsByProvider[providerId]
+                                    .FirstOrDefault(candidate => candidate.Id == sessionId && !candidate.IsHeadless);
+                                if (session is not null)
+                                    await OpenSessionAsync(session, activate: false, launch: false, targetPane: pane);
+                                break;
+                            }
                         case "codex-pending":
                         case "provider-pending":
-                        {
-                            var providerId = SavedProviderId(savedTab);
-                            var registered = sessionsByProvider[providerId]
-                                .Where(candidate => candidate.WorkingDir == savedTab.WorkingDirectory)
-                                .Where(candidate => savedTab.LaunchedAt <= 0 || candidate.CreatedAt >= savedTab.LaunchedAt - 5)
-                                .OrderBy(candidate => savedTab.LaunchedAt <= 0
-                                    ? candidate.CreatedAt
-                                    : Math.Abs(candidate.CreatedAt - savedTab.LaunchedAt))
-                                .FirstOrDefault();
-                            if (registered is not null)
-                                await OpenSessionAsync(registered, activate: false, launch: false, targetPane: pane);
-                            else if (terminalsByProvider[providerId].Contains(savedTab.Key))
-                                RestorePendingProviderTab(savedTab, pane);
-                            break;
-                        }
+                            {
+                                var providerId = SavedProviderId(savedTab);
+                                var registered = sessionsByProvider[providerId]
+                                    .Where(candidate => candidate.WorkingDir == savedTab.WorkingDirectory)
+                                    .Where(candidate => savedTab.LaunchedAt <= 0 || candidate.CreatedAt >= savedTab.LaunchedAt - 5)
+                                    .OrderBy(candidate => savedTab.LaunchedAt <= 0
+                                        ? candidate.CreatedAt
+                                        : Math.Abs(candidate.CreatedAt - savedTab.LaunchedAt))
+                                    .FirstOrDefault();
+                                if (registered is not null)
+                                    await OpenSessionAsync(registered, activate: false, launch: false, targetPane: pane);
+                                else if (terminalsByProvider[providerId].Contains(savedTab.Key))
+                                    RestorePendingProviderTab(savedTab, pane);
+                                break;
+                            }
                         case "ubuntu":
                         case "local-shell":
                             await OpenLocalShellSessionAsync(
@@ -1923,15 +1923,15 @@ public sealed partial class MainWindow : Window
                                 restoredTitle: savedTab.Title);
                             break;
                         case "preview":
-                        {
-                            var providerId = SavedProviderId(savedTab);
-                            var sessionId = savedTab.SessionId ?? savedTab.Key.Replace("preview:", string.Empty, StringComparison.Ordinal);
-                            var session = sessionsByProvider[providerId]
-                                .Concat(archivedByProvider[providerId])
-                                .FirstOrDefault(candidate => candidate.Id == sessionId);
-                            if (session is not null) await OpenPreviewAsync(session, pane, activate: false);
-                            break;
-                        }
+                            {
+                                var providerId = SavedProviderId(savedTab);
+                                var sessionId = savedTab.SessionId ?? savedTab.Key.Replace("preview:", string.Empty, StringComparison.Ordinal);
+                                var session = sessionsByProvider[providerId]
+                                    .Concat(archivedByProvider[providerId])
+                                    .FirstOrDefault(candidate => candidate.Id == sessionId);
+                                if (session is not null) await OpenPreviewAsync(session, pane, activate: false);
+                                break;
+                            }
                     }
                 }
                 SelectSavedPaneTab(pane, layout.ActiveTabKey);
@@ -1996,19 +1996,18 @@ public sealed partial class MainWindow : Window
             && ReferenceEquals(_activePane.Tabs.SelectedItem, state.Tab));
         _settings = _settings with
         {
-            OpenSessionIds = _openTabs.Values
+            OpenSessionIds = [.. _openTabs.Values
                 .Where(state => state.IsAttached
                     && state.Session is not null
                     && state.ProviderId == _api.ProviderId)
                 .Select(state => state.Session!.Id)
-                .Distinct(StringComparer.Ordinal)
-                .ToList(),
+                .Distinct(StringComparer.Ordinal)],
             ActiveSessionId = active?.ProviderId == _api.ProviderId ? active.Session?.Id : null,
-            PaneLayouts = _panes.Select(CreatePaneLayout).ToList(),
+            PaneLayouts = [.. _panes.Select(CreatePaneLayout)],
             ActivePaneId = _activePane.Id,
             SidebarCollapsed = !SidebarBorder.IsVisible,
             SelectedRepo = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir,
-            SelectedRepos = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir is string selectedRepo
+            SelectedRepos = RepoComboBox.SelectedItem is RepoFilter { WorkingDir: string selectedRepo }
                 ? [selectedRepo]
                 : [],
             ShowHeadless = ShowHeadlessCheckBox.IsChecked == true,
@@ -2165,7 +2164,7 @@ public sealed partial class MainWindow : Window
         ProjectComboGraph.DurationBrush = StartingBrush;
         ProjectComboGraph.SessionsBrush = ResourceBrush("AccentBrush");
         ProjectComboGraph.GridBrush = ResourceBrush("BorderBrush");
-        ProjectComboGraph.SetData(stats.Projects.OrderByDescending(project => project.Messages).Take(10).ToList());
+        ProjectComboGraph.SetData([.. stats.Projects.OrderByDescending(project => project.Messages).Take(10)]);
         if (rollup is not null)
         {
             PopulateModelRows(rollup.Models.Take(10));
@@ -2193,14 +2192,13 @@ public sealed partial class MainWindow : Window
                 .Select(tool => $"{tool.Name}   {tool.Calls:N0} calls"));
         PopulateLines(
             ActivityPanel,
-            new[]
-            {
+            [
                 $"Last 24 hours   {stats.Activity.H24:N0}",
                 $"24–48 hours   {stats.Activity.H48:N0}",
                 $"48–72 hours   {stats.Activity.H72:N0}",
                 $"Older   {stats.Activity.Older:N0}",
                 $"All sessions   {stats.Activity.Total:N0}",
-            });
+            ]);
 
         EnvironmentPanel.Children.Clear();
         AddEnvironmentChips("MCP", stats.McpServers);
@@ -2218,10 +2216,9 @@ public sealed partial class MainWindow : Window
             $"{rollup?.Label ?? window} · input and output aggregated by local clock hour · weekday/hour intensity below";
         if (ResourceBrush("AccentBrush") is SolidColorBrush accent) TokenHeatmapGraph.AccentColor = accent.Color;
         TokenHeatmapGraph.EmptyBrush = ResourceBrush("ElevatedBrush");
-        TokenHeatmapGraph.SetData(stats.TokenHeatmap
-            .Select(row => (IReadOnlyList<long>)row.Select(cell =>
-                cell.Windows.TryGetValue(window, out var value) ? value : 0).ToList())
-            .ToList());
+        TokenHeatmapGraph.SetData([.. stats.TokenHeatmap
+            .Select(row => (IReadOnlyList<long>)[.. row.Select(cell =>
+                cell.Windows.TryGetValue(window, out var value) ? value : 0)])]);
 
         PopulateLeaderboard(DurationLeadersPanel, stats.TopSessionsByDuration, entry => entry.DurationSec, entry => entry.DurationStr);
         PopulateLeaderboard(MessageLeadersPanel, stats.TopSessionsByUserMsgs, entry => entry.UserMsgCount, entry => $"{entry.UserMsgCount:N0} messages");
@@ -2376,8 +2373,11 @@ public sealed partial class MainWindow : Window
         }
         foreach (var model in rows)
         {
-            var bar = new StackedTokenBar { Height = 7 };
-            bar.SegmentBrushes = TokenCategoryBrushes();
+            var bar = new StackedTokenBar
+            {
+                Height = 7,
+                SegmentBrushes = TokenCategoryBrushes()
+            };
             AutomationProperties.SetName(bar, $"Token composition for {model.Model}, reasoning {model.ReasoningEffort}");
             var values = TokenCategoryValues(
                 model.VisibleOutputTokens,
@@ -2451,8 +2451,11 @@ public sealed partial class MainWindow : Window
                 entry.CachedInputTokens,
                 0,
                 entry.UnclassifiedTokens);
-            var bar = new StackedTokenBar { Height = 7 };
-            bar.SegmentBrushes = TokenCategoryBrushes();
+            var bar = new StackedTokenBar
+            {
+                Height = 7,
+                SegmentBrushes = TokenCategoryBrushes()
+            };
             AutomationProperties.SetName(bar, $"Token composition for {entry.Title}");
             bar.SetData(values);
             var visibleTotal = values.Sum();
@@ -3832,7 +3835,7 @@ public sealed partial class MainWindow : Window
                     ? $"Starting {_platform.LocalShellLabel} in {state.WorkingDirectory}…"
                     : $"Attaching {state.TitleBlock.Text} to persistent {_platform.DisplayName} terminal…",
                 StartingBrush);
-            await state.Terminal.LaunchProcess(spec.WorkingDirectory, spec.Process, spec.Arguments.ToArray());
+            await state.Terminal.LaunchProcess(spec.WorkingDirectory, spec.Process, [.. spec.Arguments]);
             state.IsLaunched = true;
             state.IsRunning = true;
             state.ReconnectAttempt = 0;
@@ -4125,15 +4128,15 @@ public sealed partial class MainWindow : Window
             var config = configTask.Result;
             var percent = context.MaxContext > 0 ? context.TotalUsed * 100d / context.MaxContext : 0;
             state.ContextBar.Value = Math.Clamp(percent, 0, 100);
-            state.ContextDonut.SetData(new (string Label, long Value)[]
-            {
+            state.ContextDonut.SetData(
+            [
                 ("System prompt", context.Categories.SystemPrompt),
                 ("User messages", context.Categories.UserMessages),
                 ("Assistant messages", context.Categories.AssistantMessages),
                 ("Tool calls", context.Categories.ToolCalls),
                 ("Tool results", context.Categories.ToolResults),
                 ("Free", context.FreeTokens),
-            });
+            ]);
             state.ContextText.Text =
                 $"{FormatNumber(context.TotalUsed)} / {FormatNumber(context.MaxContext)} ({percent:0.#}%) · " +
                 $"{FormatNumber(context.FreeTokens)} free · {context.CompactionCount} compactions\n" +
@@ -4532,10 +4535,9 @@ public sealed partial class MainWindow : Window
         var selected = (RepoComboBox.SelectedItem as RepoFilter)?.WorkingDir;
         var providerLabel = CurrentProviderLabel;
         var providerNoun = ProviderNoun(_api.ProviderId);
-        candidates = candidates
+        candidates = [.. candidates
             .OrderBy(repo => repo.WorkingDir == selected ? 0 : 1)
-            .ThenBy(repo => repo.Project, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .ThenBy(repo => repo.Project, StringComparer.OrdinalIgnoreCase)];
         var selectedKind = TerminalSessionKind.Codex;
 
         var search = new TextBox
@@ -5039,7 +5041,7 @@ public sealed partial class MainWindow : Window
         if (providerIds.Count == 0)
             providerIds.Add("codex");
 
-        return providerIds.ToList();
+        return [.. providerIds];
     }
 
     private async Task WaitForUpdateDrainAsync(CancellationToken cancellationToken)
@@ -5232,10 +5234,7 @@ public sealed partial class MainWindow : Window
         Resources["ScrollBarButtonBorderBrushPointerOver"] = Brush.Parse(theme.Accent);
         Resources["ScrollBarButtonBorderBrushPressed"] = Brush.Parse(theme.Primary);
         Resources["ScrollBarButtonBorderBrushDisabled"] = Brushes.Transparent;
-        if (Application.Current is not null)
-        {
-            Application.Current.RequestedThemeVariant = theme.IsLight ? ThemeVariant.Light : ThemeVariant.Dark;
-        }
+        Application.Current?.RequestedThemeVariant = theme.IsLight ? ThemeVariant.Light : ThemeVariant.Dark;
         foreach (var pane in _panes)
             ApplyPaneTheme(pane);
         PaneWorkspaceScroll.Background = Brush.Parse(theme.Base);
@@ -6001,24 +6000,24 @@ public sealed partial class MainWindow : Window
         {
             StartPoint = new RelativePoint(0, 0.5, RelativeUnit.Relative),
             EndPoint = new RelativePoint(1, 0.5, RelativeUnit.Relative),
-            GradientStops = new GradientStops
-            {
+            GradientStops =
+            [
                 new(Color.FromArgb(28, _sessionDividerSecondary.R, _sessionDividerSecondary.G, _sessionDividerSecondary.B), 0),
                 new(Color.FromArgb(95, _sessionDividerSecondary.R, _sessionDividerSecondary.G, _sessionDividerSecondary.B), 0.5),
                 new(Color.FromArgb(28, _sessionDividerSecondary.R, _sessionDividerSecondary.G, _sessionDividerSecondary.B), 1),
-            },
+            ],
         };
         var bandBrush = new LinearGradientBrush
         {
             StartPoint = new RelativePoint(0, 0.5, RelativeUnit.Relative),
             EndPoint = new RelativePoint(1, 0.5, RelativeUnit.Relative),
-            GradientStops = new GradientStops
-            {
+            GradientStops =
+            [
                 new(Color.FromArgb(0, _sessionDividerSecondary.R, _sessionDividerSecondary.G, _sessionDividerSecondary.B), 0),
                 new(Color.FromArgb(205, _sessionDividerSecondary.R, _sessionDividerSecondary.G, _sessionDividerSecondary.B), 0.28),
                 new(Color.FromArgb(250, _sessionDividerAccent.R, _sessionDividerAccent.G, _sessionDividerAccent.B), 0.65),
                 new(Color.FromArgb(0, _sessionDividerAccent.R, _sessionDividerAccent.G, _sessionDividerAccent.B), 1),
-            },
+            ],
         };
         SessionHoverTopBaseLine.Background = baseBrush;
         SessionHoverBottomBaseLine.Background = baseBrush;

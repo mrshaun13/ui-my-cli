@@ -123,18 +123,13 @@ public sealed record NativePaneTabLayout(
     long LaunchedAt = 0,
     string? ProviderId = null);
 
-public sealed class NativeSettingsStore
+public sealed class NativeSettingsStore(string? path = null)
 {
-    private readonly string _path;
-    private readonly SemaphoreSlim _writeLock = new(1, 1);
-
-    public NativeSettingsStore(string? path = null)
-    {
-        _path = path ?? Path.Combine(
+    private readonly string _path = path ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "CodexNative",
             "settings.json");
-    }
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
 
     public async Task<NativeSettings> LoadAsync(CancellationToken cancellationToken = default)
     {

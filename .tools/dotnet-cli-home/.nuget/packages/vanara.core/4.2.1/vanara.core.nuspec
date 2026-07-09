@@ -1,0 +1,53 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <id>Vanara.Core</id>
+    <version>4.2.1</version>
+    <authors>David Hall</authors>
+    <license type="expression">MIT</license>
+    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
+    <icon>Vanara64x64.png</icon>
+    <readme>pkgreadme.md</readme>
+    <projectUrl>https://github.com/dahall/vanara</projectUrl>
+    <description>This library includes shared methods, structures and constants for use throughout the Vanara assemblies. Think of it as windows.h with some useful extensions. It includes:
+* Extension methods for working with enumerated types (enum), FILETIME, and method and property extractions via reflection
+* Extension and helper methods to marshaling structures arrays and strings
+* SafeHandle based classes for working with memory allocated via CoTaskMem, HGlobal, or Local calls that handles packing and extracting arrays, structures and raw memory
+* Safe pinning of objects in memory
+* Memory stream based on marshaled memory</description>
+    <releaseNotes>Currently implements:
+
+Classes
+AddAsCtorAttribute, AddAsMemberAttribute, AdjustAutoMethodNamePatternAttribute, AlignedMemory&lt;T&gt;, AppendedStringAttribute, ArrayAttribute, AutoHandleAttribute, AutoSafeHandleAttribute, BeginEndEventContext, BitFieldAttribute&lt;T&gt;, BitHelper, ByteSizeFormatter, CloseHandleFunc, ComConnectionPoint, ComEnumString, ComReleaser&lt;T&gt;, ComReleaserFactory, ComStream, ComTypeExtensions, ConstantConversionExtensions, CorrespondingTypeAttribute, CoTaskMemoryMethods, DeferAutoMethodFromAttribute, EnumerableEqualityComparer&lt;T&gt;, EnumExtensions, EventedList&lt;T&gt;, FileTimeExtensions, FixedStringAttribute, Formatter, FormatterComposer, GenericSafeHandle, GenericVirtualReadOnlyDictionary&lt;T&gt;, GuidToStringMarshaler, HexDumpHelpers, HGlobalMemoryMethods, History&lt;T&gt;, IArrayStructExtensions, IArrayStructMarshaler&lt;T&gt;, IgnoreAttribute, InteropExtensions, IntPtrConverter, IOExtensions, LibHelper, LinqHelpers, ListChangedEventArgs&lt;T&gt;, MarshaledAlternativeAttribute, MarshaledAttribute, Marshaler, MarshalerOptions, MarshalException, MarshalFieldAs, MarshalingStream, Matrix, Matrix&lt;T&gt;, MemoryMethodsBase, NativeMemoryEnumerator&lt;T&gt;, NativeMemoryStream, PinnedObject, ReflectionExtensions, ReflectionExtensions, SafeAllocatedMemoryHandle, SafeAllocatedMemoryHandleBase, SafeByteArray, SafeCoTaskMemHandle, SafeCoTaskMemString, SafeCoTaskMemStruct&lt;T&gt;, SafeGuidPtr, SafeHANDLE, SafeHGlobalHandle, SafeHGlobalStruct&lt;T&gt;, SafeLPSTR, SafeLPTSTR, SafeLPWSTR, SafeMemoryHandle&lt;T&gt;, SafeMemoryHandleExt&lt;T&gt;, SafeMemoryPool&lt;T&gt;, SafeMemString&lt;T&gt;, SafeMemStruct&lt;T&gt;, SizeDefAttribute, SizeFieldNameAttribute, SizeFieldNameAttributeExt, SizeOfAttribute, SpanAction, SparseArray&lt;T&gt;, StringHelper, StructPtrAttribute, SuppressAutoGenAttribute, TryGetDelegate, TryGetValueDelegate, UnionHelper, UntypedNativeMemoryEnumerator, VanaraCustomMarshaler&lt;T&gt;, VanaraMarshaler, VanaraMarshalerAttribute, VirtualDictionary&lt;T&gt;, VirtualList&lt;T&gt;, VirtualListMethodCarrier&lt;T&gt;, VirtualReadOnlyDictionary&lt;T&gt;, VirtualReadOnlyList&lt;T&gt;
+
+Structures
+AnySizeStructFieldArray&lt;T&gt;, AnySizeStructUnmanagedFieldArray&lt;T&gt;, ArrayPointer&lt;T&gt;, BitField&lt;T&gt;, BOOL, BOOLEAN, EnumFlagIndexer&lt;T&gt;, GuidPtr, IUnknownPointer&lt;T&gt;, LPCSTRArrayPointer, LPCTSTRArrayPointer, LPCWSTRArrayPointer, ManagedArrayPointer&lt;T&gt;, ManagedStructPointer&lt;T&gt;, RefEnumerator&lt;T&gt;, SizeT, StrPtrAnsi, StrPtrAuto, StrPtrUni, StructPointer&lt;T&gt;, time_t
+
+Enumerations
+ArrayLayout, Bitness, CorrespondingAction, FileAttributeConstant, FileOpConstant, FilePermissionConstant, LayoutModel, SizingMethod, StringEncoding, StringListPackMethod</releaseNotes>
+    <copyright>Copyright © 2017-2025</copyright>
+    <tags>vanara net-extensions interop</tags>
+    <repository type="Git" url="https://github.com/dahall/vanara" branch="refs/heads/master" commit="2f3a13fc67307b7cf0fd042d15a04805cf2de8f4" />
+    <dependencies>
+      <group targetFramework=".NETFramework4.8">
+        <dependency id="System.Memory" version="4.5.5" exclude="Build,Analyzers" />
+      </group>
+      <group targetFramework=".NETCoreApp3.1" />
+      <group targetFramework="net5.0" />
+      <group targetFramework="net6.0" />
+      <group targetFramework="net7.0" />
+      <group targetFramework="net8.0-windows7.0" />
+      <group targetFramework="net9.0-windows7.0" />
+      <group targetFramework=".NETStandard2.0">
+        <dependency id="System.Memory" version="4.5.5" exclude="Build,Analyzers" />
+        <dependency id="System.ValueTuple" version="4.6.1" exclude="Build,Analyzers" />
+      </group>
+      <group targetFramework=".NETStandard2.1">
+        <dependency id="System.Runtime.CompilerServices.Unsafe" version="6.1.2" exclude="Build,Analyzers" />
+      </group>
+    </dependencies>
+    <frameworkAssemblies>
+      <frameworkAssembly assemblyName="System" targetFramework=".NETFramework4.8" />
+    </frameworkAssemblies>
+  </metadata>
+</package>

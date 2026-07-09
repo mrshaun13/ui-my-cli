@@ -52,7 +52,7 @@ Check("macOS local shell uses a structured env launch without shell interpolatio
     Equal("/usr/bin/env", spec.Process);
     Equal("/Users/tester/a repo", spec.WorkingDirectory);
     SequenceEqual(
-        new[] { "TERM=xterm-256color", "COLORTERM=truecolor", "/bin/zsh", "-l" },
+        ["TERM=xterm-256color", "COLORTERM=truecolor", "/bin/zsh", "-l"],
         spec.Arguments);
     Throws<ArgumentException>(() => NativeLaunchBuilder.LocalShell(
         NativePlatform.MacOS,
@@ -72,7 +72,7 @@ Check("macOS dashboard service uses structured process settings", () =>
         "/opt/homebrew/bin/node");
     Equal("/opt/homebrew/bin/node", spec.Process);
     Equal("/Users/tester/ui-my-cli", spec.WorkingDirectory);
-    SequenceEqual(new[] { "server/index.js" }, spec.Arguments);
+    SequenceEqual(["server/index.js"], spec.Arguments);
     Equal("production", spec.Environment!["NODE_ENV"]);
     Equal("7577", spec.Environment["PORT"]);
 
@@ -357,7 +357,7 @@ Check("resume picker uses the console WSL host", () =>
     var spec = NativeLaunchBuilder.ResumePicker(host, "Ubuntu");
     Equal(host, spec.Process);
     SequenceEqual(
-        new[] { "--distribution", "Ubuntu", "--mode", "sessions" },
+        ["--distribution", "Ubuntu", "--mode", "sessions"],
         spec.Arguments);
 });
 
@@ -365,11 +365,10 @@ Check("new session preserves the WSL path as one host argument", () =>
 {
     var spec = NativeLaunchBuilder.NewSession(host, "Ubuntu-24.04", "/home/tester/a repo");
     SequenceEqual(
-        new[]
-        {
+        [
             "--distribution", "Ubuntu-24.04", "--mode", "new",
             "--working-directory", "/home/tester/a repo",
-        },
+        ],
         spec.Arguments);
 });
 
@@ -377,37 +376,34 @@ Check("Ubuntu shell uses structured WSL arguments in the selected project", () =
 {
     var hostSpec = NativeLaunchBuilder.UbuntuShell(host, "Ubuntu-24.04", "/home/tester/a repo");
     SequenceEqual(
-        new[]
-        {
+        [
             "--distribution", "Ubuntu-24.04", "--mode", "ubuntu-shell",
             "--working-directory", "/home/tester/a repo",
-        },
+        ],
         hostSpec.Arguments);
 
     var request = NativeLaunchBuilder.ParseHostArguments(hostSpec.Arguments);
     var wsl = NativeLaunchBuilder.BuildWslSpec(request, @"C:\Windows\System32");
     SequenceEqual(
-        new[]
-        {
+        [
             "--distribution", "Ubuntu-24.04", "--cd", "/home/tester/a repo",
             "--exec", "/usr/bin/env", "TERM=xterm-256color", "COLORTERM=truecolor",
             "/bin/bash", "--login",
-        },
+        ],
         wsl.Arguments);
 });
 
 Check("host builds the structured wsl.exe command", () =>
 {
     var request = NativeLaunchBuilder.ParseHostArguments(
-        new[] { "--distribution", "Ubuntu", "--mode", "sessions" });
+        ["--distribution", "Ubuntu", "--mode", "sessions"]);
     var spec = NativeLaunchBuilder.BuildWslSpec(request, @"C:\Windows\System32");
     Equal(@"C:\Windows\System32\wsl.exe", spec.Process);
     SequenceEqual(
-        new[]
-        {
+        [
             "--distribution", "Ubuntu", "--exec", "/bin/bash", "-lc",
             "export TERM=xterm-256color COLORTERM=truecolor; codex_bin=\"${CODEX_BIN:-}\"; if [ -z \"$codex_bin\" ] && [ -x \"$HOME/.local/bin/codex\" ]; then codex_bin=\"$HOME/.local/bin/codex\"; fi; if [ -z \"$codex_bin\" ]; then codex_bin=\"$(command -v codex || true)\"; fi; if [ -z \"$codex_bin\" ]; then echo 'Codex executable was not found in CODEX_BIN, ~/.local/bin, or PATH.' >&2; exit 127; fi; exec \"$codex_bin\" resume --all",
-        },
+        ],
         spec.Arguments);
 });
 
@@ -431,7 +427,7 @@ Check("distribution and path validation reject command injection", () =>
     Throws<ArgumentException>(() => NativeLaunchBuilder.UbuntuShell(host, "Ubuntu", "relative/path"));
     Throws<ArgumentException>(() => NativeLaunchBuilder.NewSession(host, "Ubuntu", "/home/user\nmalicious"));
     Throws<ArgumentException>(() => NativeLaunchBuilder.ParseHostArguments(
-        new[] { "--distribution", "Ubuntu", "--mode", "unknown" }));
+        ["--distribution", "Ubuntu", "--mode", "unknown"]));
 });
 
 Check("dashboard service is launched inside its validated WSL directory", () =>
@@ -441,12 +437,11 @@ Check("dashboard service is launched inside its validated WSL directory", () =>
     Equal(7584, request.Port);
     var wsl = NativeLaunchBuilder.BuildWslSpec(request, @"C:\Windows\System32");
     SequenceEqual(
-        new[]
-        {
+        [
             "--distribution", "Ubuntu", "--cd", "/home/tester/ui-my-cli",
             "--exec", "/bin/bash", "-lc",
             "export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT=7584; exec node server/index.js",
-        },
+        ],
         wsl.Arguments);
     Throws<ArgumentException>(() =>
         NativeLaunchBuilder.DashboardService(host, "Ubuntu", "/home/tester/ui-my-cli", 7597));
@@ -458,7 +453,7 @@ Check("server terminal bridge accepts only loopback WebSocket endpoints", () =>
 {
     var spec = NativeLaunchBuilder.ServerTerminal(host, "ws://127.0.0.1:7575/ws/codex/terminal/abc?cols=120&rows=36");
     SequenceEqual(
-        new[] { "--server-terminal", "ws://127.0.0.1:7575/ws/codex/terminal/abc?cols=120&rows=36" },
+        ["--server-terminal", "ws://127.0.0.1:7575/ws/codex/terminal/abc?cols=120&rows=36"],
         spec.Arguments);
     Throws<ArgumentException>(() => NativeLaunchBuilder.ServerTerminal(host, "https://example.com/terminal"));
     Throws<ArgumentException>(() => NativeLaunchBuilder.ServerTerminal(host, "ws://example.com/terminal"));
@@ -545,7 +540,7 @@ Check("Codex composer readiness requires the bottom cursor and model status", ()
     Equal(true, CodexTerminalReadiness.HasComposer(true, 33, 36, lines));
     Equal(false, CodexTerminalReadiness.HasComposer(false, 33, 36, lines));
     Equal(false, CodexTerminalReadiness.HasComposer(true, 12, 36, lines));
-    Equal(false, CodexTerminalReadiness.HasComposer(true, 33, 36, new[] { "transcript still rendering" }));
+    Equal(false, CodexTerminalReadiness.HasComposer(true, 33, 36, ["transcript still rendering"]));
 });
 
 Check("terminal wheel scrolling moves and clamps the viewport", () =>
@@ -593,16 +588,16 @@ Check("terminal pane layout equalizes until minimum width then overflows", () =>
 Check("terminal pane layout follows viewport changes while preserving usable proportions", () =>
 {
     SequenceEqual(
-        new[] { 900d, 600d },
+        [900d, 600d],
         TerminalPaneLayoutMath.FitPaneWidths([600d, 400d], 1505, 460, 5));
     SequenceEqual(
-        new[] { 540d, 460d },
+        [540d, 460d],
         TerminalPaneLayoutMath.FitPaneWidths([900d, 600d], 1005, 460, 5));
     SequenceEqual(
-        new[] { 460d, 460d },
+        [460d, 460d],
         TerminalPaneLayoutMath.FitPaneWidths([900d, 600d], 800, 460, 5));
     SequenceEqual(
-        new[] { 1200d },
+        [1200d],
         TerminalPaneLayoutMath.FitPaneWidths([460d], 1200, 460, 5));
 });
 
@@ -717,7 +712,7 @@ static async Task VerifyReleaseArtifactsAsync(
         assemblyVersion.Minor,
         assemblyVersion.Build);
     var runtimes = runtimeIdentifiers.Count == 0
-        ? new[] { "win-x64", "osx-x64", "osx-arm64" }
+        ? ["win-x64", "osx-x64", "osx-arm64"]
         : runtimeIdentifiers;
     foreach (var runtime in runtimes)
     {
@@ -741,13 +736,13 @@ static async Task VerifyReleaseArtifactsAsync(
                     Path.Combine(extraction, "CodexNative.TerminalHost.exe"),
                     Path.Combine(extraction, "CodexNative.Updater.exe"),
                 }
-                : new[]
-                {
+                :
+                [
                     Path.Combine(extraction, "CodexNative.app", "Contents", "Info.plist"),
                     Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "CodexNative"),
                     Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "CodexNative.TerminalHost"),
                     Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "CodexNative.Updater"),
-                };
+                ];
             foreach (var requiredFile in required)
             {
                 if (!File.Exists(requiredFile))

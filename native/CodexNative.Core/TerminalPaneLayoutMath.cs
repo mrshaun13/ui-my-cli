@@ -36,7 +36,7 @@ public static class TerminalPaneLayoutMath
         var target = Math.Max(minimum * source.Count, Math.Max(0, viewportWidth) - splitters);
         var weights = source.Select(width => width > 0 ? width : minimum).ToArray();
         if (weights.Sum() <= 0)
-            return Enumerable.Repeat(target / source.Count, source.Count).ToArray();
+            return [.. Enumerable.Repeat(target / source.Count, source.Count)];
 
         var result = new double[source.Count];
         var remaining = Enumerable.Range(0, source.Count).ToList();
