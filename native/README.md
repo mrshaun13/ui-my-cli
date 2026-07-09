@@ -9,15 +9,24 @@ desktop distribution. Its package contains the Avalonia UI and terminal/update
 helpers; it does not contain the Node.js dashboard service, npm dependencies,
 or Codex state. A prepared local ui-my-cli checkout remains required.
 
-## Current macOS status
+## macOS v1.1.4 runtime recovery
 
-The macOS client is intentionally shipping in this merged baseline with known
-unresolved bugs. A real Apple Silicon test confirmed that a locally built app
-can launch, but the tested build did not load the user's real Codex sessions
-and reported the Codex provider as unavailable. Backend/session discovery,
-terminal behavior, and the native updater still require diagnosis and complete
-real-Mac validation. These fixes belong in a version-bumped follow-up PR based
-on the merged baseline.
+The macOS client now recovers from a stale configured checkout by selecting a
+ready local checkout instead of starting a service from an old worktree. A
+checkout is ready only when it has the dashboard sources and the installed
+`express` and `node-pty` dependencies. If none is ready, the native status and
+session rail explicitly say that dashboard setup is required and name the
+missing checkout or dependency step instead of presenting an empty dashboard.
+
+The local Node dashboard service also repairs the executable mode that npm can
+lose on node-pty's Unix `spawn-helper` (including darwin-arm64). This prevents
+the otherwise opaque `posix_spawnp failed` error and restores Codex terminal
+attachments on macOS and other non-Windows hosts.
+
+The v1.1.4 packaged app was validated on Apple Silicon against real local Codex
+state: it found sessions, started its private loopback service, and attached a
+real Codex terminal. The updater handoff and macOS signing/notarization remain
+separate release concerns.
 
 Downloaded packages are also unsigned and unnotarized, so Gatekeeper can report
 the app as damaged. Until a follow-up release closes these gaps, macOS support
@@ -30,8 +39,14 @@ shell:   Avalonia PTY -> validated project path -> platform login shell
 ```
 
 Closing the native UI detaches its terminal views without killing server-owned
-Codex processes. Direct local-shell tabs are intentionally UI-owned and end
-when their tab or the app closes.
+Codex processes. On macOS, the private local service is launched through
+`nohup` so it can survive Finder/LaunchServices closing the UI and the next
+native or browser UI can reconnect. Closing the macOS window hides it and keeps
+the app visible in the menu bar; use that icon to reopen the dashboard, start
+or reconnect the service, stop a service started by this app, or quit. Stopping
+is refused while a terminal is active so an explicit service action cannot
+silently interrupt Codex work. Direct local-shell tabs are intentionally
+UI-owned and end when their tab or the app closes.
 
 ## Features
 
@@ -184,11 +199,12 @@ Codex PTYs remain server-owned there.
 macOS needs Command Line Tools (`xcode-select --install`) so `node-pty` can be
 installed in the checkout. Apple Silicon and Intel packages are separate. The
 app looks for Node through `NODE_BIN`, `PATH`, Homebrew's standard paths, and
-installed nvm versions. It finds a checkout above the app artifact or under
-common home-directory locations. If the checkout is elsewhere, set
-`UI_MY_CLI_HOME` before first launch or set
-`DashboardWorkingDirectory` in the app settings file under the platform's local
-application-data `CodexNative` directory.
+installed nvm versions. It finds a ready checkout above the app artifact, in
+common home-directory locations, or one level below Desktop/Documents/Developer,
+Projects, or Code. It prefers a checkout with installed Node dependencies over
+a stale configured path. If the checkout is elsewhere, set `UI_MY_CLI_HOME`
+before first launch or set `DashboardWorkingDirectory` in the app settings file
+under the platform's local application-data `CodexNative` directory.
 
 Finder does not inherit a login-shell PATH. The private service therefore looks
 for Codex through `CODEX_BIN`, `~/.local/bin`, the inherited PATH, Homebrew's
@@ -304,12 +320,15 @@ the behavior matches the Windows client.
 
 `Directory.Build.props` is the native version source. Every CI artifact and
 updater archive includes that version and runtime, such as
-`CodexNative-v1.1.3-osx-arm64.zip`. Pull requests retain these versioned Actions
+`CodexNative-v1.1.4-osx-arm64.zip`. Pull requests retain these versioned Actions
 artifacts for short-term validation; they are not production releases.
 
 The pinned GitHub Actions workflow tests native command policy, builds Windows
-x64 and macOS Intel/Apple Silicon on matching runners, and validates executable
-formats and bundle metadata. A stable release can then be published in either
+x64 and macOS Intel/Apple Silicon on matching runners, validates executable
+formats and bundle metadata, and runs per-RID release archive verification with
+`npm run native:verify-artifacts -- <rid>` after packaging each matrix runtime.
+Locally, omit the RID argument to verify all three packaged runtimes under
+`native/artifacts/releases`. A stable release can then be published in either
 of two controlled ways:
 
 1. Push an exact `v<version>` tag matching `Directory.Build.props`.

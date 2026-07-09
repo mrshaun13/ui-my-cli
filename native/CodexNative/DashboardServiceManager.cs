@@ -7,6 +7,15 @@ public sealed class DashboardServiceManager : IDisposable
 {
     private Process? _process;
 
+    public bool OwnsRunningService
+    {
+        get
+        {
+            try { return _process is { HasExited: false }; }
+            catch (InvalidOperationException) { return false; }
+        }
+    }
+
     public bool TryGetExitCode(out int exitCode)
     {
         exitCode = 0;
@@ -44,7 +53,11 @@ public sealed class DashboardServiceManager : IDisposable
             port);
         var startInfo = new ProcessStartInfo
         {
-            FileName = spec.Process,
+            // LaunchServices can tear down children that remain attached to a
+            // GUI app's job when the window exits. The local dashboard owns
+            // persistent PTYs, so on macOS it must explicitly ignore hangups
+            // and outlive a closing/reopening native UI.
+            FileName = platform == NativePlatform.MacOS ? "/usr/bin/nohup" : spec.Process,
             UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
@@ -52,6 +65,10 @@ public sealed class DashboardServiceManager : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        if (platform == NativePlatform.MacOS)
+        {
+            startInfo.ArgumentList.Add(spec.Process);
+        }
         foreach (var argument in spec.Arguments)
         {
             startInfo.ArgumentList.Add(argument);
@@ -90,7 +107,8 @@ public sealed class DashboardServiceManager : IDisposable
         };
 
         NativeLog.Write(
-            $"Starting dashboard service on port {port} with '{spec.Process}' in '{startInfo.WorkingDirectory}'.");
+            $"Starting dashboard service on port {port} with '{spec.Process}' in '{startInfo.WorkingDirectory}' " +
+            (platform == NativePlatform.MacOS ? "through nohup." : "directly."));
         try
         {
             if (!process.Start())
@@ -105,6 +123,52 @@ public sealed class DashboardServiceManager : IDisposable
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         NativeLog.Write($"Dashboard service host started with PID {process.Id}.");
+    }
+
+    public bool StopOwnedService()
+    {
+        var process = _process;
+        if (process is null) return false;
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                if (!process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds)
+                    && !process.HasExited)
+                {
+                    NativeLog.Write("Dashboard service did not exit within the stop timeout; retaining ownership.");
+                    return false;
+                }
+            }
+            NativeLog.Write("Stopped the dashboard service started by this native UI.");
+            ClearOwnedProcess(process);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                if (process.HasExited)
+                {
+                    NativeLog.Write("Stopped the dashboard service started by this native UI.");
+                    ClearOwnedProcess(process);
+                    return true;
+                }
+            }
+            catch (Exception)
+            {
+            }
+            NativeLog.Write($"Failed to stop the dashboard service ({ex.GetType().Name}: {ex.Message}); retaining ownership for a later retry.");
+            return false;
+        }
+    }
+
+    private void ClearOwnedProcess(Process process)
+    {
+        if (ReferenceEquals(_process, process))
+            _process = null;
+        process.Dispose();
     }
 
     public void Dispose()

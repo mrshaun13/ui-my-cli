@@ -7,9 +7,9 @@ using System.Text;
 var failures = new List<string>();
 const string host = @"C:\Apps\CodexNative.TerminalHost.exe";
 
-if (args is ["--verify-release-artifacts", var artifactDirectory])
+if (args is ["--verify-release-artifacts", var artifactDirectory, .. var runtimeIdentifiers])
 {
-    await VerifyReleaseArtifactsAsync(artifactDirectory);
+    await VerifyReleaseArtifactsAsync(artifactDirectory, runtimeIdentifiers);
     return 0;
 }
 
@@ -128,6 +128,8 @@ Check("dashboard repository locator finds a checkout above the app artifact", ()
     {
         "/Users/tester/ui-my-cli/package.json",
         "/Users/tester/ui-my-cli/server/index.js",
+        "/Users/tester/ui-my-cli/node_modules/express/package.json",
+        "/Users/tester/ui-my-cli/node_modules/node-pty/package.json",
     };
     var found = DashboardRepositoryLocator.Find(
         "/Users/tester/ui-my-cli/native/artifacts/osx-arm64/CodexNative.app/Contents/MacOS",
@@ -135,6 +137,31 @@ Check("dashboard repository locator finds a checkout above the app artifact", ()
         null,
         files.Contains);
     Equal("/Users/tester/ui-my-cli", found);
+});
+
+Check("macOS dashboard repository recovery skips stale checkouts without dependencies", () =>
+{
+    var files = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "/Users/tester/old-ui-my-cli/package.json",
+        "/Users/tester/old-ui-my-cli/server/index.js",
+        "/Users/tester/Desktop/temp/ui-my-cli/package.json",
+        "/Users/tester/Desktop/temp/ui-my-cli/server/index.js",
+        "/Users/tester/Desktop/temp/ui-my-cli/node_modules/express/package.json",
+        "/Users/tester/Desktop/temp/ui-my-cli/node_modules/node-pty/package.json",
+    };
+    var found = DashboardRepositoryLocator.Find(
+        "/Applications/CodexNative.app/Contents/MacOS",
+        "/Users/tester",
+        "/Users/tester/old-ui-my-cli",
+        files.Contains,
+        root => root == "/Users/tester/Desktop" ? ["/Users/tester/Desktop/temp"] : []);
+    Equal("/Users/tester/Desktop/temp/ui-my-cli", found);
+
+    var stale = DashboardRepositoryLocator.Inspect("/Users/tester/old-ui-my-cli", files.Contains);
+    Equal(true, stale.HasCheckout);
+    Equal(false, stale.HasNodeDependencies);
+    Equal(false, stale.IsReady);
 });
 
 Check("dashboard API v2 rejects legacy analytics contracts", () =>
@@ -663,7 +690,9 @@ static async Task ThrowsAsync<TException>(Func<Task> action) where TException : 
     throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
 }
 
-static async Task VerifyReleaseArtifactsAsync(string artifactDirectory)
+static async Task VerifyReleaseArtifactsAsync(
+    string artifactDirectory,
+    IReadOnlyList<string> runtimeIdentifiers)
 {
     var assemblyVersion = typeof(NativeVersion).Assembly.GetName().Version
         ?? throw new InvalidOperationException("Native core assembly has no version.");
@@ -671,8 +700,13 @@ static async Task VerifyReleaseArtifactsAsync(string artifactDirectory)
         assemblyVersion.Major,
         assemblyVersion.Minor,
         assemblyVersion.Build);
-    foreach (var runtime in new[] { "win-x64", "osx-x64", "osx-arm64" })
+    var runtimes = runtimeIdentifiers.Count == 0
+        ? new[] { "win-x64", "osx-x64", "osx-arm64" }
+        : runtimeIdentifiers;
+    foreach (var runtime in runtimes)
     {
+        if (runtime is not ("win-x64" or "osx-x64" or "osx-arm64"))
+            throw new ArgumentException($"Unsupported release runtime: {runtime}.", nameof(runtimeIdentifiers));
         var fileName = GitHubReleaseClient.PackageAssetName(runtime, nativeVersion);
         var archive = Path.Combine(artifactDirectory, fileName);
         var checksum = $"{archive}.sha256";

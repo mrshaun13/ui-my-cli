@@ -219,8 +219,10 @@ function collect() {
   ]) {
     fileDescs[rel] = moduleOneliner(tryRead(rel));
   }
+  fileDescs['native/CodexNative/App.axaml.cs'] =
+    'Avalonia application entry; on macOS configures the menu-bar icon for open, service start/reconnect, managed stop, and quit.';
   fileDescs['native/CodexNative/MainWindow.axaml.cs'] =
-    'Cross-platform native dashboard shell, persistent Codex tabs, direct local shell tabs, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.';
+    'Cross-platform native dashboard shell, persistent Codex tabs, direct local shell tabs, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.';
   fileDescs['native/CodexNative/MainWindow.axaml'] =
     'Native dashboard layout with theme-aware control chrome and the in-app pixel C identity.';
   fileDescs['native/CodexNative/Assets/codex-native-icon.png'] =
@@ -232,7 +234,7 @@ function collect() {
   fileDescs['native/CodexNative/DashboardTheme.cs'] =
     'Native equivalents of the browser dashboard themes and text-size choices.';
   fileDescs['native/CodexNative/DashboardServiceManager.cs'] =
-    'Starts the local ui-my-cli service in WSL2 or macOS when port 7575 is unavailable.';
+    'Starts the local ui-my-cli service in WSL2 or macOS when port 7575 is unavailable; on macOS launches through nohup and can stop an app-owned idle service.';
   fileDescs['native/CodexNative.Core/NativeLaunchBuilder.cs'] =
     'Validated launch specifications for the loopback terminal bridge, local shells, and private Windows/macOS service.';
   fileDescs['native/CodexNative.TerminalHost/Program.cs'] =
@@ -244,7 +246,7 @@ function collect() {
   fileDescs['native/CodexNative.Core/ExecutableResolver.cs'] =
     'Validated Node.js and login-shell discovery without user-controlled shell interpolation.';
   fileDescs['native/CodexNative.Core/DashboardRepositoryLocator.cs'] =
-    'Finds a valid ui-my-cli checkout from explicit configuration, app location, or conventional home paths.';
+    'Finds a ready ui-my-cli checkout (sources plus express/node-pty) from configuration, app location, or conventional home paths, preferring dependency-ready paths over stale configured ones.';
   fileDescs['native/CodexNative.Core/DashboardApiCompatibility.cs'] =
     'Exact native-client/server API compatibility policy that rejects stale services with incomplete analytics contracts.';
   fileDescs['native/CodexNative.Core/DashboardServicePorts.cs'] =
@@ -391,6 +393,9 @@ composition, Codex subagent timelines, desktop shortcuts, provider/quota health,
 styles, and text resizing.
 Closing the native UI leaves Codex running; reopening it reattaches with recent
 scrollback. A private loopback service is started automatically when needed.
+On macOS the service is launched through \`nohup\`, window close hides to the
+menu bar, and a ready local checkout with installed Node dependencies is
+preferred over a stale configured path.
 
 \`\`\`bash
 npm run native:test
@@ -792,7 +797,7 @@ ${scriptList}
 | \`server/index.js\` | All REST endpoints, WebSocket protocol, broadcast logic |
 | \`client/src/hooks/useStatusFeed.js\` | How the client receives live session updates |
 | \`client/src/components/Terminal.jsx\` | xterm.js + PTY WebSocket bridge |
-| \`server/pty-manager.js\` | node-pty lifecycle, scrollback buffer, WSL env handling |
+| \`server/pty-manager.js\` | node-pty lifecycle, scrollback buffer, WSL env handling, Unix spawn-helper executable repair |
 | \`scripts/doc-prose.js\` | Editorial prose for auto-generated docs |
 
 ## Status Values (Canonical)

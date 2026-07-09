@@ -86,6 +86,7 @@ public sealed partial class MainWindow : Window
     private bool _uiReady;
     private bool _workspaceReady;
     private bool _isDashboardConnected;
+    private bool _serviceStopRequested;
     private bool _restoringPaneLayout;
     private bool _updatingPaneLayout;
     private bool _screenshotCaptureInProgress;
@@ -950,9 +951,17 @@ public sealed partial class MainWindow : Window
         ApplyTheme(DashboardTheme.Find(_settings.StyleId));
         ApplyTextSize(DashboardTextSize.Find(_settings.TextSizeId));
         ApplySidebarState();
-        await EnsureDashboardServiceAsync();
-        await RefreshAllAsync();
-        StartStatusFeed();
+        await ReconcileDashboardRepositoryAsync();
+        if (await EnsureDashboardServiceAsync())
+        {
+            await RefreshAllAsync();
+            StartStatusFeed();
+        }
+        else
+        {
+            SessionCountText.Text = "Dashboard setup required";
+            EnvSummaryText.Text = "Local data service unavailable";
+        }
         await RestoreWorkspaceAsync();
         UpdateTerminalTabContentHeights();
         Dispatcher.UIThread.Post(UpdateTerminalTabContentHeights, DispatcherPriority.Loaded);
@@ -1000,6 +1009,11 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> EnsureDashboardServiceAsync(CancellationToken cancellationToken = default)
     {
+        if (_serviceStopRequested)
+        {
+            SetStatus("Local dashboard service is stopped. Use the menu-bar icon to start it.", StartingBrush);
+            return false;
+        }
         SetStatus("Connecting to ui-my-cli data service…", StartingBrush);
         if (await _api.TryUseExistingServiceAsync(cancellationToken))
         {
@@ -1009,10 +1023,30 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            if (_platform.Platform == NativePlatform.MacOS)
+            {
+                var readiness = DashboardRepositoryLocator.Inspect(_settings.DashboardWorkingDirectory);
+                if (!readiness.IsReady)
+                {
+                    var message = $"Dashboard setup required: {readiness.DescribeFailure()}";
+                    NativeLog.Write(message);
+                    SetStatus(message, ErrorBrush);
+                    return false;
+                }
+            }
             var hostExecutable = Path.Combine(AppContext.BaseDirectory, _platform.TerminalHostFileName);
             foreach (var port in DashboardServicePorts.PrivateCandidates)
             {
                 _api.UsePrivateService(port);
+                // A previous native UI can leave its intentionally persistent
+                // service alive while a new UI is starting. Recheck immediately
+                // before spawning so a short probe race does not create a noisy
+                // EADDRINUSE child process.
+                if (await _api.IsAvailableAsync(cancellationToken))
+                {
+                    SetStatus($"Dashboard reconnected on {port} · persistent terminals enabled", RunningBrush);
+                    return true;
+                }
                 _serviceManager.EnsureStarted(
                     _platform.Platform,
                     hostExecutable,
@@ -1055,6 +1089,30 @@ public sealed partial class MainWindow : Window
             SetStatus($"Dashboard data unavailable: {ex.Message}", ErrorBrush);
             return false;
         }
+    }
+
+    private async Task ReconcileDashboardRepositoryAsync()
+    {
+        if (_platform.Platform != NativePlatform.MacOS) return;
+        var resolved = DashboardRepositoryLocator.Find(
+            AppContext.BaseDirectory,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            _settings.DashboardWorkingDirectory);
+        if (string.Equals(resolved, _settings.DashboardWorkingDirectory, StringComparison.Ordinal)) return;
+
+        var readiness = DashboardRepositoryLocator.Inspect(resolved);
+        if (!readiness.IsReady)
+        {
+            NativeLog.Write(
+                $"Keeping configured dashboard checkout '{_settings.DashboardWorkingDirectory}' " +
+                $"instead of incomplete candidate '{resolved}'.");
+            return;
+        }
+
+        var previous = _settings.DashboardWorkingDirectory;
+        _settings = _settings with { DashboardWorkingDirectory = resolved };
+        await _settingsStore.SaveAsync(_settings);
+        NativeLog.Write($"Replaced unavailable dashboard checkout '{previous}' with '{resolved}'.");
     }
 
     private void StartStatusFeed()
@@ -4341,10 +4399,17 @@ public sealed partial class MainWindow : Window
 
     private async void OnRefreshClicked(object? sender, RoutedEventArgs e)
     {
+        _serviceStopRequested = false;
         if (!await _api.IsAvailableAsync())
         {
-            await EnsureDashboardServiceAsync();
+            await ReconcileDashboardRepositoryAsync();
+            if (!await EnsureDashboardServiceAsync())
+            {
+                SessionCountText.Text = "Dashboard setup required";
+                return;
+            }
         }
+        if (_statusFeed is null) StartStatusFeed();
         await RefreshAllAsync();
         if (_availableUpdate is null) _ = CheckForUpdateAsync(reportCurrent: false);
     }
@@ -5049,10 +5114,12 @@ public sealed partial class MainWindow : Window
 
     private async void OnRefreshTimerTick(object? sender, EventArgs e)
     {
+        if (_serviceStopRequested) return;
         if (!await _api.IsAvailableAsync())
         {
-            await EnsureDashboardServiceAsync();
+            if (!await EnsureDashboardServiceAsync()) return;
         }
+        if (_statusFeed is null) StartStatusFeed();
         await RefreshSessionsAsync();
         _refreshTick++;
         if (_refreshTick % 2 == 0)
@@ -5076,6 +5143,17 @@ public sealed partial class MainWindow : Window
 
     private async void OnWindowClosing(object? sender, WindowClosingEventArgs e)
     {
+        if (OperatingSystem.IsMacOS() && !_shutdownConfirmed)
+        {
+            e.Cancel = true;
+            if (_closePromptOpen) return;
+            _closePromptOpen = true;
+            await SaveWorkspaceAsync();
+            _closePromptOpen = false;
+            Hide();
+            NativeLog.Write("Native window hidden; use the menu-bar icon to reopen or stop the local service.");
+            return;
+        }
         if (_shutdownConfirmed)
         {
             ShutdownNativeResources();
@@ -5088,6 +5166,117 @@ public sealed partial class MainWindow : Window
         _closePromptOpen = false;
         _shutdownConfirmed = true;
         Close();
+    }
+
+    public void ShowFromMenuBar()
+    {
+        Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    public async Task StartServiceFromMenuBarAsync()
+    {
+        _serviceStopRequested = false;
+        await ReconcileDashboardRepositoryAsync();
+        if (await EnsureDashboardServiceAsync())
+        {
+            await RefreshAllAsync();
+            StartStatusFeed();
+        }
+        ShowFromMenuBar();
+    }
+
+    public async Task StopOwnedServiceFromMenuBarAsync()
+    {
+        var outcome = await TryStopOwnedServiceAsync(allowStopWhenProbeFails: false);
+        if (outcome == OwnedServiceStopOutcome.Stopped)
+        {
+            SetStatus("Local dashboard service stopped. Use the menu-bar icon to start it.", StartingBrush);
+            SessionCountText.Text = "Service stopped";
+        }
+        ShowFromMenuBar();
+    }
+
+    public async Task QuitFromMenuBarAsync()
+    {
+        if (_serviceManager.OwnsRunningService)
+        {
+            var outcome = await TryStopOwnedServiceAsync(allowStopWhenProbeFails: true);
+            if (outcome == OwnedServiceStopOutcome.RefusedActiveTerminals) return;
+        }
+        _shutdownConfirmed = true;
+        Close();
+    }
+
+    private enum OwnedServiceStopOutcome
+    {
+        Stopped,
+        NotOwned,
+        RefusedActiveTerminals,
+        ProbeFailed,
+        StopFailed,
+        ProbeFailedBestEffort,
+    }
+
+    private async Task<OwnedServiceStopOutcome> TryStopOwnedServiceAsync(bool allowStopWhenProbeFails)
+    {
+        if (!_serviceManager.OwnsRunningService)
+        {
+            SetStatus("This UI is connected to an existing service and cannot stop it.", StartingBrush);
+            return OwnedServiceStopOutcome.NotOwned;
+        }
+
+        var probeFailed = false;
+        try
+        {
+            var active = await _api.GetActiveTerminalIdsAsync();
+            if (active.Count > 0)
+            {
+                SetStatus(
+                    $"Close {active.Count} active terminal{(active.Count == 1 ? string.Empty : "s")} before stopping the service.",
+                    StartingBrush);
+                return OwnedServiceStopOutcome.RefusedActiveTerminals;
+            }
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Could not verify active terminals before stopping service: {ex}");
+            if (!allowStopWhenProbeFails)
+            {
+                SetStatus("Could not verify active terminals; the service was not stopped.", ErrorBrush);
+                return OwnedServiceStopOutcome.ProbeFailed;
+            }
+            probeFailed = true;
+            NativeLog.Write("Proceeding with best-effort service stop because terminal probe failed during quit.");
+        }
+
+        if (!_serviceManager.StopOwnedService())
+        {
+            if (_serviceManager.OwnsRunningService)
+            {
+                SetStatus(
+                    "Could not fully stop the local dashboard service; ownership kept for retry.",
+                    ErrorBrush);
+            }
+            else if (!probeFailed)
+            {
+                SetStatus("No native-managed service is running.", StartingBrush);
+            }
+            return probeFailed
+                ? OwnedServiceStopOutcome.ProbeFailedBestEffort
+                : OwnedServiceStopOutcome.StopFailed;
+        }
+
+        _serviceStopRequested = true;
+        if (_statusFeed is not null)
+        {
+            await _statusFeed.DisposeAsync();
+            _statusFeed = null;
+        }
+        return probeFailed
+            ? OwnedServiceStopOutcome.ProbeFailedBestEffort
+            : OwnedServiceStopOutcome.Stopped;
     }
 
     private void ShutdownNativeResources()
