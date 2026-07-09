@@ -107,6 +107,7 @@ jobs:
           file native/artifacts/win-x64/CodexNative.TerminalHost.exe | grep -q 'PE32+ executable (console)'
           file native/artifacts/win-x64/CodexNative.Updater.exe | grep -q 'PE32+ executable (console)'
       - run: python3 scripts/package-native-release.py "${{ matrix.rid }}"
+      - run: npm run native:verify-artifacts -- "${{ matrix.rid }}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: CodexNative-v${{ needs.source-validation.outputs.version }}-${{ matrix.rid }}

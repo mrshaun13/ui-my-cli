@@ -18,6 +18,7 @@
 
 const os = require('os');
 const fs = require('fs');
+const path = require('path');
 const pty = require('node-pty');
 const { DEFAULT_PROVIDER_ID, getProvider } = require('./providers');
 
@@ -107,6 +108,33 @@ function getShell() {
 
   // Should never reach here — /bin/sh must exist on any Unix
   return '/bin/sh';
+}
+
+/**
+ * npm's node-pty prebuild archive currently ships its Unix spawn helper without
+ * an executable mode on some macOS installations. The native module loads, but
+ * every terminal then fails with the opaque "posix_spawnp failed" message.
+ *
+ * The helper is part of the locally installed dependency and needs no elevated
+ * permission to repair. Do this at startup and immediately before a spawn so a
+ * checkout copied from another machine or restored from an archive self-heals.
+ */
+function ensurePtySpawnHelperIsExecutable(options = {}) {
+  const platform = options.platform ?? process.platform;
+  if (platform === 'win32') return false;
+  const arch = options.arch ?? process.arch;
+  const nodePtyDirectory = options.nodePtyDirectory
+    ?? path.dirname(require.resolve('node-pty/package.json'));
+  const helper = path.join(nodePtyDirectory, 'prebuilds', `${platform}-${arch}`, 'spawn-helper');
+  const existsSync = options.existsSync ?? fs.existsSync;
+  const statSync = options.statSync ?? fs.statSync;
+  const chmodSync = options.chmodSync ?? fs.chmodSync;
+  if (!existsSync(helper)) return false;
+
+  const mode = statSync(helper).mode;
+  if ((mode & 0o111) !== 0) return false;
+  chmodSync(helper, mode | 0o755);
+  return true;
 }
 
 function ptyKey(providerId, sessionId) {
@@ -220,6 +248,9 @@ function wirePtyEvents(entry) {
  */
 function doSpawn(providerId, command, args, cwd, cols, rows, ws, envOverrides = {}) {
   try {
+    if (ensurePtySpawnHelperIsExecutable()) {
+      console.info('[pty] Restored executable permission to node-pty spawn-helper.');
+    }
     const p = pty.spawn(command, args, {
       name: 'xterm-256color',
       cols,
@@ -238,14 +269,14 @@ function doSpawn(providerId, command, args, cwd, cols, rows, ws, envOverrides = 
     // Log full diagnostic server-side
     console.error(`[pty] Failed to spawn PTY: ${err.message}`);
     console.error(`[pty]   command=${command}, args=${JSON.stringify(args)}, cwd=${cwd}, platform=${process.platform}, arch=${process.arch}`);
-    console.error(`[pty]   SHELL=$${process.env.SHELL || '(unset)'}, node=${process.version}`);
+    console.error(`[pty]   SHELL=${process.env.SHELL || '(unset)'}, node=${process.version}`);
 
     // Send a helpful message to the browser terminal
     if (ws) {
       const isSpawnp = /posix_spawnp|spawn/i.test(err.message);
       const hint = isSpawnp
-        ? 'This usually means node-pty\'s native module was compiled for a different platform.\n\r' +
-          'Fix: rm -rf node_modules && npm install\n\r' +
+        ? 'The local node-pty helper could not start. The dashboard repaired its executable permission when possible.\n\r' +
+          'If this persists, run: rm -rf node_modules && npm install\n\r' +
           `(current platform: ${process.platform}/${process.arch}, node ${process.version})`
         : err.message;
       sendPtyError(ws, `Terminal error: ${hint}`);
@@ -475,6 +506,9 @@ function rekeyPty(providerId, oldKey, newKey) {
 function validatePty() {
   const shell = getShell();
   try {
+    if (ensurePtySpawnHelperIsExecutable()) {
+      console.info('[pty] Restored executable permission to node-pty spawn-helper.');
+    }
     const p = pty.spawn(shell, ['--version'], {
       name: 'xterm-256color',
       cols: 80,
@@ -508,4 +542,5 @@ module.exports = {
   rekeyPty,
   validatePty,
   interactivePtyEnv,
+  ensurePtySpawnHelperIsExecutable,
 };
