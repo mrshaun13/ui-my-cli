@@ -271,6 +271,8 @@ function doSpawn(providerId, command, args, cwd, cols, rows, ws, envOverrides = 
       clients: new Set(),
       scrollback: [],
       scrollbackSize: 0,
+      startedAt: Date.now(),
+      lastClientDetachedAt: null,
     };
   } catch (err) {
     // Log full diagnostic server-side
@@ -308,6 +310,7 @@ function spawnPty(providerId, sessionId, workingDir, ws, cols = 80, rows = 24, o
     const entry = ptys.get(key);
     replayScrollback(entry, ws);
     entry.clients.add(ws);
+    entry.lastClientDetachedAt = null;
     // Resize the PTY to the new client's dimensions. This is critical for
     // pending sessions where the PTY was spawned with default dimensions
     // before any client connected. Without this, line wrapping and cursor
@@ -388,7 +391,9 @@ function attachClient(providerId, sessionId, workingDir, ws, cols, rows, options
   const removeClient = () => {
     // Look up by identity scan in case the entry was re-keyed
     for (const [, entry] of ptys) {
-      if (entry.clients.delete(ws)) break;
+      if (!entry.clients.delete(ws)) continue;
+      if (entry.clients.size === 0) entry.lastClientDetachedAt = Date.now();
+      break;
     }
   };
   ws.on('close', removeClient);
@@ -425,6 +430,20 @@ function isPtyActive(providerId, sessionId) {
     providerId = DEFAULT_PROVIDER_ID;
   }
   return ptys.has(ptyKey(providerId, sessionId));
+}
+
+function pendingPtyState(providerId, sessionId) {
+  const entry = ptys.get(ptyKey(providerId, sessionId));
+  if (!entry) return null;
+  return {
+    active: true,
+    processId: entry.pty.pid,
+    startedAt: entry.startedAt,
+    clientCount: entry.clients.size,
+    detachedAt: entry.clients.size === 0
+      ? entry.lastClientDetachedAt ?? entry.startedAt
+      : null,
+  };
 }
 
 function isPtyControlPlane(providerId, sessionId) {
@@ -475,13 +494,17 @@ function spawnNewSession(providerId, tempKey, workingDir, cols = 80, rows = 24, 
     remoteEndpoint: options.remoteEndpoint || null,
     workingDirectory: cwd,
   });
+  const pendingEnvironment = typeof provider.pendingSessionEnvironment === 'function'
+    ? provider.pendingSessionEnvironment(options.correlationId)
+    : {};
 
-  const entry = doSpawn(provider.id, command, args, cwd, cols, rows, null);
+  const entry = doSpawn(provider.id, command, args, cwd, cols, rows, null, pendingEnvironment);
   if (!entry) return null;
 
   entry.providerId = provider.id;
   entry.sessionId = tempKey;
   entry.controlPlane = Boolean(options.remoteEndpoint);
+  entry.correlationId = options.correlationId || null;
   ptys.set(ptyKey(provider.id, tempKey), entry);
   wirePtyEvents(entry);
 
@@ -551,6 +574,7 @@ module.exports = {
   killPty,
   isPtyActive,
   isPtyControlPlane,
+  pendingPtyState,
   activePtySessions,
   spawnNewSession,
   rekeyPty,

@@ -1,13 +1,32 @@
 'use strict';
 
-/**
- * Metadata discovery must never own the lifetime of a running interactive PTY.
- * A pending session can remain unregistered for as long as the user is composing
- * its first prompt; only the PTY exiting makes the temporary entry disposable.
- */
-function pendingSessionDisposition(realSessionId, ptyActive) {
+const DEFAULT_DETACHED_GRACE_MS = 60_000;
+const FALLBACK_CORRELATION_WINDOW_MS = 5_000;
+
+function pendingSessionDisposition(
+  realSessionId,
+  ptyState,
+  now = Date.now(),
+  detachedGraceMs = DEFAULT_DETACHED_GRACE_MS
+) {
   if (typeof realSessionId === 'string' && realSessionId.length > 0) return 'rekey';
-  return ptyActive ? 'continue' : 'expire';
+  if (!ptyState?.active) return 'expire';
+  if (ptyState.clientCount > 0) return 'continue';
+  const detachedAt = ptyState.detachedAt ?? ptyState.startedAt;
+  return Number.isFinite(detachedAt) && now - detachedAt >= detachedGraceMs
+    ? 'expire'
+    : 'continue';
 }
 
-module.exports = { pendingSessionDisposition };
+function isFallbackPendingSessionCandidate(createdAt, startedAt) {
+  return Number.isFinite(createdAt)
+    && Number.isFinite(startedAt)
+    && createdAt >= startedAt - 2_000
+    && createdAt <= startedAt + FALLBACK_CORRELATION_WINDOW_MS;
+}
+
+module.exports = {
+  DEFAULT_DETACHED_GRACE_MS,
+  isFallbackPendingSessionCandidate,
+  pendingSessionDisposition,
+};

@@ -48,6 +48,7 @@ public sealed class NativeUpdateService : IDisposable
         try
         {
             var current = NativeInstallLayout.FindCurrentInstallDirectory(platform.Platform, AppContext.BaseDirectory);
+            if (NativeUpdateInstallationState.IsInProgress(current)) return;
             var previous = $"{current}.previous";
             if (Directory.Exists(previous)) Directory.Delete(previous, recursive: true);
         }
@@ -73,15 +74,18 @@ public sealed class NativeUpdateService : IDisposable
             if (!force
                 && _cache is { } fresh
                 && fresh.RuntimeIdentifier == runtime
+                && fresh.Release is not null
                 && fresh.CheckedAt <= now.AddMinutes(5)
                 && now - fresh.CheckedAt <= CheckFreshness)
                 return NewerThanCurrent(fresh.Release);
 
-            var entityTag = _cache?.RuntimeIdentifier == runtime ? _cache.EntityTag : null;
+            var entityTag = _cache is { RuntimeIdentifier: var cachedRuntime, Release: not null }
+                && cachedRuntime == runtime
+                    ? _cache.EntityTag
+                    : null;
             try
             {
                 var query = await _releaseClient.QueryLatestAsync(
-                    CurrentVersion,
                     runtime,
                     entityTag,
                     cancellationToken);

@@ -62,11 +62,13 @@ public sealed class GitHubReleaseClient : IDisposable
     public async Task<NativeReleaseInfo?> GetLatestAsync(
         NativeVersion currentVersion,
         string runtimeIdentifier,
-        CancellationToken cancellationToken = default) =>
-        (await QueryLatestAsync(currentVersion, runtimeIdentifier, null, cancellationToken)).Release;
+        CancellationToken cancellationToken = default)
+    {
+        var release = (await QueryLatestAsync(runtimeIdentifier, null, cancellationToken)).Release;
+        return release is not null && release.Version > currentVersion ? release : null;
+    }
 
     public async Task<GitHubReleaseQueryResult> QueryLatestAsync(
-        NativeVersion currentVersion,
         string runtimeIdentifier,
         string? entityTag = null,
         CancellationToken cancellationToken = default)
@@ -106,8 +108,6 @@ public sealed class GitHubReleaseClient : IDisposable
 
         var tag = RequiredString(root, "tag_name", 64);
         var version = NativeVersion.Parse(tag);
-        if (version <= currentVersion)
-            return new GitHubReleaseQueryResult(null, response.Headers.ETag?.ToString(), NotModified: false);
 
         var packageName = PackageAssetName(runtimeIdentifier, version);
         var checksumName = $"{packageName}.sha256";

@@ -35,6 +35,13 @@ function buildCommand(sessionId, options = {}) {
   return { command, args };
 }
 
+function pendingSessionEnvironment(correlationId) {
+  if (!/^ui-my-cli-[0-9a-f-]{36}$/.test(correlationId || '')) {
+    throw new Error('Pending Codex session correlation ID is invalid');
+  }
+  return { CODEX_INTERNAL_ORIGINATOR_OVERRIDE: correlationId };
+}
+
 let cachedVersion;
 
 function cliVersion() {
@@ -77,6 +84,7 @@ module.exports = {
   ...metadata,
   availability,
   buildCommand,
+  pendingSessionEnvironment,
   codexExecutable,
   watchPaths,
   listSessions: codex.listSessions,

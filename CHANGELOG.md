@@ -30,15 +30,18 @@
   place after repeated v1.1.4 downloads. The helper now waits for UI-owned
   terminal hosts, retries transient install-directory locks, verifies the
   installed version, checks the relaunched process through startup, preserves
-  rollback, and automatically relaunches the previous install after failure.
-- Added one-time update-result reporting in the relaunched app so a failed
-  handoff is visible instead of appearing as a silent shutdown.
+  rollback, protects the backup until startup validation completes, and
+  automatically relaunches the previous install after failure.
+- Added one-time update-result reporting and updater-owned failure dialogs so
+  a rolled-back handoff remains visible even when the restored app predates
+  result reporting.
 - Added cached and coalesced GitHub release checks with ETag revalidation,
   friendly 403/429 reset times, and optional authentication only through the
   explicitly supplied `CODEX_NATIVE_GITHUB_TOKEN` environment variable.
 - Fixed new-session prompt loss in both browser and native clients. A pending
-  session can now remain unregistered while its PTY is alive; the server no
-  longer kills it after the former three-minute metadata polling deadline.
+  session can remain unregistered while its PTY is attached, with exact Codex
+  origin correlation and a bounded fallback preventing unrelated same-folder
+  sessions from being claimed.
 - Added cross-platform copy/select-all shortcuts and a visible **Copy all**
   action for terminal scrollback.
 - Bounded new-session titles and prompt previews at API and native layout

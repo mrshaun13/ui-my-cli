@@ -90,3 +90,11 @@ test('new Codex sessions receive the chosen working root as a structured argumen
     else process.env.CODEX_BIN = previous
   }
 })
+
+test('Codex pending sessions carry an exact persisted originator', () => {
+  const correlationId = 'ui-my-cli-12345678-1234-1234-1234-123456789abc'
+  assert.deepEqual(provider.pendingSessionEnvironment(correlationId), {
+    CODEX_INTERNAL_ORIGINATOR_OVERRIDE: correlationId,
+  })
+  assert.throws(() => provider.pendingSessionEnvironment('untrusted value'), /correlation ID/)
+})

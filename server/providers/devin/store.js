@@ -21,6 +21,7 @@ const fs = require('fs');
 const { resolveDbPath, resolveDashboardDbPath } = require('./paths');
 const { formatDuration } = require('./stats');
 const { sessionsWithSubagents, countSubagents } = require('./subagents');
+const { isFallbackPendingSessionCandidate } = require('../../pending-session-lifecycle');
 
 // ── Devin CLI sessions.db ──────────────────────────────────────────────────────
 
@@ -999,19 +1000,21 @@ function listSessionIds() {
  * Uses a fresh connection to detect recently-created sessions.
  * Returns the session ID or null if not found.
  */
-function findNewSessionInDir(workingDir, excludeIds) {
+function findNewSessionInDir(workingDir, excludeIds, ownership = null) {
   const freshDb = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
   try {
     const rows = freshDb.prepare(`
-      SELECT id FROM sessions
+      SELECT id, created_at FROM sessions
       WHERE working_directory = ?
       ORDER BY created_at DESC
     `).all(workingDir);
 
-    for (const row of rows) {
-      if (!excludeIds.has(row.id)) return row.id;
-    }
-    return null;
+    const candidates = rows.filter(row =>
+      !excludeIds.has(row.id)
+      && (!ownership?.startedAt
+        || isFallbackPendingSessionCandidate(row.created_at * 1000, ownership.startedAt))
+    );
+    return candidates.length === 1 ? candidates[0].id : null;
   } finally {
     freshDb.close();
   }

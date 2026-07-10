@@ -428,6 +428,24 @@ Check("updater result is bounded, persisted, and consumed once", () =>
     }
 });
 
+Check("running updater marker defers previous install cleanup", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), $"codex-native-marker-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    try
+    {
+        Equal(false, NativeUpdateInstallationState.IsInProgress(root));
+        NativeUpdateInstallationState.MarkInProgress(root);
+        Equal(true, NativeUpdateInstallationState.IsInProgress(root));
+        NativeUpdateInstallationState.Clear(root);
+        Equal(false, NativeUpdateInstallationState.IsInProgress(root));
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 await CheckAsync("GitHub release selection requires the matching runtime and checksum", async () =>
 {
     const string json = """
@@ -503,11 +521,49 @@ await CheckAsync("GitHub release checks reuse cached ETags", async () =>
     }));
     using var client = new GitHubReleaseClient(http);
     var query = await client.QueryLatestAsync(
-        new NativeVersion(1, 0, 0),
         "win-x64",
         "\"release-v1\"");
     Equal(true, query.NotModified);
     Equal("\"release-v1\"", query.EntityTag);
+});
+
+await CheckAsync("GitHub ETag cache retains the latest release across a downgrade", async () =>
+{
+    const string json = """
+        {
+          "tag_name": "v1.1.6",
+          "name": "Native 1.1.6",
+          "draft": false,
+          "prerelease": false,
+          "html_url": "https://github.com/mrshaun13/ui-my-cli/releases/tag/v1.1.6",
+          "assets": [
+            { "name": "CodexNative-v1.1.6-win-x64.zip", "browser_download_url": "https://github.com/mrshaun13/ui-my-cli/releases/download/v1.1.6/CodexNative-v1.1.6-win-x64.zip", "size": 100 },
+            { "name": "CodexNative-v1.1.6-win-x64.zip.sha256", "browser_download_url": "https://github.com/mrshaun13/ui-my-cli/releases/download/v1.1.6/CodexNative-v1.1.6-win-x64.zip.sha256", "size": 80 }
+          ]
+        }
+        """;
+    var requests = 0;
+    using var http = new HttpClient(new CallbackHttpHandler(request =>
+    {
+        requests++;
+        if (requests == 1)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+            response.Headers.ETag = new EntityTagHeaderValue("\"release-v1.1.6\"");
+            return response;
+        }
+        Equal("\"release-v1.1.6\"", request.Headers.IfNoneMatch.Single().ToString());
+        return new HttpResponseMessage(HttpStatusCode.NotModified);
+    }));
+    using var client = new GitHubReleaseClient(http);
+    var initial = await client.QueryLatestAsync("win-x64");
+    Equal(new NativeVersion(1, 1, 6), initial.Release!.Version);
+    var revalidated = await client.QueryLatestAsync("win-x64", initial.EntityTag);
+    var cached = revalidated.NotModified ? initial.Release : revalidated.Release;
+    Equal(true, cached!.Version > new NativeVersion(1, 1, 5));
 });
 
 await CheckAsync("checksum verification rejects changed update bytes", async () =>

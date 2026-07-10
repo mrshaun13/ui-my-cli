@@ -586,7 +586,7 @@ export default function App() {
     }
   }, [rekeyMap])
 
-  // When the server reports that a pending PTY exited before registration,
+  // When the server reports that a pending PTY expired before registration,
   // close the orphaned tab and clean up pendingMeta.
   useEffect(() => {
     if (expiredPending.size === 0) return
@@ -678,7 +678,7 @@ export default function App() {
 
   // ── Synthetic sidebar entries for pending sessions ─────────────────────────
   // Injects a placeholder card so the sidebar shows the new session immediately
-  // (before the Codex CLI writes a DB record).  Three detection methods prevent
+  // (before the Codex CLI writes a DB record). Two exact detection methods prevent
   // duplicate cards when the real session arrives before the rekey poll fires.
   const sidebarSessions = useMemo(() => {
     const pendingKeys = Object.keys(pendingMeta)
@@ -688,19 +688,11 @@ export default function App() {
 
     const synthetics = pendingKeys
       .filter(key => {
-        const meta = pendingMeta[key]
         // Method 1: re-keyed and real session is in DB
         const realId = rekeyMap[key]
         if (realId && dbIds.has(realId)) return false
         // Method 2: pending key itself appeared in DB (unusual, but safe)
         if (dbIds.has(key)) return false
-        // Method 3: WAL watcher pushed the real session before rekey poll —
-        // match by workingDir + creation time (within 30s window)
-        const hasDbMatch = sessions.some(s =>
-          s.workingDir === meta.workingDir &&
-          Math.abs(s.createdAt - meta.createdAt) < 30
-        )
-        if (hasDbMatch) return false
         return true
       })
       .map(key => ({

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
@@ -41,7 +41,7 @@ test('native Codex rename validation resolves a title without writing Codex stat
   process.env.UI_MY_CLI_DB_PATH = path.join(dir, 'dashboard.sqlite')
 
   try {
-    const { resolveNativeRenameTitle } = await import('../server/codex-store.js')
+    const { findNewSessionInDir, resolveNativeRenameTitle } = await import('../server/codex-store.js')
     assert.deepEqual(resolveNativeRenameTitle(threadId, 'Fix keyboard shortcuts and rename functionality'), {
       id: threadId,
       title: 'Fix keyboard shortcuts and rename functionality',
@@ -52,6 +52,32 @@ test('native Codex rename validation resolves a title without writing Codex stat
     db.close()
     assert.throws(() => resolveNativeRenameTitle(threadId, 'bad\nname'), /control characters/)
     assert.throws(() => resolveNativeRenameTitle(threadId, 'x'.repeat(201)), /1-200 characters/)
+
+    const expectedRollout = path.join(dir, 'expected.jsonl')
+    const unrelatedRollout = path.join(dir, 'unrelated.jsonl')
+    const correlationId = 'ui-my-cli-12345678-1234-1234-1234-123456789abc'
+    writeFileSync(expectedRollout, JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'expected', originator: correlationId, base_instructions: 'x'.repeat(20000) },
+    }))
+    writeFileSync(unrelatedRollout, JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'unrelated', originator: 'codex_cli_rs' },
+    }))
+    const writable = new Database(statePath)
+    writable.prepare(`
+      INSERT INTO threads (id, rollout_path, created_at, updated_at, source, cwd, title)
+      VALUES (?, ?, ?, ?, 'cli', '/repo', '')
+    `).run('expected', expectedRollout, 100, 100)
+    writable.prepare(`
+      INSERT INTO threads (id, rollout_path, created_at, updated_at, source, cwd, title)
+      VALUES (?, ?, ?, ?, 'cli', '/repo', '')
+    `).run('unrelated', unrelatedRollout, 200, 200)
+    writable.close()
+    assert.equal(findNewSessionInDir('/repo', new Set(), { correlationId }), 'expected')
+    assert.equal(findNewSessionInDir('/repo', new Set(), {
+      correlationId: 'ui-my-cli-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    }), null)
   } finally {
     rmSync(dir, { recursive: true, force: true })
     delete process.env.CODEX_HOME

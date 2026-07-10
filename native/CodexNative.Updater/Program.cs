@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using CodexNative.Core;
 
 namespace CodexNative.Updater;
@@ -25,6 +26,7 @@ internal static class Program
             try
             {
                 VerifyInstalledVersion(request);
+                NativeUpdateInstallationState.MarkInProgress(request.TargetDirectory);
                 WriteResult(
                     succeeded: true,
                     $"Codex Native {UpdaterVersion()} installed successfully.");
@@ -35,18 +37,28 @@ internal static class Program
                 RestorePreviousInstall(request.TargetDirectory, hadPreviousInstall);
                 throw;
             }
+            try
+            {
+                NativeUpdateInstallationState.Clear(request.TargetDirectory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                UpdateLog.Write($"Previous install cleanup marker retained: {ex.Message}");
+            }
             UpdateLog.Write("Update installed and restart launched.");
             return 0;
         }
         catch (Exception ex)
         {
             UpdateLog.Write($"Update failed: {ex}");
+            var failureMessage = FailureMessage(ex);
             if (request is not null)
             {
                 WriteResult(
                     succeeded: false,
-                    $"Update failed; the previous installation was preserved. {ex.Message}");
+                    failureMessage);
                 if (parentExited) TryRestartPreviousInstall(request);
+                ShowFailure(request.Platform, failureMessage);
             }
             return 1;
         }
@@ -307,6 +319,52 @@ internal static class Program
             UpdateLog.Write($"Could not relaunch the previous installation: {restartError}");
         }
     }
+
+    private static string FailureMessage(Exception error)
+    {
+        var detail = new string(error.Message
+            .Select(character => char.IsControl(character) ? ' ' : character)
+            .ToArray());
+        if (detail.Length > 1600) detail = detail[..1600];
+        return $"Codex Native could not install the update. The previous installation was preserved. {detail}";
+    }
+
+    private static void ShowFailure(NativePlatform platform, string message)
+    {
+        try
+        {
+            if (platform == NativePlatform.Windows)
+            {
+                _ = MessageBoxW(IntPtr.Zero, message, "Codex Native Update Failed", 0x10);
+                return;
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "/usr/bin/osascript",
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                CreateNoWindow = true,
+            };
+            startInfo.ArgumentList.Add("-");
+            startInfo.ArgumentList.Add(message);
+            var process = Process.Start(startInfo);
+            if (process is null) return;
+            process.StandardInput.Write(
+                "on run argv\n" +
+                "display alert \"Codex Native Update Failed\" message (item 1 of argv) as critical\n" +
+                "end run\n");
+            process.StandardInput.Close();
+            process.Dispose();
+        }
+        catch (Exception ex)
+        {
+            UpdateLog.Write($"Could not display update failure: {ex.Message}");
+        }
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBoxW(IntPtr window, string text, string caption, uint type);
 
     private static void CopyDirectory(string source, string destination)
     {

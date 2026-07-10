@@ -940,11 +940,31 @@ function listSessionIds() {
   ]);
 }
 
-function findNewSessionInDir(workingDir, excludeIds) {
+function rolloutOriginator(thread) {
+  const file = rolloutPathFor(thread);
+  if (!file) return null;
+  let descriptor;
+  try {
+    descriptor = fs.openSync(file, 'r');
+    const buffer = Buffer.alloc(16 * 1024);
+    const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, 0);
+    const prefix = buffer.toString('utf8', 0, bytesRead);
+    const metadataPrefix = prefix.split('"base_instructions"', 1)[0];
+    const match = metadataPrefix.match(/"originator"\s*:\s*("(?:\\.|[^"\\])*")/);
+    return match ? JSON.parse(match[1]) : null;
+  } catch {
+    return null;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+function findNewSessionInDir(workingDir, excludeIds, ownership = null) {
   const candidates = listThreads({ includeArchived: true, includeSystem: false })
     .filter(thread => thread.cwd === workingDir && !excludeIds.has(thread.id))
     .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
-  return candidates[0]?.id || null;
+  if (!ownership?.correlationId) return candidates[0]?.id || null;
+  return candidates.find(thread => rolloutOriginator(thread) === ownership.correlationId)?.id || null;
 }
 
 function searchSessions(query, includeArchived) {

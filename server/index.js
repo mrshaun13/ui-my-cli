@@ -21,11 +21,12 @@
 const http = require('http');
 const path = require('path');
 const fs   = require('fs');
+const { randomUUID } = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 
-const { attachClient, killPty, isPtyActive, isPtyControlPlane, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
+const { attachClient, killPty, isPtyActive, isPtyControlPlane, pendingPtyState, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
 const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./providers');
 const { isTrustedLaunchRequest, launchNativeDashboard, nativeLaunchCapability } = require('./native-launcher');
 const { CodexAppServer } = require('./codex-app-server');
@@ -219,7 +220,8 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
   try {
     // Snapshot current session IDs so the background re-key poller can detect the new one
     const before = provider.listSessionIds();
-    const tempKey = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const correlationId = `ui-my-cli-${randomUUID()}`;
+    const tempKey = `pending-${Date.now()}-${randomUUID()}`;
 
     const controlPlane = wantsCodexControlPlane(provider.id, req.body);
     const remoteEndpoint = controlPlane
@@ -227,7 +229,16 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
         () => codexAppServer.ensureStarted(),
         err => console.warn(`[codex:control-plane] unavailable for new session; using direct terminal: ${err.message}`))
       : null;
-    spawnNewSession(provider.id, tempKey, workingDir, 80, 24, { remoteEndpoint });
+    const pendingPty = spawnNewSession(provider.id, tempKey, workingDir, 80, 24, {
+      remoteEndpoint,
+      correlationId,
+    });
+    if (!pendingPty) throw new Error('The provider terminal could not be started');
+    const ownership = {
+      correlationId,
+      processId: pendingPty.pty.pid,
+      startedAt: pendingPty.startedAt,
+    };
     console.log(`[${provider.id}:create] spawned new session in ${workingDir} (key: ${tempKey})`);
 
     // Return immediately — the client connects its terminal to the temp key.
@@ -242,23 +253,22 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
       polls++;
       let realId = null;
       try {
-        const excluded = new Set(before);
-        const providerPrefix = `${provider.id}:`;
-        for (const [key, sessionId] of pendingToReal) {
-          if (key.startsWith(providerPrefix)) excluded.add(sessionId);
-        }
-        realId = provider.findNewSessionInDir(workingDir, excluded);
+        realId = provider.findNewSessionInDir(workingDir, before, ownership);
       } catch (err) {
         console.warn(`[${provider.id}:create] re-key poll ${polls} failed: ${err.message}`);
-        if (!isPtyActive(provider.id, tempKey)) {
+        const disposition = pendingSessionDisposition(
+          null,
+          pendingPtyState(provider.id, tempKey));
+        if (disposition === 'expire') {
           clearInterval(bgPoll);
+          killPty(provider.id, tempKey);
           broadcastPendingExpired(provider.id, tempKey);
         }
         return;
       }
       const disposition = pendingSessionDisposition(
         realId,
-        isPtyActive(provider.id, tempKey));
+        pendingPtyState(provider.id, tempKey));
       if (disposition === 'rekey') {
         clearInterval(bgPoll);
         pendingToReal.set(pendingKey(provider.id, tempKey), realId);
@@ -269,7 +279,8 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
         broadcastSessions(provider.id);
       } else if (disposition === 'expire') {
         clearInterval(bgPoll);
-        console.log(`[${provider.id}:create] pending PTY ${tempKey.slice(0, 20)}… exited before registration`);
+        killPty(provider.id, tempKey);
+        console.log(`[${provider.id}:create] pending PTY ${tempKey.slice(0, 20)}… expired before registration`);
         broadcastPendingExpired(provider.id, tempKey);
       } else if (polls % 90 === 0) {
         console.log(
@@ -521,8 +532,8 @@ function broadcastRekey(providerId, tempKey, realId) {
 }
 
 /**
- * Notify all status-feed clients that a pending PTY exited before Codex created
- * a real session ID. The client uses this to dismiss the orphaned temporary tab.
+ * Notify all status-feed clients that a pending PTY exited or remained detached
+ * before registration. The client uses this to dismiss the temporary tab.
  *
  * Message shape: { type: 'pending-expired', tempKey: string }
  */
