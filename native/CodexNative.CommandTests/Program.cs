@@ -63,6 +63,15 @@ Check("conversation search safely handles every prefix of a multi-character quer
         ConversationSearch.Normalize(new string('x', ConversationSearch.MaximumQueryLength + 20)).Length);
 });
 
+Check("terminal selection geometry maps and clamps pointer positions", () =>
+{
+    Equal(new TerminalCell(0, 0), TerminalSelectionGeometry.CellAt(0, 0, 1200, 600, 120, 30));
+    Equal(new TerminalCell(60, 15), TerminalSelectionGeometry.CellAt(605, 305, 1200, 600, 120, 30));
+    Equal(new TerminalCell(119, 29), TerminalSelectionGeometry.CellAt(2000, 900, 1200, 600, 120, 30));
+    Equal(new TerminalCell(0, 0), TerminalSelectionGeometry.CellAt(-20, -10, 1200, 600, 120, 30));
+    Throws<ArgumentOutOfRangeException>(() => TerminalSelectionGeometry.CellAt(0, 0, 0, 600, 120, 30));
+});
+
 Check("macOS local shell uses a structured env launch without shell interpolation", () =>
 {
     var spec = NativeLaunchBuilder.LocalShell(

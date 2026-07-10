@@ -17,6 +17,7 @@ using Iciclecreek.Terminal;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using XT = global::XTerm;
 
 namespace CodexNative;
 
@@ -3776,21 +3777,64 @@ public sealed partial class MainWindow : Window
         var meta = (args.KeyModifiers & KeyModifiers.Meta) != 0;
         var shift = (args.KeyModifiers & KeyModifiers.Shift) != 0;
         var alt = (args.KeyModifiers & KeyModifiers.Alt) != 0;
+        var standardCopy = args.Key == Key.C && primary && !alt;
         var standardPaste = args.Key == Key.V && primary && !alt;
         var terminalPaste = args.Key == Key.Insert && shift && !control && !meta && !alt;
-        if (!standardPaste && !terminalPaste) return;
-
-        args.Handled = true;
         if (sender is not TerminalControl terminal) return;
         var terminalView = args.Source as TerminalView
             ?? terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault();
         if (terminalView is null) return;
+        var state = _openTabs.Values.FirstOrDefault(candidate =>
+            ReferenceEquals(candidate.Terminal, terminal));
+        var selection = terminalView.Terminal.Selection;
+
+        if (IsPrimaryModifierKey(args.Key)
+            && (selection.HasSelection || !string.IsNullOrEmpty(state?.TerminalSelectedText)))
+        {
+            // Keep the terminal library from clearing its selection when the
+            // standalone Ctrl/Cmd key event arrives before the copy shortcut.
+            // The following C event still reports the physical modifier.
+            args.Handled = true;
+            return;
+        }
+
+        if (standardCopy)
+        {
+            var selectedText = selection.HasSelection
+                ? selection.GetSelectionText()
+                : state?.TerminalSelectedText;
+            if (!string.IsNullOrEmpty(selectedText))
+            {
+                // Mark the tunneled event handled before awaiting the clipboard.
+                // Otherwise TerminalView can forward Ctrl+C to the PTY while the
+                // asynchronous clipboard operation is still in progress.
+                args.Handled = true;
+                try
+                {
+                    var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
+                        ?? throw new InvalidOperationException("The system clipboard is unavailable.");
+                    await clipboard.SetTextAsync(selectedText);
+                    if (state is not null) state.TerminalSelectedText = selectedText;
+                    SetStatus("Terminal selection copied to clipboard", RunningBrush);
+                }
+                catch (Exception ex)
+                {
+                    NativeLog.Write($"Terminal copy failed: {ex}");
+                    SetStatus($"Copy failed: {ex.Message}", ErrorBrush);
+                }
+                return;
+            }
+        }
+
+        if (!IsModifierKey(args.Key) && state is not null)
+            state.TerminalSelectedText = null;
+        if (!standardPaste && !terminalPaste) return;
+
+        args.Handled = true;
 
         try
         {
             terminalView.Focus();
-            var state = _openTabs.Values.FirstOrDefault(candidate =>
-                ReferenceEquals(candidate.Terminal, terminal));
             if (state?.Kind == TerminalSessionKind.Codex
                 && await TryPasteClipboardScreenshotAsync(state, terminalView))
             {
@@ -3804,6 +3848,16 @@ public sealed partial class MainWindow : Window
             SetStatus($"Paste failed: {ex.Message}", ErrorBrush);
         }
     }
+
+    private static bool IsModifierKey(Key key) => key is
+        Key.LeftCtrl or Key.RightCtrl
+        or Key.LeftShift or Key.RightShift
+        or Key.LeftAlt or Key.RightAlt
+        or Key.LWin or Key.RWin;
+
+    private static bool IsPrimaryModifierKey(Key key) => OperatingSystem.IsMacOS()
+        ? key is Key.LWin or Key.RWin
+        : key is Key.LeftCtrl or Key.RightCtrl;
 
     private async Task<bool> TryPasteClipboardScreenshotAsync(
         SessionTabState state,
@@ -5893,9 +5947,24 @@ public sealed partial class MainWindow : Window
         terminalView.Terminal.Options.CursorBlink = false;
         terminalView.AddHandler(
             InputElement.PointerPressedEvent,
-            (_, args) => OnTerminalLinkPointerPressed(state, args),
+            (_, args) =>
+            {
+                OnTerminalLinkPointerPressed(state, args);
+                if (!args.Handled) OnTerminalSelectionPointerPressed(state, args);
+            },
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
+        terminalView.AddHandler(
+            InputElement.PointerMovedEvent,
+            (_, args) => OnTerminalSelectionPointerMoved(state, args),
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        terminalView.AddHandler(
+            InputElement.PointerReleasedEvent,
+            (_, args) => OnTerminalSelectionPointerReleased(state, args),
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        terminalView.PointerCaptureLost += (_, _) => CancelTerminalSelection(state);
         terminalView.Terminal.CursorStyleChanged += (_, _) =>
             Dispatcher.UIThread.Post(() =>
             {
@@ -5918,6 +5987,112 @@ public sealed partial class MainWindow : Window
                 if (state.TerminalStartupGate is null) RestyleTerminalText(state);
             });
         RestyleTerminalText(state);
+    }
+
+    private static void OnTerminalSelectionPointerPressed(
+        SessionTabState state,
+        PointerPressedEventArgs args)
+    {
+        if (state.TerminalView is not { } terminalView
+            || args.KeyModifiers.HasFlag(KeyModifiers.Alt)
+            || args.GetCurrentPoint(terminalView).Properties.PointerUpdateKind
+                is not PointerUpdateKind.LeftButtonPressed
+            || !TryGetTerminalCell(terminalView, args.GetPosition(terminalView), out var cell))
+        {
+            return;
+        }
+
+        terminalView.Focus();
+        var selection = terminalView.Terminal.Selection;
+        if (selection.HasSelection)
+        {
+            selection.ClearSelection();
+            terminalView.InvalidateVisual();
+        }
+
+        state.TerminalSelectionAnchor = cell;
+        state.TerminalSelectionActive = true;
+        state.TerminalSelectionStarted = args.ClickCount > 1;
+        state.TerminalSelectedText = null;
+        if (state.TerminalSelectionStarted)
+        {
+            var mode = args.ClickCount >= 3
+                ? XT.Selection.SelectionMode.Line
+                : XT.Selection.SelectionMode.Word;
+            selection.StartSelection(cell.Column, cell.Row, mode);
+            terminalView.InvalidateVisual();
+        }
+
+        args.Pointer.Capture(terminalView);
+        args.Handled = true;
+    }
+
+    private static void OnTerminalSelectionPointerMoved(
+        SessionTabState state,
+        PointerEventArgs args)
+    {
+        if (!state.TerminalSelectionActive
+            || state.TerminalView is not { } terminalView
+            || !TryGetTerminalCell(terminalView, args.GetPosition(terminalView), out var cell))
+        {
+            return;
+        }
+
+        var selection = terminalView.Terminal.Selection;
+        if (!state.TerminalSelectionStarted)
+        {
+            var anchor = state.TerminalSelectionAnchor;
+            selection.StartSelection(anchor.Column, anchor.Row, XT.Selection.SelectionMode.Normal);
+            state.TerminalSelectionStarted = true;
+        }
+        selection.UpdateSelection(cell.Column, cell.Row);
+        terminalView.InvalidateVisual();
+        args.Handled = true;
+    }
+
+    private static void OnTerminalSelectionPointerReleased(
+        SessionTabState state,
+        PointerReleasedEventArgs args)
+    {
+        if (!state.TerminalSelectionActive || state.TerminalView is not { } terminalView) return;
+
+        if (state.TerminalSelectionStarted)
+        {
+            var selection = terminalView.Terminal.Selection;
+            selection.EndSelection();
+            state.TerminalSelectedText = selection.GetSelectionText();
+            terminalView.InvalidateVisual();
+        }
+        state.TerminalSelectionActive = false;
+        state.TerminalSelectionStarted = false;
+        args.Pointer.Capture(null);
+        args.Handled = true;
+    }
+
+    private static void CancelTerminalSelection(SessionTabState state)
+    {
+        state.TerminalSelectionActive = false;
+        state.TerminalSelectionStarted = false;
+    }
+
+    private static bool TryGetTerminalCell(TerminalView terminalView, Point point, out TerminalCell cell)
+    {
+        var terminal = terminalView.Terminal;
+        if (terminal.Cols <= 0 || terminal.Rows <= 0
+            || terminalView.Bounds.Width <= 0 || terminalView.Bounds.Height <= 0)
+        {
+            cell = default;
+            return false;
+        }
+
+        cell = TerminalSelectionGeometry.CellAt(
+            point.X,
+            point.Y,
+            terminalView.Bounds.Width,
+            terminalView.Bounds.Height,
+            terminal.Cols,
+            terminal.Rows);
+        return true;
     }
 
     private void OnTerminalLinkPointerPressed(SessionTabState state, PointerPressedEventArgs args)
@@ -6576,6 +6751,10 @@ public sealed partial class MainWindow : Window
         public Button AdaptiveSendButton { get; } = adaptiveSendButton;
         public TextBlock AdaptiveRouteText { get; } = adaptiveRouteText;
         public TerminalView? TerminalView { get; set; }
+        public TerminalCell TerminalSelectionAnchor { get; set; }
+        public bool TerminalSelectionActive { get; set; }
+        public bool TerminalSelectionStarted { get; set; }
+        public string? TerminalSelectedText { get; set; }
         public Color MutedTextColor { get; set; } = Colors.Gray;
         public Border Inspector { get; } = inspector;
         public ScrollViewer InspectorBody { get; } = inspectorBody;
