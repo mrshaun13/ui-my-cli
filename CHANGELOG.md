@@ -26,6 +26,28 @@
   Linux, `Cmd+C` copies on macOS, and macOS `Ctrl+C` still sends SIGINT.
 - Kept multiline and long session titles compact in constrained native views
   without truncating the titles saved in workspace state.
+- Fixed the confirmed Windows updater handoff failure that left v1.1.3 in
+  place after repeated v1.1.4 downloads. The helper now waits for UI-owned
+  terminal hosts, retries transient install-directory locks, verifies the
+  installed version, checks the relaunched process through startup, preserves
+  rollback, and automatically relaunches the previous install after failure.
+- Added one-time update-result reporting in the relaunched app so a failed
+  handoff is visible instead of appearing as a silent shutdown.
+- Added cached and coalesced GitHub release checks with ETag revalidation,
+  friendly 403/429 reset times, and optional authentication only through the
+  explicitly supplied `CODEX_NATIVE_GITHUB_TOKEN` environment variable.
+- Fixed new-session prompt loss in both browser and native clients. A pending
+  session can now remain unregistered while its PTY is alive; the server no
+  longer kills it after the former three-minute metadata polling deadline.
+- Added cross-platform copy/select-all shortcuts and a visible **Copy all**
+  action for terminal scrollback.
+- Bounded new-session titles and prompt previews at API and native layout
+  boundaries, excluding injected AGENTS/environment/goal envelopes from
+  user-prompt metadata.
+- Kept the same updater, release discovery, terminal lifecycle, and clipboard
+  behavior in the Windows x64, macOS Intel, and macOS Apple Silicon builds.
+- Made sequential multi-runtime publishing deterministic by restoring each
+  native project for its requested RID before compiling the release payload.
 - Remaining non-goals: cloud speech, auto-submit of transcribed text, macOS
   signing/notarization, and a fully self-contained desktop payload remain
   separate work.

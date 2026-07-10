@@ -819,6 +819,7 @@ public sealed partial class MainWindow : Window
         state.AdaptivePromptBox.IsEnabled = !state.AdaptiveSubmitting && !state.Pane.AdaptiveChanging;
         state.AdaptiveSendButton.IsEnabled = !state.AdaptiveSubmitting && !state.Pane.AdaptiveChanging;
         ApplyAdaptiveToggleTheme(state, EffectivePaneTheme(state.Pane));
+        state.ScreenshotButton.Margin = new Thickness(0);
         ToolTip.SetTip(
             state.AdaptiveToggleButton,
             state.ControlPlaneAvailable switch
@@ -1039,6 +1040,7 @@ public sealed partial class MainWindow : Window
         _workspaceReady = true;
         await SaveWorkspaceAsync();
         _updateService.CleanupPreviousInstall(_platform);
+        ShowPreviousUpdateResult();
         _refreshTimer.Start();
         _updateCheckTimer.Start();
         _ = CheckForUpdateAsync(reportCurrent: false);
@@ -1313,6 +1315,24 @@ public sealed partial class MainWindow : Window
             ? CurrentProviderLabel.ToUpperInvariant()
             : $"{CurrentProviderLabel.ToUpperInvariant()} NATIVE DASHBOARD";
         LaunchBrowserButton.Content = width < 1050 ? "Browser" : "Launch in Browser";
+    }
+
+    private void ShowPreviousUpdateResult()
+    {
+        try
+        {
+            var result = NativeUpdateResultStore.Take(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+            if (result is null) return;
+            SetStatus(result.Message, result.Succeeded ? RunningBrush : ErrorBrush);
+            NativeLog.Write(
+                $"Previous updater result for {result.Version}: " +
+                $"{(result.Succeeded ? "success" : "failure")} at {result.RecordedAt:O}.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            NativeLog.Write($"Could not read previous update result: {ex.Message}");
+        }
     }
 
     private void InitializeSelectors()
@@ -2932,7 +2952,7 @@ public sealed partial class MainWindow : Window
         };
         terminal.AddHandler(
             InputElement.KeyDownEvent,
-            OnTerminalPasteKeyDown,
+            OnTerminalClipboardKeyDown,
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
         terminal.AddHandler(
@@ -3249,16 +3269,33 @@ public sealed partial class MainWindow : Window
             Background = ResourceBrush("ElevatedBrush"),
             BorderBrush = ResourceBrush("BorderBrightBrush"),
         };
+        var copyAllButton = new Button
+        {
+            Content = "Copy all",
+            Height = 28,
+            Padding = new Thickness(9, 2),
+            FontSize = 11,
+            Opacity = 0.82,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Background = ResourceBrush("ElevatedBrush"),
+            BorderBrush = ResourceBrush("BorderBrightBrush"),
+        };
         ToolTip.SetTip(microphoneButton, "Start voice-to-text for this terminal");
         AutomationProperties.SetName(microphoneButton, "Start voice-to-text for this terminal");
-        var captureActions = new StackPanel
+        var copyShortcut = OperatingSystem.IsMacOS() ? "Cmd+A" : "Ctrl+Shift+A";
+        ToolTip.SetTip(
+            copyAllButton,
+            $"Copy all terminal scrollback ({copyShortcut}). Hold Shift while dragging to select when the terminal app tracks the mouse.");
+        AutomationProperties.SetName(copyAllButton, "Copy all terminal scrollback");
+        var terminalUtilityBar = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 6,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
             Margin = new Thickness(0, 0, 9, 8),
-            Children = { microphoneButton, screenshotButton },
+            Children = { copyAllButton, microphoneButton, screenshotButton },
         };
         var adaptiveToggleButton = new ToggleButton
         {
@@ -3341,7 +3378,7 @@ public sealed partial class MainWindow : Window
         };
         AutomationProperties.SetName(adaptiveComposer, "Adaptive Codex prompt composer");
         content.Children.Add(terminalClip);
-        content.Children.Add(captureActions);
+        content.Children.Add(terminalUtilityBar);
         content.Children.Add(adaptiveToggleHost);
         content.Children.Add(adaptiveComposer);
         content.Children.Add(reconnectBanner);
@@ -3351,10 +3388,10 @@ public sealed partial class MainWindow : Window
         Grid.SetRow(adaptiveComposer, AdaptiveComposerRow);
         Grid.SetRow(inspectorResizeTrack, InspectorSplitterRow);
         Grid.SetRow(inspector, InspectorRow);
-        Grid.SetRow(captureActions, 0);
+        Grid.SetRow(terminalUtilityBar, 0);
         Grid.SetRow(adaptiveToggleHost, 0);
         terminalClip.ZIndex = 0;
-        captureActions.ZIndex = 5;
+        terminalUtilityBar.ZIndex = 5;
         adaptiveToggleHost.ZIndex = 6;
         adaptiveComposer.ZIndex = 6;
         inspectorResizeTrack.ZIndex = 3;
@@ -3387,6 +3424,7 @@ public sealed partial class MainWindow : Window
             MaxLines = 1,
             TextWrapping = TextWrapping.NoWrap,
             TextTrimming = TextTrimming.CharacterEllipsis,
+            ClipToBounds = true,
             VerticalAlignment = VerticalAlignment.Center,
         };
         var inlineRenameBox = new TextBox
@@ -3422,7 +3460,7 @@ public sealed partial class MainWindow : Window
         };
         AutomationProperties.SetName(tab, displayTitle);
         var state = new SessionTabState(
-            key, tab, terminal, content, screenshotButton, microphoneButton,
+            key, tab, terminal, content, screenshotButton, microphoneButton, copyAllButton,
             adaptiveToggleButton, adaptivePulseHalo, adaptiveComposer, adaptivePromptBox, adaptiveSendButton, adaptiveRouteText,
             inspector, inspectorBody, inspectorHeading, inspectorToggleButton, inspectorSplitter,
             inspectorResizeTrack, inspectorResizeGrip,
@@ -3436,6 +3474,7 @@ public sealed partial class MainWindow : Window
         ApplyThemeToSessionState(state, EffectivePaneTheme(pane));
         screenshotButton.Click += async (_, _) => await CaptureAndPasteScreenshotAsync(state);
         microphoneButton.Click += async (_, _) => await ToggleSpeechCaptureAsync(state);
+        copyAllButton.Click += async (_, _) => await CopyAllTerminalAsync(state);
         adaptiveToggleButton.Click += async (_, _) =>
             await SetPaneAdaptiveEnabledAsync(pane, adaptiveToggleButton.IsChecked == true);
         adaptiveSendButton.Click += async (_, _) => await SubmitAdaptivePromptAsync(state);
@@ -3824,16 +3863,21 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnTerminalPasteKeyDown(object? sender, KeyEventArgs args)
+    private async void OnTerminalClipboardKeyDown(object? sender, KeyEventArgs args)
     {
         var primary = (args.KeyModifiers & (OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control)) != 0;
         var control = (args.KeyModifiers & KeyModifiers.Control) != 0;
         var meta = (args.KeyModifiers & KeyModifiers.Meta) != 0;
         var shift = (args.KeyModifiers & KeyModifiers.Shift) != 0;
         var alt = (args.KeyModifiers & KeyModifiers.Alt) != 0;
+        var action = TerminalClipboardShortcut.Resolve(
+            _platform.Platform,
+            args.Key.ToString(),
+            control,
+            meta,
+            shift,
+            alt);
         var standardCopy = args.Key == Key.C && primary && !alt;
-        var standardPaste = args.Key == Key.V && primary && !alt;
-        var terminalPaste = args.Key == Key.Insert && shift && !control && !meta && !alt;
         if (sender is not TerminalControl terminal) return;
         var terminalView = args.Source as TerminalView
             ?? terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault();
@@ -3846,34 +3890,8 @@ public sealed partial class MainWindow : Window
         {
             // Keep the terminal library from clearing its selection when the
             // standalone Ctrl/Cmd key event arrives before the copy shortcut.
-            // The following C event still reports the physical modifier.
             args.Handled = true;
             return;
-        }
-
-        if (standardCopy)
-        {
-            var selectedText = selection.HasSelection ? selection.GetSelectionText() : null;
-            if (!string.IsNullOrEmpty(selectedText))
-            {
-                // Mark the tunneled event handled before awaiting the clipboard.
-                // Otherwise TerminalView can forward Ctrl+C to the PTY while the
-                // asynchronous clipboard operation is still in progress.
-                args.Handled = true;
-                try
-                {
-                    var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
-                        ?? throw new InvalidOperationException("The system clipboard is unavailable.");
-                    await clipboard.SetTextAsync(selectedText);
-                    SetStatus("Terminal selection copied to clipboard", RunningBrush);
-                }
-                catch (Exception ex)
-                {
-                    NativeLog.Write($"Terminal copy failed: {ex}");
-                    SetStatus($"Copy failed: {ex.Message}", ErrorBrush);
-                }
-                return;
-            }
         }
 
         if (OperatingSystem.IsMacOS()
@@ -3883,29 +3901,76 @@ public sealed partial class MainWindow : Window
             && !shift
             && !alt)
         {
+            // Cmd+C owns clipboard copying on macOS. Let Control+C continue
+            // to the PTY as SIGINT even when a selection is visible.
             selection.ClearSelection();
             terminalView.InvalidateVisual();
             return;
         }
 
-        if (!standardPaste && !terminalPaste) return;
+        if (standardCopy || action == TerminalClipboardAction.CopySelection)
+        {
+            var selectedText = selection.HasSelection ? selection.GetSelectionText() : null;
+            args.Handled = true;
+            if (string.IsNullOrEmpty(selectedText))
+            {
+                SetStatus("Select terminal text first, or use Copy all", StartingBrush);
+                return;
+            }
+            try
+            {
+                var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
+                    ?? throw new InvalidOperationException("The system clipboard is unavailable.");
+                await clipboard.SetTextAsync(selectedText);
+                SetStatus("Terminal selection copied to clipboard", RunningBrush);
+            }
+            catch (Exception ex)
+            {
+                NativeLog.Write($"Terminal copy failed: {ex}");
+                SetStatus($"Copy failed: {ex.Message}", ErrorBrush);
+            }
+            return;
+        }
 
+        if (action == TerminalClipboardAction.CopyAll)
+        {
+            args.Handled = true;
+            if (state is not null) await CopyAllTerminalAsync(state);
+            return;
+        }
+
+        if (action != TerminalClipboardAction.Paste) return;
         args.Handled = true;
-
         try
         {
             terminalView.Focus();
             if (state?.Kind == TerminalSessionKind.Codex
-                && await TryPasteClipboardScreenshotAsync(state, terminalView))
-            {
-                return;
-            }
+                && await TryPasteClipboardScreenshotAsync(state, terminalView)) return;
             await terminalView.PasteAsync();
         }
         catch (Exception ex)
         {
-            NativeLog.Write($"Terminal paste failed: {ex}");
-            SetStatus($"Paste failed: {ex.Message}", ErrorBrush);
+            NativeLog.Write($"Terminal clipboard action failed: {ex}");
+            SetStatus($"Terminal clipboard action failed: {ex.Message}", ErrorBrush);
+        }
+    }
+
+    private async Task CopyAllTerminalAsync(SessionTabState state)
+    {
+        var terminalView = state.TerminalView
+            ?? state.Terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault();
+        if (terminalView is null) return;
+        try
+        {
+            terminalView.Terminal.Selection.SelectAll();
+            terminalView.InvalidateVisual();
+            await terminalView.CopyAsync();
+            SetStatus($"Copied all terminal scrollback for {state.TitleBlock.Text}", RunningBrush);
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Copy all terminal scrollback failed: {ex}");
+            SetStatus($"Copy all failed: {ex.Message}", ErrorBrush);
         }
     }
 
@@ -4963,7 +5028,7 @@ public sealed partial class MainWindow : Window
                 new TextBlock { Text = session.CompactDisplayTitle, Foreground = ResourceBrush("PrimaryBrush"), FontWeight = FontWeight.Bold, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis },
                 new TextBlock { Text = session.DisplayMeta, Foreground = ResourceBrush("SecondaryBrush"), FontSize = 11 },
                 new TextBlock { Text = $"status · {session.Status}", Foreground = ResourceBrush("AccentBrush"), FontSize = 11 },
-                new TextBlock { Text = session.LastUserPrompt, Foreground = ResourceBrush("MutedBrush"), FontSize = 11, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis },
+                new TextBlock { Text = session.DisplayPrompt, Foreground = ResourceBrush("MutedBrush"), FontSize = 11, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis },
             },
         },
     };
@@ -5553,7 +5618,7 @@ public sealed partial class MainWindow : Window
         UpdateButton.Content = "Checking…";
         try
         {
-            var release = await _updateService.CheckAsync(_platform);
+            var release = await _updateService.CheckAsync(_platform, force: reportCurrent);
             _availableUpdate = release;
             if (release is null)
             {
@@ -5567,6 +5632,12 @@ public sealed partial class MainWindow : Window
                 ToolTip.SetTip(UpdateButton, $"Install {release.DisplayName} after active sessions finish");
                 SetStatus($"Codex Native {release.Version} is available", StartingBrush);
             }
+        }
+        catch (GitHubRateLimitException ex)
+        {
+            UpdateButton.Content = "Check updates";
+            NativeLog.Write($"Update check rate limited until {ex.RetryAt:O}.");
+            SetStatus($"GitHub rate limit reached · retry after {ex.RetryAt.ToLocalTime():g}", StartingBrush);
         }
         catch (Exception ex)
         {
@@ -5604,7 +5675,12 @@ public sealed partial class MainWindow : Window
                 cancellationToken);
             await WaitForUpdateDrainAsync(cancellationToken);
             await SaveWorkspaceAsync();
-            _updateService.LaunchInstaller(prepared, _platform).Dispose();
+            var terminalHostProcessIds = _openTabs.Values
+                .Where(state => state.IsRunning && state.Terminal.Pid > 0)
+                .Select(state => state.Terminal.Pid)
+                .Distinct()
+                .ToArray();
+            _updateService.LaunchInstaller(prepared, _platform, terminalHostProcessIds).Dispose();
             SetStatus($"Installing Codex Native {release.Version}; restarting…", RunningBrush);
             _shutdownConfirmed = true;
             Close();
@@ -5889,6 +5965,9 @@ public sealed partial class MainWindow : Window
         state.MicrophoneButton.Background = Brush.Parse(theme.Elevated);
         state.MicrophoneButton.BorderBrush = Brush.Parse(theme.BorderBright);
         state.MicrophoneButton.Foreground = primary;
+        state.CopyAllButton.Background = Brush.Parse(theme.Elevated);
+        state.CopyAllButton.BorderBrush = Brush.Parse(theme.BorderBright);
+        state.CopyAllButton.Foreground = primary;
         ApplyAdaptiveToggleTheme(state, theme);
         state.AdaptiveComposer.Background = surface;
         state.AdaptiveComposer.BorderBrush = accent;
@@ -6848,6 +6927,7 @@ public sealed partial class MainWindow : Window
         Grid terminalViewport,
         Button screenshotButton,
         Button microphoneButton,
+        Button copyAllButton,
         ToggleButton adaptiveToggleButton,
         Border adaptivePulseHalo,
         Border adaptiveComposer,
@@ -6891,6 +6971,7 @@ public sealed partial class MainWindow : Window
         public Grid TerminalViewport { get; } = terminalViewport;
         public Button ScreenshotButton { get; } = screenshotButton;
         public Button MicrophoneButton { get; } = microphoneButton;
+        public Button CopyAllButton { get; } = copyAllButton;
         public ToggleButton AdaptiveToggleButton { get; } = adaptiveToggleButton;
         public Border AdaptivePulseHalo { get; } = adaptivePulseHalo;
         public Border AdaptiveComposer { get; } = adaptiveComposer;

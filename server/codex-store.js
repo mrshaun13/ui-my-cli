@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const Database = require('better-sqlite3');
+const { sessionDisplayTitle, isSyntheticUserMessage } = require('./session-display-text');
 const { resolveCodexHome, resolveStateDbPath, findRolloutPath } = require('./codex-paths');
 const dashboardStore = require('./dashboard-store');
 const transcriptHeadless = require('./transcript-headless-store');
@@ -180,6 +181,7 @@ function isDuplicateMessage(a, b) {
 
 function appendMessage(messages, msg) {
   if (!msg?.text) return;
+  if (msg.role === 'user' && isSyntheticUserMessage(msg.text)) return;
   const recentStart = Math.max(0, messages.length - 4);
   const existingOffset = messages.slice(recentStart).findIndex(existing => isDuplicateMessage(existing, msg));
   const existingIndex = existingOffset === -1 ? -1 : recentStart + existingOffset;
@@ -241,7 +243,7 @@ function applySummaryEvent(summary, event) {
     : event.type === 'event_msg'
       ? eventMessage(event.payload || {})
       : null;
-  if (msg?.role === 'user') {
+  if (msg?.role === 'user' && !isSyntheticUserMessage(msg.text)) {
     summary.firstUser ||= msg.text;
     summary.lastUser = msg.text;
   } else if (msg?.role === 'assistant') {
@@ -482,7 +484,9 @@ function normalizeThread(thread, _overrides = null, rollout = null) {
   const firstUser = thread.first_user_message || parsed.messages.find(m => m.role === 'user')?.text || null;
   const lastUser = [...parsed.messages].reverse().find(m => m.role === 'user')?.text || firstUser;
   const lastAssistant = [...parsed.messages].reverse().find(m => m.role === 'assistant')?.text || null;
-  const title = thread.title || firstUser || thread.id.slice(0, 8);
+  const title = sessionDisplayTitle(
+    thread.title || firstUser,
+    thread.id.slice(0, 8));
   const access = accessProfile(thread, parsed);
 
   return {

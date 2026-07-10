@@ -1,0 +1,39 @@
+namespace CodexNative.Core;
+
+public static class NativeInstallProcessPolicy
+{
+    public static bool IsOwnedTerminalHost(
+        NativePlatform platform,
+        string targetDirectory,
+        string? processExecutable)
+    {
+        if (string.IsNullOrWhiteSpace(processExecutable)
+            || !Path.IsPathFullyQualified(targetDirectory)
+            || !Path.IsPathFullyQualified(processExecutable)) return false;
+
+        var expected = platform == NativePlatform.Windows
+            ? Path.Combine(targetDirectory, "CodexNative.TerminalHost.exe")
+            : Path.Combine(targetDirectory, "Contents", "MacOS", "CodexNative.TerminalHost");
+        var comparison = platform == NativePlatform.Windows
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return Path.GetFullPath(expected).Equals(Path.GetFullPath(processExecutable), comparison);
+    }
+
+    public static bool IsMainApplication(
+        NativePlatform platform,
+        string targetDirectory,
+        string? processExecutable)
+    {
+        if (string.IsNullOrWhiteSpace(processExecutable)
+            || !Path.IsPathFullyQualified(targetDirectory)
+            || !Path.IsPathFullyQualified(processExecutable)) return false;
+        var expected = platform == NativePlatform.Windows
+            ? Path.Combine(targetDirectory, "CodexNative.exe")
+            : Path.Combine(targetDirectory, "Contents", "MacOS", "CodexNative");
+        var comparison = platform == NativePlatform.Windows
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return Path.GetFullPath(expected).Equals(Path.GetFullPath(processExecutable), comparison);
+    }
+}

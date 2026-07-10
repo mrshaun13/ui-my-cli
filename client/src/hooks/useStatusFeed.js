@@ -22,7 +22,7 @@ export function useStatusFeed(providerId) {
   const [error, setError] = useState(null)
   // rekeyMap: { [tempKey]: realId } — pending sessions that have been re-keyed
   const [rekeyMap, setRekeyMap] = useState({})
-  // expiredPending: Set of temp keys whose terminal exited before persistence
+  // expiredPending: Set of temp keys whose PTY exited before session registration
   const [expiredPending, setExpiredPending] = useState(() => new Set())
   const wsRef = useRef(null)
   const backoffRef = useRef(INITIAL_BACKOFF)

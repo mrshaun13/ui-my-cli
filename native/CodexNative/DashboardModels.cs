@@ -32,7 +32,10 @@ public class DashboardSession
         || Source.Contains("transcript", StringComparison.OrdinalIgnoreCase);
 
     [JsonIgnore]
-    public string DisplayTitle => string.IsNullOrWhiteSpace(Title) ? "Untitled session" : Title;
+    public string DisplayTitle => SessionDisplayText.Title(Title);
+
+    [JsonIgnore]
+    public string DisplayPrompt => SessionDisplayText.PromptPreview(LastUserPrompt);
 
     [JsonIgnore]
     public string CompactDisplayTitle => SessionTitleDisplay.Compact(DisplayTitle);

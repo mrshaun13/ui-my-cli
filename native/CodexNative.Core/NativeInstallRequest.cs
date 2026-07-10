@@ -4,7 +4,8 @@ public sealed record NativeInstallRequest(
     int ParentProcessId,
     NativePlatform Platform,
     string SourcePayload,
-    string TargetDirectory)
+    string TargetDirectory,
+    IReadOnlyList<int>? RelatedProcessIds = null)
 {
     public static NativeInstallRequest Parse(IReadOnlyList<string> arguments)
     {
@@ -16,8 +17,8 @@ public sealed record NativeInstallRequest(
             if (!values.TryAdd(arguments[index], arguments[index + 1]))
                 throw new ArgumentException($"Duplicate updater argument: {arguments[index]}", nameof(arguments));
         }
-        var expectedNames = new[] { "--parent-pid", "--platform", "--source", "--target" };
-        if (values.Count != expectedNames.Length || values.Keys.Any(name => !expectedNames.Contains(name, StringComparer.Ordinal)))
+        var expectedNames = new[] { "--parent-pid", "--platform", "--source", "--target", "--wait-pids" };
+        if (values.Count is < 4 or > 5 || values.Keys.Any(name => !expectedNames.Contains(name, StringComparer.Ordinal)))
             throw new ArgumentException("Updater received an unknown or incomplete argument set.", nameof(arguments));
 
         if (!int.TryParse(Required(values, "--parent-pid"), out var parentPid) || parentPid <= 0)
@@ -36,16 +37,51 @@ public sealed record NativeInstallRequest(
             .Equals(target.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), PathComparison) == true)
             throw new ArgumentException("Updater target cannot be a filesystem root.", nameof(arguments));
 
-        return new NativeInstallRequest(parentPid, platform, source, target);
+        var relatedProcessIds = values.TryGetValue("--wait-pids", out var waitPids)
+            ? ParseProcessIds(waitPids, parentPid)
+            : null;
+
+        return new NativeInstallRequest(parentPid, platform, source, target, relatedProcessIds);
     }
 
-    public IReadOnlyList<string> ToArguments() =>
-    [
-        "--parent-pid", ParentProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        "--platform", Platform == NativePlatform.Windows ? "windows" : "macos",
-        "--source", SourcePayload,
-        "--target", TargetDirectory,
-    ];
+    public IReadOnlyList<string> ToArguments()
+    {
+        var arguments = new List<string>
+        {
+            "--parent-pid", ParentProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "--platform", Platform == NativePlatform.Windows ? "windows" : "macos",
+            "--source", SourcePayload,
+            "--target", TargetDirectory,
+        };
+        var related = RelatedProcessIds?
+            .Where(processId => processId > 0 && processId != ParentProcessId)
+            .Distinct()
+            .Take(MaximumRelatedProcesses)
+            .ToArray();
+        if (related is { Length: > 0 })
+        {
+            arguments.Add("--wait-pids");
+            arguments.Add(string.Join(',', related));
+        }
+        return arguments;
+    }
+
+    private const int MaximumRelatedProcesses = 64;
+
+    private static IReadOnlyList<int> ParseProcessIds(string value, int parentPid)
+    {
+        var fields = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (fields.Length is 0 or > MaximumRelatedProcesses)
+            throw new ArgumentException("Updater related process list is invalid.");
+        var processIds = new List<int>(fields.Length);
+        foreach (var field in fields)
+        {
+            if (!int.TryParse(field, out var processId) || processId <= 0 || processId == parentPid)
+                throw new ArgumentException("Updater related process list is invalid.");
+            if (!processIds.Contains(processId)) processIds.Add(processId);
+        }
+        return processIds;
+    }
 
     private static string Required(IReadOnlyDictionary<string, string> values, string name) =>
         values.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)

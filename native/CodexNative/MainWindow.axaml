@@ -441,18 +441,21 @@
                     <Border Height="1" VerticalAlignment="Bottom"
                             Background="{DynamicResource SessionDividerBrush}"
                             IsHitTestVisible="False" />
-                    <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="22,*,Auto" Margin="12,8,12,9">
+                    <Grid RowDefinitions="20,16,32" ColumnDefinitions="22,*,Auto" Margin="12,8,12,9"
+                          Height="68" ClipToBounds="True">
                       <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StatusGlyph}"
                                  Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
                       <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CompactDisplayTitle}"
                                  Foreground="{DynamicResource PrimaryBrush}" FontWeight="SemiBold"
-                                 MaxLines="1" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                 MaxLines="1" TextWrapping="NoWrap"
+                                 TextTrimming="CharacterEllipsis" ClipToBounds="True" />
                       <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DisplayMeta}"
                                  Foreground="{DynamicResource SecondaryBrush}" FontSize="11"
                                  TextTrimming="CharacterEllipsis" />
-                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding LastUserPrompt}"
+                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DisplayPrompt}"
                                  Foreground="{DynamicResource MutedBrush}" FontSize="11"
-                                 MaxLines="2" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+                                 MaxHeight="32" MaxLines="2" TextWrapping="Wrap"
+                                 TextTrimming="CharacterEllipsis" ClipToBounds="True" />
                       <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" Orientation="Horizontal" Spacing="3">
                         <Button Content="ⓘ" Padding="5,1" ToolTip.Tip="Open session summary"
                                 Tag="{Binding}" Click="OnPreviewSessionClicked" />

@@ -1,20 +1,33 @@
 using System.Diagnostics;
+using System.Reflection;
 using CodexNative.Core;
 
 namespace CodexNative.Updater;
 
 internal static class Program
 {
+    private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan InstallRetryTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan RestartHealthWindow = TimeSpan.FromSeconds(5);
+
     private static int Main(string[] args)
     {
+        NativeInstallRequest? request = null;
+        var parentExited = false;
         try
         {
-            var request = NativeInstallRequest.Parse(args);
+            request = NativeInstallRequest.Parse(args);
             UpdateLog.Write($"Preparing update from {request.SourcePayload} to {request.TargetDirectory}.");
-            WaitForParent(request.ParentProcessId);
+            WaitForProcesses(request);
+            parentExited = true;
+            QuiesceOwnedTerminalHosts(request);
             var hadPreviousInstall = Install(request);
             try
             {
+                VerifyInstalledVersion(request);
+                WriteResult(
+                    succeeded: true,
+                    $"Codex Native {UpdaterVersion()} installed successfully.");
                 Restart(request);
             }
             catch
@@ -28,21 +41,78 @@ internal static class Program
         catch (Exception ex)
         {
             UpdateLog.Write($"Update failed: {ex}");
+            if (request is not null)
+            {
+                WriteResult(
+                    succeeded: false,
+                    $"Update failed; the previous installation was preserved. {ex.Message}");
+                if (parentExited) TryRestartPreviousInstall(request);
+            }
             return 1;
         }
     }
 
-    private static void WaitForParent(int parentProcessId)
+    private static void WaitForProcesses(NativeInstallRequest request)
+    {
+        WaitForProcess(request.ParentProcessId, "native app", ProcessExitTimeout, failOnTimeout: true);
+        foreach (var processId in request.RelatedProcessIds ?? [])
+            WaitForProcess(processId, "terminal host", TimeSpan.FromSeconds(5), failOnTimeout: false);
+    }
+
+    private static void WaitForProcess(
+        int processId,
+        string description,
+        TimeSpan timeout,
+        bool failOnTimeout)
     {
         try
         {
-            using var parent = Process.GetProcessById(parentProcessId);
-            if (!parent.WaitForExit((int)TimeSpan.FromMinutes(2).TotalMilliseconds))
-                throw new TimeoutException("The native app did not exit within two minutes.");
+            using var process = Process.GetProcessById(processId);
+            if (process.WaitForExit((int)timeout.TotalMilliseconds)) return;
+            if (failOnTimeout)
+                throw new TimeoutException(
+                    $"The {description} process {processId} did not exit within {timeout.TotalSeconds:0} seconds.");
+            UpdateLog.Write(
+                $"The {description} process {processId} is still running; validating ownership before forced cleanup.");
         }
         catch (ArgumentException)
         {
-            // The app already exited between launching this helper and lookup.
+            // The process already exited between launching this helper and lookup.
+        }
+    }
+
+    private static void QuiesceOwnedTerminalHosts(NativeInstallRequest request)
+    {
+        foreach (var process in Process.GetProcesses())
+        {
+            using (process)
+            {
+                if (process.Id == Environment.ProcessId) continue;
+                string? executable;
+                try { executable = process.MainModule?.FileName; }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+                {
+                    continue;
+                }
+                if (!NativeInstallProcessPolicy.IsOwnedTerminalHost(
+                        request.Platform,
+                        request.TargetDirectory,
+                        executable)) continue;
+
+                UpdateLog.Write($"Waiting for owned terminal host PID {process.Id} to release the installation.");
+                try
+                {
+                    if (process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds)) continue;
+                    UpdateLog.Write($"Stopping stale owned terminal host PID {process.Id} before installation.");
+                    process.Kill(entireProcessTree: true);
+                    if (!process.WaitForExit((int)TimeSpan.FromSeconds(10).TotalMilliseconds))
+                        throw new TimeoutException($"Owned terminal host PID {process.Id} did not stop.");
+                }
+                catch (InvalidOperationException)
+                {
+                    // It exited between inspection and the wait/kill operation.
+                }
+            }
         }
     }
 
@@ -65,10 +135,10 @@ internal static class Program
         try
         {
             CopyDirectory(source, installStaging);
-            TryDeleteDirectory(backup);
+            RetryFileOperation(() => TryDeleteDirectory(backup), "remove the previous update backup");
             if (Directory.Exists(target))
             {
-                Directory.Move(target, backup);
+                RetryFileOperation(() => Directory.Move(target, backup), "quiesce and move the current installation");
                 targetMoved = true;
             }
             Directory.Move(installStaging, target);
@@ -115,10 +185,127 @@ internal static class Program
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The operating system did not restart Codex Native.");
-        if (request.Platform == NativePlatform.MacOS
-            && process.WaitForExit((int)TimeSpan.FromSeconds(10).TotalMilliseconds)
+        if (request.Platform == NativePlatform.Windows)
+        {
+            if (process.WaitForExit((int)RestartHealthWindow.TotalMilliseconds))
+                throw new InvalidOperationException(
+                    $"The restarted Codex Native process exited during its startup health window with code {process.ExitCode}.");
+            return;
+        }
+        if (process.WaitForExit((int)TimeSpan.FromSeconds(10).TotalMilliseconds)
             && process.ExitCode != 0)
             throw new InvalidOperationException($"macOS rejected the app restart with exit code {process.ExitCode}.");
+        var deadline = Stopwatch.StartNew();
+        while (deadline.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            if (IsMainApplicationRunning(request)) return;
+            Thread.Sleep(TimeSpan.FromMilliseconds(250));
+        }
+        throw new InvalidOperationException("macOS accepted the open request, but Codex Native did not remain running.");
+    }
+
+    private static bool IsMainApplicationRunning(NativeInstallRequest request)
+    {
+        foreach (var candidate in Process.GetProcesses())
+        {
+            using (candidate)
+            {
+                string? executable;
+                try { executable = candidate.MainModule?.FileName; }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+                {
+                    continue;
+                }
+                if (NativeInstallProcessPolicy.IsMainApplication(
+                        request.Platform,
+                        request.TargetDirectory,
+                        executable)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static void VerifyInstalledVersion(NativeInstallRequest request)
+    {
+        var executable = request.Platform == NativePlatform.Windows
+            ? Path.Combine(request.TargetDirectory, "CodexNative.exe")
+            : Path.Combine(request.TargetDirectory, "Contents", "MacOS", "CodexNative");
+        if (!File.Exists(executable))
+            throw new InvalidDataException("The installed update does not contain the Codex Native executable.");
+
+        var expected = Assembly.GetExecutingAssembly().GetName().Version
+            ?? throw new InvalidOperationException("The updater version is unavailable.");
+        var installedInfo = FileVersionInfo.GetVersionInfo(executable);
+        if (installedInfo.FileMajorPart != expected.Major
+            || installedInfo.FileMinorPart != expected.Minor
+            || installedInfo.FileBuildPart != expected.Build)
+            throw new InvalidDataException(
+                $"Installed version {installedInfo.FileVersion ?? "unknown"} does not match updater version " +
+                $"{expected.Major}.{expected.Minor}.{expected.Build}.");
+    }
+
+    private static string UpdaterVersion()
+    {
+        var version = Assembly.GetExecutingAssembly().GetName().Version
+            ?? throw new InvalidOperationException("The updater version is unavailable.");
+        return $"{version.Major}.{version.Minor}.{version.Build}";
+    }
+
+    private static void WriteResult(bool succeeded, string message)
+    {
+        try
+        {
+            NativeUpdateResultStore.Write(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                new NativeUpdateResult(succeeded, UpdaterVersion(), message, DateTimeOffset.UtcNow));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            UpdateLog.Write($"Could not persist update result: {ex.Message}");
+        }
+    }
+
+    private static void RetryFileOperation(Action operation, string description)
+    {
+        var deadline = Stopwatch.StartNew();
+        var attempt = 0;
+        while (true)
+        {
+            try
+            {
+                operation();
+                if (attempt > 0) UpdateLog.Write($"Succeeded on retry {attempt + 1} to {description}.");
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                attempt++;
+                if (deadline.Elapsed >= InstallRetryTimeout)
+                    throw new IOException($"Unable to {description} within {InstallRetryTimeout.TotalSeconds:0} seconds.", ex);
+                var delay = TimeSpan.FromMilliseconds(Math.Min(2000, 200 * Math.Pow(1.6, attempt - 1)));
+                UpdateLog.Write(
+                    $"Retry {attempt} to {description} after transient filesystem error: {ex.Message}");
+                Thread.Sleep(delay);
+            }
+        }
+    }
+
+    private static void TryRestartPreviousInstall(NativeInstallRequest request)
+    {
+        try
+        {
+            var executable = request.Platform == NativePlatform.Windows
+                ? Path.Combine(request.TargetDirectory, "CodexNative.exe")
+                : request.TargetDirectory;
+            if (request.Platform == NativePlatform.Windows && !File.Exists(executable)) return;
+            if (request.Platform == NativePlatform.MacOS && !Directory.Exists(executable)) return;
+            Restart(request);
+            UpdateLog.Write("Relaunched the previous Codex Native installation after update failure.");
+        }
+        catch (Exception restartError)
+        {
+            UpdateLog.Write($"Could not relaunch the previous installation: {restartError}");
+        }
     }
 
     private static void CopyDirectory(string source, string destination)

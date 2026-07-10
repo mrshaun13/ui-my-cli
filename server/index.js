@@ -30,7 +30,7 @@ const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./provi
 const { isTrustedLaunchRequest, launchNativeDashboard, nativeLaunchCapability } = require('./native-launcher');
 const { CodexAppServer } = require('./codex-app-server');
 const { wantsCodexControlPlane, tryStartCodexControlPlane } = require('./codex-control-plane');
-const { trackPendingSession } = require('./pending-session-tracker');
+const { pendingSessionDisposition } = require('./pending-session-lifecycle');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
 // v5 passes the user-selected working root explicitly to remote Codex TUIs.
@@ -235,34 +235,47 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
     // poll in the background to re-key the PTY entry once the real session ID
     // appears. This prevents a duplicate PTY from being spawned if the user
     // clicks the sidebar card for the new session.
-    // A new Codex TUI does not persist its thread until the first turn starts.
-    // Keep a healthy pending terminal alive indefinitely: poll quickly for the
-    // first three minutes, then back off until it registers or actually exits.
-    trackPendingSession({
-      findSessionId: () => {
+    const POLL_INTERVAL = 2000;
+    let polls = 0;
+
+    const bgPoll = setInterval(() => {
+      polls++;
+      let realId = null;
+      try {
         const excluded = new Set(before);
         const providerPrefix = `${provider.id}:`;
         for (const [key, sessionId] of pendingToReal) {
           if (key.startsWith(providerPrefix)) excluded.add(sessionId);
         }
-        return provider.findNewSessionInDir(workingDir, excluded);
-      },
-      isTerminalActive: () => isPtyActive(provider.id, tempKey),
-      onRegistered: realId => {
+        realId = provider.findNewSessionInDir(workingDir, excluded);
+      } catch (err) {
+        console.warn(`[${provider.id}:create] re-key poll ${polls} failed: ${err.message}`);
+        if (!isPtyActive(provider.id, tempKey)) {
+          clearInterval(bgPoll);
+          broadcastPendingExpired(provider.id, tempKey);
+        }
+        return;
+      }
+      const disposition = pendingSessionDisposition(
+        realId,
+        isPtyActive(provider.id, tempKey));
+      if (disposition === 'rekey') {
+        clearInterval(bgPoll);
         pendingToReal.set(pendingKey(provider.id, tempKey), realId);
         if (rekeyPty(provider.id, tempKey, realId)) {
           console.log(`[${provider.id}:create] re-keyed ${tempKey.slice(0, 20)}… → ${realId.slice(0, 8)}…`);
         }
         broadcastRekey(provider.id, tempKey, realId);
         broadcastSessions(provider.id);
-      },
-      onTerminalEnded: () => {
-        console.warn(`[${provider.id}:create] pending terminal ${tempKey.slice(0, 20)}… exited before registering`);
+      } else if (disposition === 'expire') {
+        clearInterval(bgPoll);
+        console.log(`[${provider.id}:create] pending PTY ${tempKey.slice(0, 20)}… exited before registration`);
         broadcastPendingExpired(provider.id, tempKey);
-      },
-      onPollError: error =>
-        console.warn(`[${provider.id}:create] pending re-key poll failed: ${error.message}`),
-    });
+      } else if (polls % 90 === 0) {
+        console.log(
+          `[${provider.id}:create] ${tempKey.slice(0, 20)}… is still live and awaiting its first persisted prompt`);
+      }
+    }, POLL_INTERVAL);
 
     res.json({ tempKey, controlPlane: Boolean(remoteEndpoint) });
   } catch (err) {
@@ -508,8 +521,8 @@ function broadcastRekey(providerId, tempKey, realId) {
 }
 
 /**
- * Notify all status-feed clients that a pending terminal ended before Codex
- * persisted its real session ID. The client dismisses the dead placeholder.
+ * Notify all status-feed clients that a pending PTY exited before Codex created
+ * a real session ID. The client uses this to dismiss the orphaned temporary tab.
  *
  * Message shape: { type: 'pending-expired', tempKey: string }
  */

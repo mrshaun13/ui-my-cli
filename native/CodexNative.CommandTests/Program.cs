@@ -1,6 +1,7 @@
 using CodexNative.Core;
 using System.IO.Compression;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -262,6 +263,18 @@ Check("native versions compare stable release tags", () =>
     Equal(false, NativeVersion.TryParse("1.2", out _));
 });
 
+Check("session display text cannot expand sidebar rows or tab headers", () =>
+{
+    var title = SessionDisplayText.Title($"Large session\n\n{new string('x', 300)}");
+    Equal(false, title.Contains('\n'));
+    Equal(SessionDisplayText.MaximumTitleLength, title.Length);
+    Equal(true, title.EndsWith('…'));
+
+    var prompt = SessionDisplayText.PromptPreview($"line one\nline two {new string('p', 600)}");
+    Equal(false, prompt.Contains('\n'));
+    Equal(SessionDisplayText.MaximumPromptPreviewLength, prompt.Length);
+});
+
 Check("release downloads are restricted to GitHub HTTPS hosts", () =>
 {
     Equal(true, GitHubReleaseClient.IsTrustedDownloadUri(
@@ -349,6 +362,72 @@ Check("updater request preserves paths as structured arguments", () =>
             "/Applications/CodexNative.app/Contents/MacOS"));
 });
 
+Check("updater request remains backward compatible and carries terminal host PIDs", () =>
+{
+    var oldRequest = NativeInstallRequest.Parse(
+    [
+        "--parent-pid", "123", "--platform", "windows",
+        "--source", "/updates/payload", "--target", "/apps/CodexNative",
+    ]);
+    Equal<IReadOnlyList<int>?>(null, oldRequest.RelatedProcessIds);
+
+    var request = new NativeInstallRequest(
+        123,
+        NativePlatform.Windows,
+        "/updates/payload",
+        "/apps/CodexNative",
+        [456, 789, 456]);
+    var parsed = NativeInstallRequest.Parse(request.ToArguments());
+    SequenceEqual(new[] { 456, 789 }, parsed.RelatedProcessIds ?? []);
+    Throws<ArgumentException>(() => NativeInstallRequest.Parse(
+    [
+        "--parent-pid", "123", "--platform", "windows",
+        "--source", "/updates/payload", "--target", "/apps/CodexNative",
+        "--wait-pids", "123",
+    ]));
+});
+
+Check("updater may stop only terminal hosts from the exact install directory", () =>
+{
+    Equal(true, NativeInstallProcessPolicy.IsOwnedTerminalHost(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        "/apps/CodexNative/CodexNative.TerminalHost.exe"));
+    Equal(false, NativeInstallProcessPolicy.IsOwnedTerminalHost(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        "/other/CodexNative.TerminalHost.exe"));
+    Equal(false, NativeInstallProcessPolicy.IsOwnedTerminalHost(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        "/apps/CodexNative/CodexNative.exe"));
+    Equal(true, NativeInstallProcessPolicy.IsMainApplication(
+        NativePlatform.MacOS,
+        "/Applications/CodexNative.app",
+        "/Applications/CodexNative.app/Contents/MacOS/CodexNative"));
+});
+
+Check("updater result is bounded, persisted, and consumed once", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), $"codex-native-result-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    try
+    {
+        NativeUpdateResultStore.Write(
+            root,
+            new NativeUpdateResult(true, "1.1.5", new string('x', 3000), DateTimeOffset.UtcNow));
+        var result = NativeUpdateResultStore.Take(root);
+        Equal(true, result!.Succeeded);
+        Equal("1.1.5", result.Version);
+        Equal(2048, result.Message.Length);
+        Equal<NativeUpdateResult?>(null, NativeUpdateResultStore.Take(root));
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 await CheckAsync("GitHub release selection requires the matching runtime and checksum", async () =>
 {
     const string json = """
@@ -377,6 +456,58 @@ await CheckAsync("missing GitHub release is treated as no available update", asy
     using var http = new HttpClient(new StaticHttpHandler(HttpStatusCode.NotFound, "{}"));
     using var client = new GitHubReleaseClient(http);
     Equal<NativeReleaseInfo?>(null, await client.GetLatestAsync(new NativeVersion(1, 0, 0), "win-x64"));
+});
+
+await CheckAsync("GitHub rate limits expose the server reset time", async () =>
+{
+    var reset = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds());
+    using var http = new HttpClient(new StaticHttpHandler(
+        HttpStatusCode.Forbidden,
+        "{}",
+        response => response.Headers.Add("X-RateLimit-Reset", reset.ToUnixTimeSeconds().ToString())));
+    using var client = new GitHubReleaseClient(http);
+    try
+    {
+        await client.GetLatestAsync(new NativeVersion(1, 0, 0), "win-x64");
+        throw new InvalidOperationException("Expected GitHubRateLimitException.");
+    }
+    catch (GitHubRateLimitException ex)
+    {
+        Equal(reset, ex.RetryAt);
+    }
+});
+
+await CheckAsync("GitHub checks send only an explicitly supplied token", async () =>
+{
+    AuthenticationHeaderValue? observed = null;
+    using var http = new HttpClient(new CallbackHttpHandler(request =>
+    {
+        observed = request.Headers.Authorization;
+        return new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        };
+    }));
+    using var client = new GitHubReleaseClient(http, "explicit-test-token");
+    await client.GetLatestAsync(new NativeVersion(1, 0, 0), "win-x64");
+    Equal("Bearer", observed?.Scheme);
+    Equal("explicit-test-token", observed?.Parameter);
+});
+
+await CheckAsync("GitHub release checks reuse cached ETags", async () =>
+{
+    using var http = new HttpClient(new CallbackHttpHandler(request =>
+    {
+        Equal("\"release-v1\"", request.Headers.IfNoneMatch.Single().ToString());
+        return new HttpResponseMessage(HttpStatusCode.NotModified);
+    }));
+    using var client = new GitHubReleaseClient(http);
+    var query = await client.QueryLatestAsync(
+        new NativeVersion(1, 0, 0),
+        "win-x64",
+        "\"release-v1\"");
+    Equal(true, query.NotModified);
+    Equal("\"release-v1\"", query.EntityTag);
 });
 
 await CheckAsync("checksum verification rejects changed update bytes", async () =>
@@ -626,6 +757,31 @@ Check("terminal wheel scrolling moves and clamps the viewport", () =>
     Equal(0, TerminalViewportScroll.Next(1, 100, 1));
     Equal(100, TerminalViewportScroll.Next(99, 100, -1));
     Equal(0, TerminalViewportScroll.Next(0, -1, -1));
+});
+
+Check("terminal clipboard shortcuts preserve shell control keys", () =>
+{
+    Equal(
+        TerminalClipboardAction.CopySelection,
+        TerminalClipboardShortcut.Resolve(NativePlatform.Windows, "C", true, false, true, false));
+    Equal(
+        TerminalClipboardAction.CopyAll,
+        TerminalClipboardShortcut.Resolve(NativePlatform.Windows, "A", true, false, true, false));
+    Equal(
+        TerminalClipboardAction.None,
+        TerminalClipboardShortcut.Resolve(NativePlatform.Windows, "A", true, false, false, false));
+    Equal(
+        TerminalClipboardAction.CopySelection,
+        TerminalClipboardShortcut.Resolve(NativePlatform.MacOS, "C", false, true, false, false));
+    Equal(
+        TerminalClipboardAction.CopyAll,
+        TerminalClipboardShortcut.Resolve(NativePlatform.MacOS, "A", false, true, false, false));
+    Equal(
+        TerminalClipboardAction.Paste,
+        TerminalClipboardShortcut.Resolve(NativePlatform.Windows, "Insert", false, false, true, false));
+    Equal(
+        TerminalClipboardAction.Paste,
+        TerminalClipboardShortcut.Resolve(NativePlatform.Windows, "V", true, false, false, false));
 });
 
 Check("cold-day grouping includes only idle sessions at the selected boundary", () =>
@@ -916,13 +1072,27 @@ static async Task VerifyReleaseArtifactsAsync(
     }
 }
 
-sealed class StaticHttpHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
+sealed class StaticHttpHandler(
+    HttpStatusCode statusCode,
+    string body,
+    Action<HttpResponseMessage>? configure = null) : HttpMessageHandler
 {
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken) =>
-        Task.FromResult(new HttpResponseMessage(statusCode)
+        CancellationToken cancellationToken)
+    {
+        var response = new HttpResponseMessage(statusCode)
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
-        });
+        };
+        configure?.Invoke(response);
+        return Task.FromResult(response);
+    }
+}
+
+sealed class CallbackHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> callback) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken) => Task.FromResult(callback(request));
 }
