@@ -30,6 +30,7 @@ public sealed partial class MainWindow : Window
     private const int AdaptiveComposerRow = 1;
     private const int InspectorSplitterRow = 2;
     private const int InspectorRow = 3;
+    private static readonly TimeSpan SpeechHostShutdownTimeout = TimeSpan.FromSeconds(3);
     private static readonly string[] BrowserDashboardUrls =
     [
         "http://127.0.0.1:7575",
@@ -87,6 +88,8 @@ public sealed partial class MainWindow : Window
     private bool _initializingNavigation;
     private bool _initializingAnalytics;
     private bool _shutdownConfirmed;
+    private bool _shutdownInProgress;
+    private bool _nativeResourcesShutdown;
     private bool _closePromptOpen;
     private readonly bool _uiReady;
     private bool _workspaceReady;
@@ -6075,6 +6078,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnWindowClosing(object? sender, WindowClosingEventArgs e)
     {
+        if (_nativeResourcesShutdown) return;
         if (OperatingSystem.IsMacOS() && !_shutdownConfirmed)
         {
             e.Cancel = true;
@@ -6088,7 +6092,24 @@ public sealed partial class MainWindow : Window
         }
         if (_shutdownConfirmed)
         {
-            ShutdownNativeResources();
+            e.Cancel = true;
+            if (_shutdownInProgress) return;
+            _shutdownInProgress = true;
+            try
+            {
+                await ShutdownNativeResourcesAsync();
+            }
+            catch (Exception ex)
+            {
+                NativeLog.Write($"Native resource shutdown failed: {ex}");
+                _speechHost.ForceStop();
+            }
+            finally
+            {
+                _shutdownInProgress = false;
+                _nativeResourcesShutdown = true;
+            }
+            Close();
             return;
         }
         e.Cancel = true;
@@ -6216,7 +6237,7 @@ public sealed partial class MainWindow : Window
             : OwnedServiceStopOutcome.Stopped;
     }
 
-    private void ShutdownNativeResources()
+    private async Task ShutdownNativeResourcesAsync()
     {
         _refreshTimer.Stop();
         _connectionPulseTimer.Stop();
@@ -6225,7 +6246,15 @@ public sealed partial class MainWindow : Window
         if (_statusFeed is not null) _ = _statusFeed.DisposeAsync();
         _searchCancellation?.Cancel();
         _updateInstallCancellation?.Cancel();
-        _ = _speechHost.DisposeAsync().AsTask();
+        try
+        {
+            await _speechHost.DisposeAsync().AsTask().WaitAsync(SpeechHostShutdownTimeout);
+        }
+        catch (TimeoutException)
+        {
+            NativeLog.Write("Speech host did not exit before shutdown timeout; terminating it.");
+            _speechHost.ForceStop();
+        }
         foreach (var state in _openTabs.Values.ToList())
         {
             CancelTerminalReconnect(state, suppress: true);

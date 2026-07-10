@@ -15,6 +15,7 @@ internal sealed class SpeechHostClient : IAsyncDisposable
     private Task? _stdoutTask;
     private Task? _stderrTask;
     private TaskCompletionSource _ready = NewReadySource();
+    private int _disposed;
 
     public SpeechHostClient(NativePlatformProfile platform)
     {
@@ -23,10 +24,19 @@ internal sealed class SpeechHostClient : IAsyncDisposable
 
     public event Action<SpeechHostEvent>? MessageReceived;
 
-    public bool IsRunning => _process is { HasExited: false };
+    public bool IsRunning
+    {
+        get
+        {
+            var process = Volatile.Read(ref _process);
+            try { return process is { HasExited: false }; }
+            catch (InvalidOperationException) { return false; }
+        }
+    }
 
     public async Task EnsureStartedAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
         if (IsRunning)
         {
             await _ready.Task.WaitAsync(cancellationToken);
@@ -36,6 +46,7 @@ internal sealed class SpeechHostClient : IAsyncDisposable
         await _startGate.WaitAsync(cancellationToken);
         try
         {
+            ThrowIfDisposed();
             if (!IsRunning)
             {
                 var executable = Path.Combine(AppContext.BaseDirectory, _platform.SpeechHostFileName);
@@ -53,18 +64,34 @@ internal sealed class SpeechHostClient : IAsyncDisposable
                     RedirectStandardError = true,
                     CreateNoWindow = true,
                 };
-                _process = Process.Start(startInfo)
+                var process = Process.Start(startInfo)
                     ?? throw new InvalidOperationException("Could not start the native speech host.");
-                _process.EnableRaisingEvents = true;
-                _process.Exited += (_, _) =>
+                if (IsDisposed)
+                {
+                    TerminateProcess(process);
+                    process.Dispose();
+                    ThrowIfDisposed();
+                }
+                _process = process;
+                if (IsDisposed)
+                {
+                    if (ReferenceEquals(Interlocked.CompareExchange(ref _process, null, process), process))
+                    {
+                        TerminateProcess(process);
+                        process.Dispose();
+                    }
+                    ThrowIfDisposed();
+                }
+                process.EnableRaisingEvents = true;
+                process.Exited += (_, _) =>
                 {
                     if (!_shutdown.IsCancellationRequested)
                         MessageReceived?.Invoke(new SpeechHostEvent(
                             "error",
                             Error: "The native speech host exited unexpectedly."));
                 };
-                _stdoutTask = ReadStdoutAsync(_process, _shutdown.Token);
-                _stderrTask = ReadStderrAsync(_process, _shutdown.Token);
+                _stdoutTask = ReadStdoutAsync(process, _shutdown.Token);
+                _stderrTask = ReadStderrAsync(process, _shutdown.Token);
             }
         }
         finally
@@ -86,7 +113,9 @@ internal sealed class SpeechHostClient : IAsyncDisposable
 
     public async Task SendAsync(SpeechHostCommand command, CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
         await EnsureStartedAsync(cancellationToken);
+        ThrowIfDisposed();
         var process = _process ?? throw new InvalidOperationException("The native speech host is not running.");
         await _writeGate.WaitAsync(cancellationToken);
         try
@@ -151,39 +180,76 @@ internal sealed class SpeechHostClient : IAsyncDisposable
     private static TaskCompletionSource NewReadySource() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    public void ForceStop() => TerminateProcess(Volatile.Read(ref _process));
+
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _shutdown.Cancel();
-        var process = _process;
-        if (process is not null)
+        var process = Volatile.Read(ref _process);
+        try
         {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    await _writeGate.WaitAsync();
-                    try
-                    {
-                        await process.StandardInput.WriteLineAsync(
-                            JsonSerializer.Serialize(new SpeechHostCommand("shutdown"), JsonOptions));
-                        await process.StandardInput.FlushAsync();
-                    }
-                    finally
-                    {
-                        _writeGate.Release();
-                    }
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                    try { await process.WaitForExitAsync(timeout.Token); }
-                    catch (OperationCanceledException) { process.Kill(entireProcessTree: true); }
-                }
-            }
-            catch { }
-            process.Dispose();
+            if (process is not null) await RequestShutdownAsync(process);
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Speech host shutdown request failed: {ex.Message}");
+        }
+        finally
+        {
+            TerminateProcess(process);
+            if (process is not null
+                && ReferenceEquals(Interlocked.CompareExchange(ref _process, null, process), process))
+                process.Dispose();
         }
         if (_stdoutTask is not null) try { await _stdoutTask; } catch { }
         if (_stderrTask is not null) try { await _stderrTask; } catch { }
         _shutdown.Dispose();
         _startGate.Dispose();
         _writeGate.Dispose();
+    }
+
+    private async Task RequestShutdownAsync(Process process)
+    {
+        if (process.HasExited) return;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await _writeGate.WaitAsync(timeout.Token);
+        try
+        {
+            if (!process.HasExited)
+            {
+                await process.StandardInput.WriteLineAsync(
+                    JsonSerializer.Serialize(new SpeechHostCommand("shutdown"), JsonOptions).AsMemory(),
+                    timeout.Token);
+                await process.StandardInput.FlushAsync(timeout.Token);
+            }
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+        await process.WaitForExitAsync(timeout.Token);
+    }
+
+    private static void TerminateProcess(Process? process)
+    {
+        if (process is null) return;
+        try
+        {
+            if (process.HasExited) return;
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(1000);
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Could not terminate speech host: {ex.Message}");
+        }
+    }
+
+    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
+    private void ThrowIfDisposed()
+    {
+        if (IsDisposed) throw new ObjectDisposedException(nameof(SpeechHostClient));
     }
 }
