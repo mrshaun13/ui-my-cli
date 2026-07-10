@@ -445,8 +445,8 @@
                           Height="68" ClipToBounds="True">
                       <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StatusGlyph}"
                                  Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
-                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CompactDisplayTitle}"
-                                 Foreground="{DynamicResource PrimaryBrush}" FontWeight="SemiBold"
+                       <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CompactDisplayTitle}"
+                                  Foreground="{DynamicResource PrimaryBrush}" FontWeight="SemiBold"
                                  MaxLines="1" TextWrapping="NoWrap"
                                  TextTrimming="CharacterEllipsis" ClipToBounds="True" />
                       <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DisplayMeta}"

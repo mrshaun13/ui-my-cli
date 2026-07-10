@@ -41,6 +41,9 @@ public class DashboardSession
     public string CompactDisplayTitle => SessionTitleDisplay.Compact(DisplayTitle);
 
     [JsonIgnore]
+    public string CompactDisplayTitle => SessionTitleDisplay.Compact(DisplayTitle);
+
+    [JsonIgnore]
     public string DisplayMeta => $"{Project} · {LastActivityAgo}".Trim(' ', '·');
 
     [JsonIgnore]
