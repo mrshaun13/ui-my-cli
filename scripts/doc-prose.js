@@ -250,7 +250,7 @@ module.exports = {
     'GET /api/sessions/search':      'Compatibility alias for default provider search',
     'GET /api/:providerId/repos':    'List all unique repos (working directories) from one provider\'s past sessions',
     'GET /api/repos':                'Compatibility alias for default provider repos',
-    'POST /api/:providerId/sessions/create': 'Start a new session for one provider in the given working directory (body: `{ workingDir: string, controlPlane?: boolean }`); returns `{ tempKey }`',
+    'POST /api/:providerId/sessions/create': 'Start a new session for one provider in the given working directory (body: `{ workingDir: string, controlPlane?: boolean }`); returns `{ tempKey, controlPlane }`, where `controlPlane` reports the transport actually selected',
     'POST /api/sessions/create':     'Compatibility alias for default provider session creation',
     'GET /api/codex/adaptive/models': 'Authenticated Codex model catalog used by native Adaptive routing, including each visible model\'s supported reasoning efforts and service tiers.',
     'POST /api/codex/sessions/:id/adaptive/submit': 'Classify and submit one native Adaptive prompt through the shared Codex app-server thread. For a pending session, body `{ text, preference?, workingDir }` starts the first turn before returning its real `sessionId`; later turns use `{ text, preference? }`.',

@@ -286,11 +286,13 @@ private service, backend stdout and stderr are written to
 card also displays the provider error instead of reducing it to
 `Unavailable · version unknown`.
 
-The native client requires dashboard API v5 for analytics. It will not attach
-to an older long-running service that lacks the complete usage-rollup, pricing,
-hourly, and heatmap window contract; it starts the current private service on
-port 7577 instead. This prevents absent fields from being presented as real
-zero-token or zero-credit results.
+The native client requires dashboard API v5 so remote Codex sessions preserve
+the project root selected in the native chooser. It will not attach to an older
+long-running service that lacks that launch contract or the complete
+usage-rollup, pricing, hourly, and heatmap analytics contract; it starts the
+current private service on port 7577 instead. This prevents sessions from
+starting in the wrong directory and absent analytics fields from being
+presented as real zero-token or zero-credit results.
 
 ## Build and package
 

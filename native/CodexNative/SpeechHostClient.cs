@@ -37,24 +37,23 @@ internal sealed class SpeechHostClient : IAsyncDisposable
     public async Task EnsureStartedAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        if (IsRunning)
-        {
-            await _ready.Task.WaitAsync(cancellationToken);
-            return;
-        }
-
         await _startGate.WaitAsync(cancellationToken);
         try
         {
             ThrowIfDisposed();
+            Process process;
+            TaskCompletionSource ready;
             if (!IsRunning)
             {
+                var previous = Interlocked.Exchange(ref _process, null);
+                if (previous is not null) previous.Dispose();
                 var executable = Path.Combine(AppContext.BaseDirectory, _platform.SpeechHostFileName);
                 if (!File.Exists(executable))
                     throw new FileNotFoundException(
                         "The native speech host is missing. Reinstall or republish Codex Native.",
                         executable);
-                _ready = NewReadySource();
+                ready = NewReadySource();
+                _ready = ready;
                 var startInfo = new ProcessStartInfo(executable)
                 {
                     WorkingDirectory = AppContext.BaseDirectory,
@@ -64,7 +63,7 @@ internal sealed class SpeechHostClient : IAsyncDisposable
                     RedirectStandardError = true,
                     CreateNoWindow = true,
                 };
-                var process = Process.Start(startInfo)
+                process = Process.Start(startInfo)
                     ?? throw new InvalidOperationException("Could not start the native speech host.");
                 if (IsDisposed)
                 {
@@ -85,29 +84,39 @@ internal sealed class SpeechHostClient : IAsyncDisposable
                 process.EnableRaisingEvents = true;
                 process.Exited += (_, _) =>
                 {
-                    if (!_shutdown.IsCancellationRequested)
+                    ready.TrySetException(new InvalidOperationException(
+                        "The native speech host exited before becoming ready."));
+                    if (!_shutdown.IsCancellationRequested
+                        && ReferenceEquals(Volatile.Read(ref _process), process))
                         MessageReceived?.Invoke(new SpeechHostEvent(
                             "error",
                             Error: "The native speech host exited unexpectedly."));
                 };
-                _stdoutTask = ReadStdoutAsync(process, _shutdown.Token);
+                _stdoutTask = ReadStdoutAsync(process, ready, _shutdown.Token);
                 _stderrTask = ReadStderrAsync(process, _shutdown.Token);
+            }
+            else
+            {
+                process = Volatile.Read(ref _process)
+                    ?? throw new InvalidOperationException("The native speech host is not running.");
+                ready = _ready;
+            }
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(15));
+            try
+            {
+                await ready.Task.WaitAsync(timeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                StopProcess(process);
+                throw new TimeoutException("The native speech host did not become ready within 15 seconds.");
             }
         }
         finally
         {
             _startGate.Release();
-        }
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(15));
-        try
-        {
-            await _ready.Task.WaitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new TimeoutException("The native speech host did not become ready within 15 seconds.");
         }
     }
 
@@ -131,7 +140,10 @@ internal sealed class SpeechHostClient : IAsyncDisposable
         }
     }
 
-    private async Task ReadStdoutAsync(Process process, CancellationToken cancellationToken)
+    private async Task ReadStdoutAsync(
+        Process process,
+        TaskCompletionSource ready,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -143,8 +155,9 @@ internal sealed class SpeechHostClient : IAsyncDisposable
                 {
                     var message = JsonSerializer.Deserialize<SpeechHostEvent>(line, JsonOptions);
                     if (message is null) continue;
-                    if (message.Type == "ready") _ready.TrySetResult();
-                    MessageReceived?.Invoke(message);
+                    if (message.Type == "ready") ready.TrySetResult();
+                    if (ReferenceEquals(Volatile.Read(ref _process), process))
+                        MessageReceived?.Invoke(message);
                 }
                 catch (JsonException ex)
                 {
@@ -181,6 +194,13 @@ internal sealed class SpeechHostClient : IAsyncDisposable
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public void ForceStop() => TerminateProcess(Volatile.Read(ref _process));
+
+    private void StopProcess(Process process)
+    {
+        if (!ReferenceEquals(Interlocked.CompareExchange(ref _process, null, process), process)) return;
+        TerminateProcess(process);
+        process.Dispose();
+    }
 
     public async ValueTask DisposeAsync()
     {
