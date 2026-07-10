@@ -56,71 +56,113 @@ public sealed record SpeechParityResult(
 
 public sealed class SpeechSessionStateMachine
 {
-    public SpeechStage Stage { get; private set; } = SpeechStage.Idle;
-    public string? OperationId { get; private set; }
-    public string? LastError { get; private set; }
+    private readonly object _gate = new();
+    private SpeechStage _stage = SpeechStage.Idle;
+    private string? _operationId;
+    private string? _lastError;
+
+    public SpeechStage Stage
+    {
+        get { lock (_gate) return _stage; }
+    }
+
+    public string? OperationId
+    {
+        get { lock (_gate) return _operationId; }
+    }
+
+    public string? LastError
+    {
+        get { lock (_gate) return _lastError; }
+    }
 
     public bool TryStart(string operationId)
     {
-        if (Stage != SpeechStage.Idle || string.IsNullOrWhiteSpace(operationId)) return false;
-        Stage = SpeechStage.Recording;
-        OperationId = operationId;
-        LastError = null;
-        return true;
+        lock (_gate)
+        {
+            if (_stage != SpeechStage.Idle || string.IsNullOrWhiteSpace(operationId)) return false;
+            _stage = SpeechStage.Recording;
+            _operationId = operationId;
+            _lastError = null;
+            return true;
+        }
     }
 
     public bool TryBeginTranscription(string operationId)
     {
-        if (Stage != SpeechStage.Recording || OperationId != operationId) return false;
-        Stage = SpeechStage.Transcribing;
-        return true;
+        lock (_gate)
+        {
+            if (_stage != SpeechStage.Recording || _operationId != operationId) return false;
+            _stage = SpeechStage.Transcribing;
+            return true;
+        }
     }
 
     public bool TryBeginFileTranscription(string operationId)
     {
-        if (Stage != SpeechStage.Idle || string.IsNullOrWhiteSpace(operationId)) return false;
-        Stage = SpeechStage.Transcribing;
-        OperationId = operationId;
-        LastError = null;
-        return true;
+        lock (_gate)
+        {
+            if (_stage != SpeechStage.Idle || string.IsNullOrWhiteSpace(operationId)) return false;
+            _stage = SpeechStage.Transcribing;
+            _operationId = operationId;
+            _lastError = null;
+            return true;
+        }
     }
 
     public bool TryBeginDownload(string operationId)
     {
-        if (Stage != SpeechStage.Idle || string.IsNullOrWhiteSpace(operationId)) return false;
-        Stage = SpeechStage.Downloading;
-        OperationId = operationId;
-        LastError = null;
-        return true;
+        lock (_gate)
+        {
+            if (_stage != SpeechStage.Idle || string.IsNullOrWhiteSpace(operationId)) return false;
+            _stage = SpeechStage.Downloading;
+            _operationId = operationId;
+            _lastError = null;
+            return true;
+        }
     }
 
     public bool TryComplete(string operationId)
     {
-        if (OperationId != operationId || Stage is SpeechStage.Idle or SpeechStage.Failed) return false;
-        Reset();
-        return true;
+        lock (_gate)
+        {
+            if (_operationId != operationId || _stage is SpeechStage.Idle or SpeechStage.Failed) return false;
+            Reset();
+            return true;
+        }
     }
 
     public bool TryFail(string operationId, string error)
     {
-        if (OperationId != operationId || Stage == SpeechStage.Idle) return false;
-        Stage = SpeechStage.Failed;
-        LastError = error;
-        return true;
+        lock (_gate)
+        {
+            if (_operationId != operationId || _stage == SpeechStage.Idle) return false;
+            _stage = SpeechStage.Failed;
+            _lastError = error;
+            return true;
+        }
     }
 
     public bool TryCancel(string? operationId = null)
     {
-        if (Stage == SpeechStage.Idle || operationId is not null && OperationId != operationId) return false;
-        Reset();
-        return true;
+        lock (_gate)
+        {
+            if (_stage == SpeechStage.Idle || operationId is not null && _operationId != operationId) return false;
+            Reset();
+            return true;
+        }
+    }
+
+    public bool Is(string operationId, SpeechStage stage)
+    {
+        lock (_gate) return _operationId == operationId && _stage == stage;
     }
 
     private void Reset()
     {
-        Stage = SpeechStage.Idle;
-        OperationId = null;
-        LastError = null;
+        _stage = SpeechStage.Idle;
+        _operationId = null;
+        _lastError = null;
     }
 }
 

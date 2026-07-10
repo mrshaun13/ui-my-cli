@@ -15,6 +15,9 @@
   metadata for open native inspectors.
 - Packaged SpeechHost into native release archives and documented keeping the
   speech helper with the other desktop executables.
+- Limited microphone capture to two minutes with automatic transcription,
+  canceled active capture when macOS hides the window, and documented the
+  optional Windows voice runtime requirements.
 - Bumped the native version to 1.1.6 for the voice/session-stability release
   stacked on 1.1.5 provider switcher.
 - Remaining non-goals: cloud speech, auto-submit of transcribed text, and

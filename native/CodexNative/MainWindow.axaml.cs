@@ -3595,6 +3595,11 @@ public sealed partial class MainWindow : Window
             case "level":
                 UpdateSpeechButtons(message.Level);
                 break;
+            case "capture_limit":
+                _speechStage = SpeechStage.Transcribing;
+                UpdateSpeechButtons();
+                SetStatus("Two-minute voice capture limit reached · transcribing locally…", StartingBrush);
+                break;
             case "download_progress" when message.Progress is not null:
                 SetStatus(
                     $"Downloading the local speech model · {message.Progress.Value:P0}",
@@ -6084,6 +6089,7 @@ public sealed partial class MainWindow : Window
             e.Cancel = true;
             if (_closePromptOpen) return;
             _closePromptOpen = true;
+            if (_speechStage == SpeechStage.Recording) await CancelSpeechCaptureAsync();
             await SaveWorkspaceAsync();
             _closePromptOpen = false;
             Hide();

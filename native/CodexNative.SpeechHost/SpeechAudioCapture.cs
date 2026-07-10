@@ -22,15 +22,19 @@ internal sealed class SpeechAudioCapture : IDisposable
 
     private readonly object _gate = new();
     private readonly MiniAudioEngine _engine = new();
-    private readonly List<float> _samples = [];
+    private readonly SpeechSampleBuffer _samples = new(
+        SpeechCapturePolicy.MaximumSampleCount(SampleRate));
     private AudioCaptureDevice? _device;
     private Recorder? _recorder;
+    private Timer? _maximumDurationTimer;
     private long _captureRequestedAt;
     private long _firstSamplesAt;
     private long _lastLevelAt;
+    private string? _operationId;
     private bool _recording;
 
-    public event Action<float>? LevelChanged;
+    public event Action<string, float>? LevelChanged;
+    public event Action<string>? MaximumDurationReached;
 
     public IReadOnlyList<SpeechInputDevice> ListDevices()
     {
@@ -40,8 +44,9 @@ internal sealed class SpeechAudioCapture : IDisposable
             .ToList();
     }
 
-    public void Start(string? requestedDevice)
+    public void Start(string operationId, string? requestedDevice)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
         lock (_gate)
         {
             if (_recording) throw new InvalidOperationException("A microphone recording is already active.");
@@ -59,6 +64,7 @@ internal sealed class SpeechAudioCapture : IDisposable
             _captureRequestedAt = Stopwatch.GetTimestamp();
             _firstSamplesAt = 0;
             _lastLevelAt = 0;
+            _operationId = operationId;
             try
             {
                 _device = _engine.InitializeCaptureDevice(selected, CaptureFormat);
@@ -68,10 +74,16 @@ internal sealed class SpeechAudioCapture : IDisposable
                     throw new InvalidOperationException(result.Error?.Message ?? "Could not start microphone recording.");
                 _recording = true;
                 _device.Start();
+                _maximumDurationTimer = new Timer(
+                    _ => MaximumDurationReached?.Invoke(operationId),
+                    null,
+                    TimeSpan.FromSeconds(SpeechCapturePolicy.MaximumDurationSeconds),
+                    Timeout.InfiniteTimeSpan);
             }
             catch
             {
                 CleanupCapture();
+                _operationId = null;
                 throw;
             }
         }
@@ -81,25 +93,28 @@ internal sealed class SpeechAudioCapture : IDisposable
     {
         AudioCaptureDevice? device;
         Recorder? recorder;
+        Timer? maximumDurationTimer;
         lock (_gate)
         {
             if (!_recording) throw new InvalidOperationException("No microphone recording is active.");
             _recording = false;
+            _operationId = null;
             (device, recorder) = DetachCaptureLocked();
+            maximumDurationTimer = DetachMaximumDurationTimerLocked();
         }
 
+        maximumDurationTimer?.Dispose();
         try { device?.Stop(); } catch { }
         try { recorder?.StopRecording(); } catch { }
         try
         {
             lock (_gate)
             {
-                var samples = _samples.ToArray();
+                var samples = _samples.Drain();
                 var startLatency = _firstSamplesAt == 0
                     ? 0
                     : Stopwatch.GetElapsedTime(_captureRequestedAt, _firstSamplesAt).TotalMilliseconds;
                 var metrics = SpeechCaptureAnalysis.Analyze(samples, SampleRate, startLatency);
-                _samples.Clear();
                 return new SpeechCapture(samples, metrics);
             }
         }
@@ -114,12 +129,16 @@ internal sealed class SpeechAudioCapture : IDisposable
     {
         AudioCaptureDevice? device;
         Recorder? recorder;
+        Timer? maximumDurationTimer;
         lock (_gate)
         {
             _recording = false;
+            _operationId = null;
             _samples.Clear();
             (device, recorder) = DetachCaptureLocked();
+            maximumDurationTimer = DetachMaximumDurationTimerLocked();
         }
+        maximumDurationTimer?.Dispose();
         try { device?.Stop(); } catch { }
         try { recorder?.StopRecording(); } catch { }
         try { recorder?.Dispose(); } catch { }
@@ -129,24 +148,35 @@ internal sealed class SpeechAudioCapture : IDisposable
     private void OnAudioProcessed(Span<float> samples, Capability capability)
     {
         if (capability != Capability.Record) return;
+        string? maximumDurationOperationId = null;
+        string? levelOperationId = null;
+        float? peak = null;
         lock (_gate)
         {
             if (!_recording) return;
             if (_firstSamplesAt == 0) _firstSamplesAt = Stopwatch.GetTimestamp();
-            for (var index = 0; index < samples.Length; index++) _samples.Add(samples[index]);
+            if (_samples.Append(samples)) maximumDurationOperationId = _operationId;
             var now = Stopwatch.GetTimestamp();
-            if (_lastLevelAt != 0 && Stopwatch.GetElapsedTime(_lastLevelAt, now) < TimeSpan.FromMilliseconds(50))
-                return;
-            _lastLevelAt = now;
-            var peak = 0f;
-            for (var index = 0; index < samples.Length; index++) peak = Math.Max(peak, Math.Abs(samples[index]));
-            LevelChanged?.Invoke(peak);
+            if (_lastLevelAt == 0 || Stopwatch.GetElapsedTime(_lastLevelAt, now) >= TimeSpan.FromMilliseconds(50))
+            {
+                _lastLevelAt = now;
+                levelOperationId = _operationId;
+                peak = 0f;
+                for (var index = 0; index < samples.Length; index++)
+                    peak = Math.Max(peak.Value, Math.Abs(samples[index]));
+            }
         }
+        if (levelOperationId is not null && peak is not null)
+            LevelChanged?.Invoke(levelOperationId, peak.Value);
+        if (maximumDurationOperationId is not null)
+            MaximumDurationReached?.Invoke(maximumDurationOperationId);
     }
 
     private void CleanupCapture()
     {
         var (device, recorder) = DetachCaptureLocked();
+        var maximumDurationTimer = DetachMaximumDurationTimerLocked();
+        maximumDurationTimer?.Dispose();
         try { recorder?.Dispose(); } catch { }
         try { device?.Dispose(); } catch { }
     }
@@ -157,6 +187,13 @@ internal sealed class SpeechAudioCapture : IDisposable
         _device = null;
         _recorder = null;
         return capture;
+    }
+
+    private Timer? DetachMaximumDurationTimerLocked()
+    {
+        var timer = _maximumDurationTimer;
+        _maximumDurationTimer = null;
+        return timer;
     }
 
     public void Dispose()

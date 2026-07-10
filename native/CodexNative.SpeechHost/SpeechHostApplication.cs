@@ -18,14 +18,16 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly CancellationTokenSource _shutdown = new();
     private readonly SpeechOperationOwnership<SpeechOperation> _operations = new();
+    private readonly object _captureGate = new();
 
     private SpeechHostApplication()
     {
-        _capture.LevelChanged += level => Emit(new SpeechHostEvent(
+        _capture.LevelChanged += (operationId, level) => Emit(new SpeechHostEvent(
             "level",
-            _lifecycle.OperationId,
-            _lifecycle.Stage,
+            operationId,
+            SpeechStage.Recording,
             Level: level));
+        _capture.MaximumDurationReached += QueueMaximumDurationStop;
     }
 
     public static async Task<int> RunAsync()
@@ -118,9 +120,13 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
     private async Task EnsureModelAsync(SpeechHostCommand command)
     {
         var operationId = command.OperationId ?? $"model-{Guid.NewGuid():N}";
-        if (!_lifecycle.TryBeginDownload(operationId))
-            throw new InvalidOperationException("Speech is already recording or processing.");
-        var operation = BeginOperation(operationId);
+        SpeechOperation operation;
+        lock (_captureGate)
+        {
+            if (!_lifecycle.TryBeginDownload(operationId))
+                throw new InvalidOperationException("Speech is already recording or processing.");
+            operation = BeginOperation(operationId);
+        }
         Emit(new SpeechHostEvent("state", operationId, SpeechStage.Downloading));
         await _recognizer.EnsureModelsAsync(
             progress =>
@@ -137,58 +143,112 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
     private void StartCapture(SpeechHostCommand command)
     {
         var operationId = command.OperationId ?? throw new InvalidOperationException("A speech operation id is required.");
-        if (!_lifecycle.TryStart(operationId))
-            throw new InvalidOperationException("Speech is already recording or processing.");
-        var operation = BeginOperation(
-            operationId,
-            command.ReferenceText,
-            ValidateAudioPath(command.AudioPath, output: true));
-        try
+        var captureOutputPath = ValidateAudioPath(command.AudioPath, output: true);
+        lock (_captureGate)
         {
-            _capture.Start(command.DeviceId);
-            Emit(new SpeechHostEvent("state", operationId, SpeechStage.Recording));
-            _ = _recognizer.EnsureModelsAsync(
-                progress =>
-                {
-                    Emit(new SpeechHostEvent("download_progress", operationId, SpeechStage.Recording, Progress: progress));
-                    return Task.CompletedTask;
-                },
-                operation.Token);
-        }
-        catch
-        {
-            _capture.Cancel();
-            _lifecycle.TryCancel(operationId);
-            ClearOperation(operation);
-            throw;
+            if (!_lifecycle.TryStart(operationId))
+                throw new InvalidOperationException("Speech is already recording or processing.");
+            var operation = BeginOperation(
+                operationId,
+                command.ReferenceText,
+                captureOutputPath);
+            try
+            {
+                _capture.Start(operationId, command.DeviceId);
+                Emit(new SpeechHostEvent("state", operationId, SpeechStage.Recording));
+                _ = _recognizer.EnsureModelsAsync(
+                    progress =>
+                    {
+                        Emit(new SpeechHostEvent("download_progress", operationId, SpeechStage.Recording, Progress: progress));
+                        return Task.CompletedTask;
+                    },
+                    operation.Token);
+            }
+            catch
+            {
+                _capture.Cancel();
+                _lifecycle.TryCancel(operationId);
+                ClearOperation(operation);
+                throw;
+            }
         }
     }
 
     private void StopCapture(SpeechHostCommand command)
     {
         var operationId = command.OperationId ?? throw new InvalidOperationException("A speech operation id is required.");
-        var operation = FindOperation(operationId)
-            ?? throw new InvalidOperationException("That speech operation is not active.");
-        if (!_lifecycle.TryBeginTranscription(operationId))
-            throw new InvalidOperationException("That speech operation is not recording.");
-        var recording = _capture.Stop();
-        if (operation.CaptureOutputPath is not null)
-            SpeechWaveFile.WritePcm16Mono(
-                operation.CaptureOutputPath,
-                recording.Samples,
-                SpeechAudioCapture.SampleRate);
-        Emit(new SpeechHostEvent("state", operationId, SpeechStage.Transcribing, Metrics: recording.Metrics));
-        _ = CompleteTranscriptionAsync(operation, recording);
+        StopCapture(operationId, expectedOperation: null, ignoreIfNotRecording: false, maximumDurationReached: false);
+    }
+
+    private bool StopCapture(
+        string operationId,
+        SpeechOperation? expectedOperation,
+        bool ignoreIfNotRecording,
+        bool maximumDurationReached)
+    {
+        lock (_captureGate)
+        {
+            var operation = FindOperation(operationId);
+            if (operation is null || expectedOperation is not null && !ReferenceEquals(operation, expectedOperation))
+            {
+                if (ignoreIfNotRecording) return false;
+                throw new InvalidOperationException("That speech operation is not active.");
+            }
+            if (!_lifecycle.TryBeginTranscription(operationId))
+            {
+                if (ignoreIfNotRecording || _lifecycle.Is(operationId, SpeechStage.Transcribing)) return false;
+                throw new InvalidOperationException("That speech operation is not recording.");
+            }
+            var recording = _capture.Stop();
+            if (operation.CaptureOutputPath is not null)
+                SpeechWaveFile.WritePcm16Mono(
+                    operation.CaptureOutputPath,
+                    recording.Samples,
+                    SpeechAudioCapture.SampleRate);
+            Emit(new SpeechHostEvent("state", operationId, SpeechStage.Transcribing, Metrics: recording.Metrics));
+            if (maximumDurationReached)
+                Emit(new SpeechHostEvent("capture_limit", operationId, SpeechStage.Transcribing));
+            _ = CompleteTranscriptionAsync(operation, recording);
+            return true;
+        }
+    }
+
+    private void QueueMaximumDurationStop(string operationId)
+    {
+        if (_shutdown.IsCancellationRequested) return;
+        var operation = FindOperation(operationId);
+        if (operation is not null) _ = Task.Run(() => StopCaptureAtMaximumDuration(operation));
+    }
+
+    private void StopCaptureAtMaximumDuration(SpeechOperation operation)
+    {
+        try
+        {
+            StopCapture(
+                operation.Id,
+                operation,
+                ignoreIfNotRecording: true,
+                maximumDurationReached: true);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex);
+            FailAndReset(operation.Id, ex.Message);
+        }
     }
 
     private async Task TranscribeFileAsync(SpeechHostCommand command)
     {
         var operationId = command.OperationId ?? throw new InvalidOperationException("A speech operation id is required.");
-        if (!_lifecycle.TryBeginFileTranscription(operationId))
-            throw new InvalidOperationException("Speech is already recording or processing.");
         var path = ValidateAudioPath(command.AudioPath, output: false)
             ?? throw new InvalidOperationException("A speech WAV path is required.");
-        var operation = BeginOperation(operationId, command.ReferenceText);
+        SpeechOperation operation;
+        lock (_captureGate)
+        {
+            if (!_lifecycle.TryBeginFileTranscription(operationId))
+                throw new InvalidOperationException("Speech is already recording or processing.");
+            operation = BeginOperation(operationId, command.ReferenceText);
+        }
         Emit(new SpeechHostEvent("state", operationId, SpeechStage.Transcribing));
         var samples = await Task.Run(
             () => SpeechWaveFile.ReadMono(path, SpeechAudioCapture.SampleRate),
@@ -238,13 +298,16 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
 
     private void Cancel(string? operationId = null)
     {
-        var operation = _operations.Current;
-        if (operation is null || operationId is not null && operation.Id != operationId) return;
-        try { operation.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
-        _capture.Cancel();
-        if (_lifecycle.TryCancel(operation.Id))
-            Emit(new SpeechHostEvent("cancelled", operation.Id, SpeechStage.Idle));
-        ClearOperation(operation);
+        lock (_captureGate)
+        {
+            var operation = _operations.Current;
+            if (operation is null || operationId is not null && operation.Id != operationId) return;
+            try { operation.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
+            _capture.Cancel();
+            if (_lifecycle.TryCancel(operation.Id))
+                Emit(new SpeechHostEvent("cancelled", operation.Id, SpeechStage.Idle));
+            ClearOperation(operation);
+        }
     }
 
     private void FailAndReset(string? operationId, string error)
@@ -254,20 +317,23 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
             Emit(new SpeechHostEvent("error", Error: error));
             return;
         }
-        var operation = FindOperation(operationId);
-        if (operation is null)
+        lock (_captureGate)
         {
-            Emit(new SpeechHostEvent("error", operationId, Error: error));
-            return;
+            var operation = FindOperation(operationId);
+            if (operation is null)
+            {
+                Emit(new SpeechHostEvent("error", operationId, Error: error));
+                return;
+            }
+            _capture.Cancel();
+            try { operation.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
+            if (_lifecycle.TryFail(operation.Id, error))
+            {
+                Emit(new SpeechHostEvent("error", operation.Id, SpeechStage.Failed, Error: error));
+                _lifecycle.TryCancel(operation.Id);
+            }
+            ClearOperation(operation);
         }
-        _capture.Cancel();
-        try { operation.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
-        if (_lifecycle.TryFail(operation.Id, error))
-        {
-            Emit(new SpeechHostEvent("error", operation.Id, SpeechStage.Failed, Error: error));
-            _lifecycle.TryCancel(operation.Id);
-        }
-        ClearOperation(operation);
     }
 
     private static string? ValidateAudioPath(string? path, bool output)

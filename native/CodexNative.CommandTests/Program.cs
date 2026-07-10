@@ -653,6 +653,21 @@ Check("speech operation cleanup cannot replace a newer operation", () =>
     Equal(second, ownership.Current);
 });
 
+Check("speech capture is bounded to the two-minute policy", () =>
+{
+    Equal(120, SpeechCapturePolicy.MaximumDurationSeconds);
+    Equal(1_920_000, SpeechCapturePolicy.MaximumSampleCount(16000));
+    Throws<ArgumentOutOfRangeException>(() => SpeechCapturePolicy.MaximumSampleCount(0));
+
+    var buffer = new SpeechSampleBuffer(5);
+    Equal(false, buffer.Append(new float[] { 1, 2, 3 }));
+    Equal(true, buffer.Append(new float[] { 4, 5, 6 }));
+    Equal(false, buffer.Append(new float[] { 7 }));
+    Equal(5, buffer.Count);
+    SequenceEqual(new float[] { 1, 2, 3, 4, 5 }, buffer.Drain());
+    Equal(0, buffer.Count);
+});
+
 Check("speech parity measures capture health and word error rate", () =>
 {
     var samples = Enumerable.Repeat(0f, 1600)

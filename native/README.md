@@ -80,10 +80,10 @@ UI-owned and end when their tab or the app closes.
 - Per-terminal Adaptive model routing for Codex. When enabled, a native prompt composer
   uses local task-shape rules first, calls a small ephemeral classifier only
   for low-confidence requests, validates the decision against Codex's live
-  `model/list` catalog, and submits the turn with a supported model and
-  reasoning effort. Native Codex terminals keep one persistent app-server-backed
-  PTY whether Adaptive routing is on or off, so changing the routing preference
-  does not restart the terminal or replay its conversation.
+  `model/list` catalog, and submits the turn with a supported model and reasoning
+  effort. Compatible native Codex terminals keep one persistent app-server-backed
+  PTY whether Adaptive routing is on or off. Existing direct or fallback PTYs stay
+  running and show Adaptive as unavailable instead of being restarted or migrated.
 - Clipboard-aware screenshot paste: copy a Windows or macOS image, press
   `Ctrl+V` in a Codex terminal, and the native client stores a managed temporary
   PNG and inserts its host-accessible image reference into the composer. Windows
@@ -174,10 +174,14 @@ values to 1–100 megapixels; missing or non-positive values use the defaults.
 ### Adaptive routing
 
 Adaptive is stored per terminal pane and is off by default. Native Codex
-terminals connect through a private loopback app-server while keeping the
-authentic Codex TUI visible, regardless of the Adaptive preference. Switching
-Adaptive on or off changes only where new prompts are composed and routed; it
-does not restart the PTY. Prompts submitted through the
+terminals request a private loopback app-server control plane while keeping the
+authentic Codex TUI visible, regardless of the Adaptive preference. A terminal
+that was already started through the browser or an older release, or that fell
+back after control-plane startup failed, remains on its direct transport. The
+native app does not restart or migrate that PTY; it shows Adaptive as unavailable
+and hides the composer while the terminal keeps running. On compatible terminals,
+switching Adaptive on or off changes only where new prompts are composed and
+routed and does not restart the PTY. Prompts submitted through the
 native Adaptive composer are classified as simple, standard, deep, or critical
 and routed only to model/effort combinations advertised for the signed-in user.
 The composer shows the selected model, effort, route level, and whether the
@@ -191,11 +195,12 @@ not silently submit with a different configuration.
 ### Local voice-to-text
 
 The speech helper starts on demand and the microphone is released after stop,
-cancel, tab close, or application shutdown. Audio is not sent to a remote
-service. The first use downloads the Whisper base.en and Silero VAD model files
-to the OS user's `CodexNative/speech-models` application-data directory; the
-Whisper model is accepted only after its pinned SHA-256 verifies. Later uses
-reuse the local models.
+cancel, tab close, macOS window hide, or application shutdown. Each recording is
+limited to two minutes; reaching the limit stops capture and starts local
+transcription automatically. Audio is not sent to a remote service. The first
+use downloads the Whisper base.en and Silero VAD model files to the OS user's
+`CodexNative/speech-models` application-data directory; the Whisper model is
+accepted only after its pinned SHA-256 verifies. Later uses reuse the local models.
 
 The implementation records capture-start latency, peak level, clipping,
 leading/trailing silence, and word error rate for a supplied reference phrase.
@@ -246,7 +251,11 @@ checkout with dependencies, and the .NET 10 SDK only when building locally.
 
 Windows additionally needs WSL2 and the configured Ubuntu distribution. The
 desktop process delegates the service and shell launch to WSL, while persistent
-Codex PTYs remain server-owned there.
+Codex PTYs remain server-owned there. Optional local voice-to-text on Windows
+requires Windows 11 or Windows Server 2022, an AVX2/FMA-capable processor, and
+the Microsoft Visual C++ Redistributable for Visual Studio 2022. The portable
+release does not bundle or provision alternate speech runtimes or that
+redistributable.
 
 macOS needs Command Line Tools (`xcode-select --install`) so `node-pty` can be
 installed in the checkout. Apple Silicon and Intel packages are separate. The
