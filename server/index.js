@@ -7,6 +7,7 @@
  *   POST /api/sessions/:id/rename   — update title (body: { title })
  *   POST /api/sessions/:id/kill-pty — kill the active PTY (not the session)
  *   GET  /api/status                — server health + active PTY count
+ *   GET  /api/native/compatibility  — fast native API compatibility probe
  *
  * WebSocket:
  *   ws://localhost:PORT/ws/terminal/:id   — attach to PTY for session
@@ -36,6 +37,8 @@ const PORT = parseInt(process.env.PORT || '7575', 10);
 // Native clients must not reuse a v4 service whose shared app-server causes
 // new sessions to inherit the dashboard checkout.
 const API_VERSION = 5;
+const SERVICE_INSTANCE_ID = process.env.UI_MY_CLI_NATIVE_INSTANCE_ID
+  || `${process.pid}-${Date.now()}`;
 const IS_DEV = process.env.NODE_ENV !== 'production';
 const CLIENT_DIST = path.resolve(__dirname, '..', 'client', 'dist');
 
@@ -63,6 +66,19 @@ app.use(cors({
 }));
 
 // ─── REST API ─────────────────────────────────────────────────────────────────
+
+// Keep this endpoint independent of provider discovery, databases, and CLI
+// version probes. Native startup uses a sub-second timeout and must be able to
+// distinguish an incompatible service from one that is not listening.
+app.get('/api/native/compatibility', (_req, res) => {
+  res.json({
+    ok: true,
+    apiVersion: API_VERSION,
+    service: 'ui-my-cli-dashboard',
+    instanceId: SERVICE_INSTANCE_ID,
+    activePtys: activePtySessions().length,
+  });
+});
 
 app.get('/api/status', (_req, res) => {
   res.json({

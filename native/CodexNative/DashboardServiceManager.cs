@@ -6,6 +6,12 @@ namespace CodexNative;
 public sealed class DashboardServiceManager : IDisposable
 {
     private Process? _process;
+    private int? _ownedPort;
+
+    public int? OwnedPort => OwnsRunningService ? _ownedPort : null;
+
+    public bool OwnsServiceOnPort(int port) =>
+        OwnsRunningService && _ownedPort == port;
 
     public bool OwnsRunningService
     {
@@ -120,6 +126,7 @@ public sealed class DashboardServiceManager : IDisposable
             throw;
         }
         _process = process;
+        _ownedPort = port;
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         NativeLog.Write($"Dashboard service host started with PID {process.Id}.");
@@ -167,7 +174,10 @@ public sealed class DashboardServiceManager : IDisposable
     private void ClearOwnedProcess(Process process)
     {
         if (ReferenceEquals(_process, process))
+        {
             _process = null;
+            _ownedPort = null;
+        }
         process.Dispose();
     }
 

@@ -21,6 +21,20 @@ test.describe('Dashboard smoke tests', () => {
     expect(body).toHaveProperty('uptime');
   });
 
+  test('native compatibility endpoint is lightweight and versioned', async ({ request }) => {
+    const res = await request.get('/api/native/compatibility');
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(body).toMatchObject({
+      ok: true,
+      apiVersion: 2,
+      service: 'ui-my-cli-dashboard',
+      activePtys: expect.any(Number),
+      instanceId: expect.any(String),
+    });
+    expect(body).not.toHaveProperty('providers');
+  });
+
   test('sessions API returns an array', async ({ request }) => {
     const res = await request.get('/api/sessions');
     expect(res.ok()).toBeTruthy();

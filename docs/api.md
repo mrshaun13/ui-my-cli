@@ -7,6 +7,7 @@ with an appropriate HTTP status code.
 
 | Method | Path | Description |
 | --- | --- | --- |
+| `GET` | `/api/native/compatibility` | Fast native startup probe — returns API version, service instance identity, and active PTY count without database or provider CLI checks. |
 | `GET` | `/api/status` | Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds |
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
 | `GET` | `/api/native/launch/status` | Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching. |
@@ -102,6 +103,7 @@ Compatibility alias: `/ws/status` uses the default provider.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `7575` | HTTP server port |
+| `UI_MY_CLI_NATIVE_INSTANCE_ID` | `—` |  |
 | `NODE_ENV` | `—` | Set to `production` to enable static file serving from `client/dist/` |
 | `SHELL` | `—` | Shell binary for the node-pty process (falls back to `/bin/zsh` on macOS, then `/bin/bash`, then `/bin/sh`) |
 | `CODEX_HOME` | `—` | Override the Codex home directory (default: `~/.codex`) |

@@ -219,6 +219,26 @@ Check("dashboard API v5 requires remote sessions to preserve their selected root
     Equal(true, DashboardApiCompatibility.IsCompatible(5));
 });
 
+Check("dashboard compatibility probes distinguish mismatches from outages", () =>
+{
+    var compatible = DashboardApiProbeResult.FromResponse(true, DashboardApiCompatibility.RequiredVersion, 3, "owned");
+    Equal(DashboardApiProbeState.Compatible, compatible.State);
+    Equal(true, compatible.IsCompatible);
+    Equal(3, compatible.ActivePtys);
+
+    var incompatible = DashboardApiProbeResult.FromResponse(true, DashboardApiCompatibility.RequiredVersion + 1);
+    Equal(DashboardApiProbeState.Incompatible, incompatible.State);
+    Equal(false, incompatible.IsCompatible);
+    Equal(true, incompatible.DescribeMismatch(7577).Contains("requires v2"));
+    Equal(true, incompatible.CanReplaceOwnedService(ownsService: true));
+    Equal(false, incompatible.CanReplaceOwnedService(ownsService: false));
+    Equal(false, compatible.CanReplaceOwnedService(ownsService: true));
+    Equal(false, DashboardApiProbeResult.FromResponse(true, 3, activePtys: 1).CanReplaceOwnedService(true));
+
+    Equal(DashboardApiProbeState.Unreachable, DashboardApiProbeResult.Unreachable().State);
+    Equal(DashboardApiProbeState.Unreachable, DashboardApiProbeResult.FromResponse(false, 99).State);
+});
+
 Check("token activity input and output share one truthful chart scale", () =>
 {
     Equal(1_000d, TokenChartMath.CommonMaximum([1_000d, 500d], [10d, 5d]));

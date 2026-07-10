@@ -156,6 +156,7 @@ Override Devin with `DEVIN_DB_PATH` or `DEVIN_DASHBOARD_DB_PATH`.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `7575` | HTTP server port |
+| `UI_MY_CLI_NATIVE_INSTANCE_ID` | `—` |  |
 | `NODE_ENV` | `—` | Set to `production` to enable static file serving from `client/dist/` |
 | `SHELL` | `—` | Shell binary for the node-pty process (falls back to `/bin/zsh` on macOS, then `/bin/bash`, then `/bin/sh`) |
 | `CODEX_HOME` | `—` | Override the Codex home directory (default: `~/.codex`) |

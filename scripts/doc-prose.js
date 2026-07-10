@@ -235,6 +235,7 @@ module.exports = {
 
   // Descriptions for REST routes — keyed as "METHOD /path"
   routeDescriptions: {
+    'GET /api/native/compatibility': 'Fast native startup probe — returns API version, service instance identity, and active PTY count without database or provider CLI checks.',
     'GET /api/native/launch/status': 'Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching.',
     'POST /api/native/launch':       'Focus or start the installed Codex Native app through Windows/WSL2 PowerShell or macOS LaunchServices.',
     'GET /api/status':               'Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds',

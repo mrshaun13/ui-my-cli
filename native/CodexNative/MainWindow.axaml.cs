@@ -1376,6 +1376,8 @@ public sealed partial class MainWindow : Window
                 }
             }
             var hostExecutable = Path.Combine(AppContext.BaseDirectory, _platform.TerminalHostFileName);
+            DashboardApiProbeResult? incompatibleService = null;
+            var incompatiblePort = 0;
             foreach (var port in DashboardServicePorts.PrivateCandidates)
             {
                 _api.UsePrivateService(port);
@@ -1383,10 +1385,32 @@ public sealed partial class MainWindow : Window
                 // service alive while a new UI is starting. Recheck immediately
                 // before spawning so a short probe race does not create a noisy
                 // EADDRINUSE child process.
-                if (await _api.IsAvailableAsync(cancellationToken))
+                var existingProbe = await _api.ProbeCurrentServiceAsync(cancellationToken);
+                if (existingProbe.IsCompatible)
                 {
                     SetStatus($"Dashboard reconnected on {port} · persistent terminals enabled", RunningBrush);
                     return true;
+                }
+                if (existingProbe.State == DashboardApiProbeState.Incompatible)
+                {
+                    incompatibleService ??= existingProbe;
+                    if (incompatiblePort == 0) incompatiblePort = port;
+                    var ownsService = _serviceManager.OwnsServiceOnPort(port);
+                    if (!ownsService) continue;
+                    if (!existingProbe.CanReplaceOwnedService(ownsService))
+                    {
+                        throw new InvalidOperationException(
+                            $"{existingProbe.DescribeMismatch(port)} The service is owned by this app and has " +
+                            $"{existingProbe.ActivePtys} active terminal{(existingProbe.ActivePtys == 1 ? string.Empty : "s")}, " +
+                            "so it was not replaced.");
+                    }
+                    NativeLog.Write(
+                        $"Replacing incompatible dashboard service owned by this UI on port {port}; no active PTYs were reported.");
+                    if (!_serviceManager.StopOwnedService())
+                    {
+                        throw new InvalidOperationException(
+                            $"{existingProbe.DescribeMismatch(port)} The owned zero-PTY service could not be stopped safely.");
+                    }
                 }
                 _serviceManager.EnsureStarted(
                     _platform.Platform,
@@ -1399,12 +1423,28 @@ public sealed partial class MainWindow : Window
                 for (var attempt = 0; attempt < 20; attempt++)
                 {
                     await Task.Delay(500, cancellationToken);
-                    if (await _api.IsAvailableAsync(cancellationToken))
+                    var launchedProbe = await _api.ProbeCurrentServiceAsync(cancellationToken);
+                    if (launchedProbe.IsCompatible)
                     {
                         SetStatus(
                             $"Started ui-my-cli data service on {port} · persistent terminals enabled",
                             RunningBrush);
                         return true;
+                    }
+                    if (launchedProbe.State == DashboardApiProbeState.Incompatible)
+                    {
+                        var mismatch = launchedProbe.DescribeMismatch(port);
+                        if (launchedProbe.CanReplaceOwnedService(
+                                _serviceManager.OwnsServiceOnPort(port)))
+                        {
+                            NativeLog.Write(
+                                $"Stopping newly launched incompatible dashboard service on port {port}; no active PTYs were reported.");
+                            if (!_serviceManager.StopOwnedService())
+                                mismatch += " The newly launched service could not be stopped cleanly.";
+                        }
+                        throw new InvalidOperationException(
+                            $"{mismatch} The dashboard checkout at '{_settings.DashboardWorkingDirectory}' " +
+                            "does not match this native build.");
                     }
                     if (!_serviceManager.TryGetExitCode(out var exitCode)) continue;
                     NativeLog.Write(
@@ -1416,6 +1456,8 @@ public sealed partial class MainWindow : Window
                 throw new TimeoutException(
                     $"The native dashboard data service did not answer on port {port}. See {NativeLog.FilePath}");
             }
+            if (incompatibleService is not null)
+                throw new InvalidOperationException(incompatibleService.DescribeMismatch(incompatiblePort));
             throw new InvalidOperationException(
                 $"No private dashboard port from {DashboardServicePorts.FirstPrivate} through " +
                 $"{DashboardServicePorts.LastPrivate} could start the data service. See {NativeLog.FilePath}");

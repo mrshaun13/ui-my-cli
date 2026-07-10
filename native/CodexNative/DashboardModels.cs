@@ -97,6 +97,15 @@ public sealed class DashboardStatus
     public List<ProviderStatus> Providers { get; set; } = [];
 }
 
+public sealed class DashboardCompatibilityStatus
+{
+    public bool Ok { get; set; }
+    public int ApiVersion { get; set; }
+    public string Service { get; set; } = string.Empty;
+    public string? InstanceId { get; set; }
+    public int ActivePtys { get; set; }
+}
+
 public sealed class ProviderStatus
 {
     public string Id { get; set; } = string.Empty;
