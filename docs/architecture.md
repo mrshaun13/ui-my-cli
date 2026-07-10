@@ -28,6 +28,8 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | `server/sessions.js` | Codex compatibility session facade for legacy imports. |
 | `server/stats.js` | Codex compatibility stats facade for legacy imports. |
 | `server/pty-manager.js` | PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients, with Unix spawn-helper executable repair. |
+| `server/codex-control-plane.js` | Codex control-plane request compatibility and best-effort startup helpers. |
+| `server/pending-session-tracker.js` | Tracks an unpersisted session until it registers or its terminal exits. |
 | `server/db-path.js` | Compatibility exports for legacy db-path imports. |
 | `server/codex-paths.js` | Resolves local Codex state paths. |
 | `server/codex-store.js` | Codex session adapter. |
@@ -58,7 +60,7 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | File | Description |
 | --- | --- |
 | `native/CodexNative/App.axaml.cs` | Avalonia application entry; on macOS configures the menu-bar icon for open, service start/reconnect, managed stop, and quit. |
-| `native/CodexNative/MainWindow.axaml.cs` | Cross-platform native dashboard shell with Agent provider switcher, provider-scoped persistent session tabs, direct local shell tabs, responsive header/pane layout, themed pane scrollbars, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences. |
+| `native/CodexNative/MainWindow.axaml.cs` | Cross-platform native dashboard shell with Agent provider switcher, provider-scoped persistent session tabs, local voice input, direct local shell tabs, responsive header/pane layout, themed pane scrollbars, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences. |
 | `native/CodexNative/MainWindow.axaml` | Native dashboard layout with Agent provider selector, theme-aware control chrome, and the in-app pixel C identity. |
 | `native/CodexNative/Assets/codex-native-icon.png` | Transparent generated pixel-art C used by the native dashboard header. |
 | `native/CodexNative/Assets/codex-native-icon.ico` | Multi-resolution Windows executable and title-bar icon bundle. |
@@ -69,6 +71,7 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | `native/CodexNative.TerminalHost/Program.cs` | Cross-platform console companion for persistent server-terminal bridging and Windows WSL startup. |
 | `native/CodexNative.TerminalHost/TerminalBridge.cs` | Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent server PTYs. |
 | `native/CodexNative.SpeechHost/SpeechHostApplication.cs` | On-demand local microphone, Silero VAD, Whisper transcription, and measurable Handy-parity fixture host. |
+| `native/CodexNative/SpeechHostClient.cs` | Isolated speech-helper process lifecycle and newline-delimited JSON command/event bridge. |
 | `native/CodexNative.Core/SpeechProtocol.cs` | Typed speech-helper lifecycle, capture-health metrics, and word-error-rate parity policy. |
 | `native/CodexNative.Core/NativePlatform.cs` | Explicit Windows, macOS, and Linux native runtime profile and artifact naming. |
 | `native/CodexNative.Core/ExecutableResolver.cs` | Validated Node.js and login-shell discovery without user-controlled shell interpolation. |
@@ -82,7 +85,7 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | `native/CodexNative.Core/NativeInstallRequest.cs` | Validated structured update handoff arguments and installed-app layout resolution. |
 | `native/CodexNative/NativeUpdateService.cs` | Native release check, verified staging, and external updater launch orchestration. |
 | `native/CodexNative.Updater/Program.cs` | Out-of-process atomic installation, rollback, and native-app restart helper. |
-| `native/CodexNative/DashboardStatusFeed.cs` | Reconnecting provider-scoped status-feed client for push-driven native session updates and rekey events. |
+| `native/CodexNative/DashboardStatusFeed.cs` | Reconnecting provider-scoped status-feed client for push-driven native session, rekey, and pending-terminal expiry events. |
 | `native/CodexNative/AnalyticsControls.cs` | Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition. |
 | `native/CodexNative/SessionPreviewControl.cs` | Rich native session summary with provider-scoped conversation history, context composition, model changes, and Codex subagent timelines. |
 | `native/CodexNative/DashboardModels.cs` | Typed multi-provider dashboard, context, analytics, conversation, rate-limit, provider-catalog, and subagent payload models. |
@@ -144,8 +147,11 @@ The server maintains two WebSocket namespaces:
 1. **PTY bridge** (`/ws/:providerId/terminal/:id`) — One `node-pty` process per provider/session ID.
    Multiple browser tabs can attach to the same PTY simultaneously and share
    the same terminal stream. A rolling 256 KB scrollback buffer replays
-   terminal history to new connections.
+   terminal history to new connections. Codex clients can request the shared
+   app-server control-plane transport without coupling it to the pane's current
+   Adaptive preference.
 
 2. **Status feed** (`/ws/:providerId/status`) — Server-push only. Sends the full session
-   list every 3 seconds. Each provider watches its own local state files
-   (debounced 120 ms) to deliver updates without waiting for the next poll interval.
+   list every 3 seconds plus pending-session rekey/expiry and latest-prompt
+   events. Each provider watches its own local state files (debounced 120 ms)
+   to deliver updates without waiting for the next poll interval.

@@ -1,3 +1,5 @@
+/** Codex control-plane request compatibility and best-effort startup helpers. */
+
 'use strict';
 
 function wantsCodexControlPlane(providerId, request = {}) {

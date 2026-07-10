@@ -8,9 +8,10 @@ dashboard list, search, analytics, archives, and terminal bridges to the
 selected provider—matching the browser's hard provider switch.
 
 The native frontend is currently a development preview, not a standalone
-desktop distribution. Its package contains the Avalonia UI and terminal/update
-helpers; it does not contain the Node.js dashboard service, npm dependencies,
-or provider state. A prepared local ui-my-cli checkout remains required.
+desktop distribution. Its package contains the Avalonia UI and terminal,
+speech, and update helpers; it does not contain the Node.js dashboard service,
+npm dependencies, or provider state. A prepared local ui-my-cli checkout
+remains required.
 
 ## macOS v1.1.4 runtime recovery
 
@@ -94,7 +95,8 @@ UI-owned and end when their tab or the app closes.
   Each Codex viewport also has a camera button that opens Windows screen
   clipping or macOS interactive capture and attaches the completed image
   without requiring `Ctrl+V`.
-- Local voice-to-text through the microphone button beside the camera button.
+- Local voice-to-text in any native terminal through the microphone button
+  beside the camera button.
   Capture runs only between explicit start and stop clicks in an isolated
   helper process, is normalized to 16 kHz mono, trimmed with Silero VAD, and
   transcribed locally with Whisper base.en. The text is inserted without being
@@ -199,8 +201,8 @@ cancel, tab close, macOS window hide, or application shutdown. Each recording is
 limited to two minutes; reaching the limit stops capture and starts local
 transcription automatically. Audio is not sent to a remote service. The first
 use downloads the Whisper base.en and Silero VAD model files to the OS user's
-`CodexNative/speech-models` application-data directory; the Whisper model is
-accepted only after its pinned SHA-256 verifies. Later uses reuse the local models.
+`CodexNative/speech-models` application-data directory; both models are accepted
+only after their pinned SHA-256 values verify. Later uses reuse the local models.
 
 The implementation records capture-start latency, peak level, clipping,
 leading/trailing silence, and word error rate for a supplied reference phrase.
@@ -314,8 +316,9 @@ Artifacts are written to:
 - `native/artifacts/releases/CodexNative-v<version>-<runtime>.zip` and
   `.zip.sha256`
 
-The macOS packages are real `.app` bundles with a native Mach-O app host and
-terminal host. Cross-publishing verifies their structure from Linux, but final
+The macOS packages are real `.app` bundles with native Mach-O app, terminal,
+speech, and updater hosts plus the local Whisper runtime. Cross-publishing
+verifies their structure from Linux, but final
 release packages still require macOS launch testing, code signing, and Apple
 notarization before distribution outside a development machine.
 

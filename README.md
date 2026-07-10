@@ -18,7 +18,7 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - **Instant Adaptive switching** — compatible native Codex PTYs stay connected through one app-server control plane while each pane independently switches between native Adaptive routing and direct TUI prompting without restarting or replaying the terminal; existing direct or fallback PTYs stay running and report Adaptive as unavailable instead of being restarted or migrated
 - **Durable blank terminals and live context** — newly opened Codex tabs remain available until their first prompt persists the thread, while open native inspectors follow model, reasoning-effort, and context changes from manual `/model` selection or Adaptive routing
 - **Project-root-safe native sessions** — each new Codex TUI receives the directory selected in the native chooser as an explicit working root, including when it connects through the shared app-server control plane
-- **Local native voice-to-text** — each Codex terminal has a microphone control that captures through a dedicated cross-platform audio helper, trims speech with Silero VAD, transcribes locally with Whisper base.en, and inserts the result into either terminal input or the initiating pane's Adaptive composer without auto-submitting
+- **Local native voice-to-text** — each native terminal has a microphone control that captures through a dedicated cross-platform audio helper, trims speech with Silero VAD, transcribes locally with Whisper base.en, and inserts the result into either terminal input or the initiating pane's Adaptive composer without auto-submitting
 - **Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for active provider sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
 - **Archive / restore** — hide sessions from the list without deleting them; restore from the collapsible drawer at the bottom of the sidebar
@@ -189,6 +189,8 @@ server/
   server/sessions.js           Codex compatibility session facade for legacy imports.
   server/stats.js              Codex compatibility stats facade for legacy imports.
   server/pty-manager.js        PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients, with Unix spawn-helper executable repair.
+  server/codex-control-plane.js Codex control-plane request compatibility and best-effort startup helpers.
+  server/pending-session-tracker.js Tracks an unpersisted session until it registers or its terminal exits.
   server/db-path.js            Compatibility exports for legacy db-path imports.
   server/codex-paths.js        Resolves local Codex state paths.
   server/codex-store.js        Codex session adapter.
@@ -213,7 +215,7 @@ client/src/
 
 native/
   native/CodexNative/App.axaml.cs                  Avalonia application entry; on macOS configures the menu-bar icon for open, service start/reconnect, managed stop, and quit.
-  native/CodexNative/MainWindow.axaml.cs           Cross-platform native dashboard shell with Agent provider switcher, provider-scoped persistent session tabs, direct local shell tabs, responsive header/pane layout, themed pane scrollbars, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.
+  native/CodexNative/MainWindow.axaml.cs           Cross-platform native dashboard shell with Agent provider switcher, provider-scoped persistent session tabs, local voice input, direct local shell tabs, responsive header/pane layout, themed pane scrollbars, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.
   native/CodexNative/MainWindow.axaml              Native dashboard layout with Agent provider selector, theme-aware control chrome, and the in-app pixel C identity.
   native/CodexNative/Assets/codex-native-icon.png  Transparent generated pixel-art C used by the native dashboard header.
   native/CodexNative/Assets/codex-native-icon.ico  Multi-resolution Windows executable and title-bar icon bundle.
@@ -224,6 +226,7 @@ native/
   native/CodexNative.TerminalHost/Program.cs       Cross-platform console companion for persistent server-terminal bridging and Windows WSL startup.
   native/CodexNative.TerminalHost/TerminalBridge.cs Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent server PTYs.
   native/CodexNative.SpeechHost/SpeechHostApplication.cs On-demand local microphone, Silero VAD, Whisper transcription, and measurable Handy-parity fixture host.
+  native/CodexNative/SpeechHostClient.cs           Isolated speech-helper process lifecycle and newline-delimited JSON command/event bridge.
   native/CodexNative.Core/SpeechProtocol.cs        Typed speech-helper lifecycle, capture-health metrics, and word-error-rate parity policy.
   native/CodexNative.Core/NativePlatform.cs        Explicit Windows, macOS, and Linux native runtime profile and artifact naming.
   native/CodexNative.Core/ExecutableResolver.cs    Validated Node.js and login-shell discovery without user-controlled shell interpolation.
@@ -237,7 +240,7 @@ native/
   native/CodexNative.Core/NativeInstallRequest.cs  Validated structured update handoff arguments and installed-app layout resolution.
   native/CodexNative/NativeUpdateService.cs        Native release check, verified staging, and external updater launch orchestration.
   native/CodexNative.Updater/Program.cs            Out-of-process atomic installation, rollback, and native-app restart helper.
-  native/CodexNative/DashboardStatusFeed.cs        Reconnecting provider-scoped status-feed client for push-driven native session updates and rekey events.
+  native/CodexNative/DashboardStatusFeed.cs        Reconnecting provider-scoped status-feed client for push-driven native session, rekey, and pending-terminal expiry events.
   native/CodexNative/AnalyticsControls.cs          Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition.
   native/CodexNative/SessionPreviewControl.cs      Rich native session summary with provider-scoped conversation history, context composition, model changes, and Codex subagent timelines.
   native/CodexNative/DashboardModels.cs            Typed multi-provider dashboard, context, analytics, conversation, rate-limit, provider-catalog, and subagent payload models.
@@ -248,6 +251,7 @@ native/
 
 **`/ws/:providerId/terminal/:sessionId`** — PTY bridge
 
+- Optional query: `cols`, `rows`, and `controlPlane=1`; legacy `adaptive=1` also requests the Codex control-plane transport
 - Client → Server: `{ type: "input", data }` | `{ type: "resize", cols, rows }`
 - Server → Client: `{ type: "output", data }` | `{ type: "exit", exitCode }`
 
@@ -255,6 +259,8 @@ native/
 
 - Server → Client: `{ type: "sessions", data: Session[] }` every 3 seconds
 - Server → Client: `{ type: "latest-prompt", data }` on DB write events
+- Server → Client: `{ type: "rekey", tempKey, realId }` when a pending session persists
+- Server → Client: `{ type: "pending-expired", tempKey }` when a pending terminal exits before persistence
 
 ### Status Detection
 

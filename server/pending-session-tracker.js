@@ -1,3 +1,5 @@
+/** Tracks an unpersisted session until it registers or its terminal exits. */
+
 'use strict';
 
 function trackPendingSession({

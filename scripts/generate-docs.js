@@ -163,6 +163,8 @@ function collect() {
   const sessionsSrc = read('server/sessions.js');
   const statsSrc    = read('server/stats.js');
   const ptyMgrSrc   = read('server/pty-manager.js');
+  const codexControlPlaneSrc = read('server/codex-control-plane.js');
+  const pendingSessionTrackerSrc = read('server/pending-session-tracker.js');
   const dbPathSrc   = read('server/db-path.js');
   const codexPathSrc = read('server/codex-paths.js');
   const codexStoreSrc = read('server/codex-store.js');
@@ -183,6 +185,8 @@ function collect() {
     { name: 'server/sessions.js',   src: sessionsSrc },
     { name: 'server/stats.js',      src: statsSrc    },
     { name: 'server/pty-manager.js',src: ptyMgrSrc   },
+    { name: 'server/codex-control-plane.js', src: codexControlPlaneSrc },
+    { name: 'server/pending-session-tracker.js', src: pendingSessionTrackerSrc },
     { name: 'server/db-path.js',    src: dbPathSrc   },
     { name: 'server/codex-paths.js', src: codexPathSrc },
     { name: 'server/codex-store.js', src: codexStoreSrc },
@@ -222,7 +226,7 @@ function collect() {
   fileDescs['native/CodexNative/App.axaml.cs'] =
     'Avalonia application entry; on macOS configures the menu-bar icon for open, service start/reconnect, managed stop, and quit.';
   fileDescs['native/CodexNative/MainWindow.axaml.cs'] =
-    'Cross-platform native dashboard shell with Agent provider switcher, provider-scoped persistent session tabs, direct local shell tabs, responsive header/pane layout, themed pane scrollbars, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.';
+    'Cross-platform native dashboard shell with Agent provider switcher, provider-scoped persistent session tabs, local voice input, direct local shell tabs, responsive header/pane layout, themed pane scrollbars, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.';
   fileDescs['native/CodexNative/MainWindow.axaml'] =
     'Native dashboard layout with Agent provider selector, theme-aware control chrome, and the in-app pixel C identity.';
   fileDescs['native/CodexNative/Assets/codex-native-icon.png'] =
@@ -243,6 +247,8 @@ function collect() {
     'Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent server PTYs.';
   fileDescs['native/CodexNative.SpeechHost/SpeechHostApplication.cs'] =
     'On-demand local microphone, Silero VAD, Whisper transcription, and measurable Handy-parity fixture host.';
+  fileDescs['native/CodexNative/SpeechHostClient.cs'] =
+    'Isolated speech-helper process lifecycle and newline-delimited JSON command/event bridge.';
   fileDescs['native/CodexNative.Core/SpeechProtocol.cs'] =
     'Typed speech-helper lifecycle, capture-health metrics, and word-error-rate parity policy.';
   fileDescs['native/CodexNative.Core/NativePlatform.cs'] =
@@ -270,7 +276,7 @@ function collect() {
   fileDescs['native/CodexNative.Updater/Program.cs'] =
     'Out-of-process atomic installation, rollback, and native-app restart helper.';
   fileDescs['native/CodexNative/DashboardStatusFeed.cs'] =
-    'Reconnecting provider-scoped status-feed client for push-driven native session updates and rekey events.';
+    'Reconnecting provider-scoped status-feed client for push-driven native session, rekey, and pending-terminal expiry events.';
   fileDescs['native/CodexNative/AnalyticsControls.cs'] =
     'Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition.';
   fileDescs['native/CodexNative/SessionPreviewControl.cs'] =
@@ -515,6 +521,7 @@ ${nativeSection}
 
 **\`/ws/:providerId/terminal/:sessionId\`** — PTY bridge
 
+- Optional query: \`cols\`, \`rows\`, and \`controlPlane=1\`; legacy \`adaptive=1\` also requests the Codex control-plane transport
 - Client → Server: \`{ type: "input", data }\` | \`{ type: "resize", cols, rows }\`
 - Server → Client: \`{ type: "output", data }\` | \`{ type: "exit", exitCode }\`
 
@@ -522,6 +529,8 @@ ${nativeSection}
 
 - Server → Client: \`{ type: "sessions", data: Session[] }\` every 3 seconds
 - Server → Client: \`{ type: "latest-prompt", data }\` on DB write events
+- Server → Client: \`{ type: "rekey", tempKey, realId }\` when a pending session persists
+- Server → Client: \`{ type: "pending-expired", tempKey }\` when a pending terminal exits before persistence
 
 ### Status Detection
 
@@ -586,7 +595,10 @@ to (or spawn) that provider session's terminal process.
 
 Compatibility alias: \`/ws/terminal/:sessionId\` uses the default provider.
 
-**Optional query parameters:** \`?cols=80&rows=24\`
+**Optional query parameters:** \`cols\` and \`rows\` set the initial PTY size.
+For Codex, \`controlPlane=1\` requests the shared app-server transport used by
+native Adaptive routing; if it cannot start, the server falls back to a direct
+terminal. The legacy \`adaptive=1\` spelling remains a compatibility alias.
 
 **Client → Server:**
 
@@ -625,6 +637,8 @@ ${mdTable(
   [
     ['`sessions`',      '`{ type: "sessions", data: Session[] }`',                              'Every 3 seconds + immediately on connect + after mutations'],
     ['`latest-prompt`', '`{ type: "latest-prompt", data: { content, timestamp, isShell } }`',   'DB write events + immediately on connect'],
+    ['`rekey`',         '`{ type: "rekey", tempKey: string, realId: string }`',                 'A pending session persists and receives its provider session ID'],
+    ['`pending-expired`', '`{ type: "pending-expired", tempKey: string }`',                     'A pending terminal exits before its session persists'],
   ]
 )}
 
@@ -746,11 +760,14 @@ The server maintains two WebSocket namespaces:
 1. **PTY bridge** (\`/ws/:providerId/terminal/:id\`) — One \`node-pty\` process per provider/session ID.
    Multiple browser tabs can attach to the same PTY simultaneously and share
    the same terminal stream. A rolling 256 KB scrollback buffer replays
-   terminal history to new connections.
+   terminal history to new connections. Codex clients can request the shared
+   app-server control-plane transport without coupling it to the pane's current
+   Adaptive preference.
 
 2. **Status feed** (\`/ws/:providerId/status\`) — Server-push only. Sends the full session
-   list every 3 seconds. Each provider watches its own local state files
-   (debounced 120 ms) to deliver updates without waiting for the next poll interval.
+   list every 3 seconds plus pending-session rekey/expiry and latest-prompt
+   events. Each provider watches its own local state files (debounced 120 ms)
+   to deliver updates without waiting for the next poll interval.
 `;
 }
 

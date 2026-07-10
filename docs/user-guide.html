@@ -95,6 +95,19 @@ npm run pm2:stop</code></pre>
       <li>Codex session renames are dashboard-local; Devin renames update Devin's session title field.</li>
     </ul>
 
+    <h2>Native Desktop</h2>
+    <ul>
+      <li>New Codex terminals keep the project selected in the native chooser, including sessions using the shared app-server control plane.</li>
+      <li>A healthy blank Codex terminal remains open until its first prompt persists the session; only a terminal that exits is dismissed.</li>
+      <li>Compatible Codex terminals can switch Adaptive routing on or off without restarting the persistent PTY.</li>
+      <li>The microphone button records for up to two minutes, transcribes locally with checksum-verified Whisper and Silero VAD models, and inserts text without submitting it.</li>
+    </ul>
+    <p>
+      See <a href="../native/README.md">the native desktop guide</a> for
+      platform prerequisites, speech-model storage, packaging, and release
+      installation details.
+    </p>
+
     <h2>Configuration</h2>
     <ul>
       <li><code>PORT</code>: HTTP server port, default <code>7575</code>.</li>

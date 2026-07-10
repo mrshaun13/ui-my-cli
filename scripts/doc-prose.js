@@ -38,7 +38,7 @@ module.exports = {
     '**Instant Adaptive switching** — compatible native Codex PTYs stay connected through one app-server control plane while each pane independently switches between native Adaptive routing and direct TUI prompting without restarting or replaying the terminal; existing direct or fallback PTYs stay running and report Adaptive as unavailable instead of being restarted or migrated',
     '**Durable blank terminals and live context** — newly opened Codex tabs remain available until their first prompt persists the thread, while open native inspectors follow model, reasoning-effort, and context changes from manual `/model` selection or Adaptive routing',
     '**Project-root-safe native sessions** — each new Codex TUI receives the directory selected in the native chooser as an explicit working root, including when it connects through the shared app-server control plane',
-    '**Local native voice-to-text** — each Codex terminal has a microphone control that captures through a dedicated cross-platform audio helper, trims speech with Silero VAD, transcribes locally with Whisper base.en, and inserts the result into either terminal input or the initiating pane\'s Adaptive composer without auto-submitting',
+    '**Local native voice-to-text** — each native terminal has a microphone control that captures through a dedicated cross-platform audio helper, trims speech with Silero VAD, transcribes locally with Whisper base.en, and inserts the result into either terminal input or the initiating pane\'s Adaptive composer without auto-submitting',
     '**Verified native updates** — checks stable GitHub Releases for the current OS/architecture, verifies exact size and SHA-256, waits for active provider sessions and local shells to drain, then installs through an external rollback-capable helper and restarts automatically',
     '**Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider',
     '**Archive / restore** — hide sessions from the list without deleting them; ' +
@@ -238,6 +238,8 @@ module.exports = {
     'POST /api/native/launch':       'Focus or start the installed Codex Native app through Windows/WSL2 PowerShell or macOS LaunchServices.',
     'GET /api/status':               'Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds',
     'GET /api/providers':            'Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata',
+    'GET /api/:providerId/terminals': 'List active PTYs for one provider as an array of `{ key, providerId, sessionId, controlPlane, adaptive }`; `adaptive` is a compatibility alias for the control-plane transport flag.',
+    'GET /api/terminals':            'Compatibility alias for the default provider active-PTY list.',
     'GET /api/:providerId/stats':    'Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex includes 1d/2d/7d/14d/30d/all-time token and credit-estimate rollups by model, project, and session, and supports `statsMode=combined|triage|codex` cohort switching.',
     'GET /api/stats':                'Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default; accepts the same stats query params',
     'GET /api/:providerId/latest-prompt': 'Most recent user prompt from the selected provider local state',

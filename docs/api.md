@@ -13,8 +13,8 @@ with an appropriate HTTP status code.
 | `POST` | `/api/native/launch` | Focus or start the installed Codex Native app through Windows/WSL2 PowerShell or macOS LaunchServices. |
 | `GET` | `/api/codex/adaptive/models` | Authenticated Codex model catalog used by native Adaptive routing, including each visible model's supported reasoning efforts and service tiers. |
 | `POST` | `/api/codex/sessions/:id/adaptive/submit` | Classify and submit one native Adaptive prompt through the shared Codex app-server thread. For a pending session, body `{ text, preference?, workingDir }` starts the first turn before returning its real `sessionId`; later turns use `{ text, preference? }`. |
-| `GET` | `/api/:providerId/terminals` |  |
-| `GET` | `/api/terminals` |  |
+| `GET` | `/api/:providerId/terminals` | List active PTYs for one provider as an array of `{ key, providerId, sessionId, controlPlane, adaptive }`; `adaptive` is a compatibility alias for the control-plane transport flag. |
+| `GET` | `/api/terminals` | Compatibility alias for the default provider active-PTY list. |
 | `GET` | `/api/:providerId/stats` | Provider-scoped dashboard analytics — activity, tools, tokens, MCP servers, skills, plugins. Codex includes 1d/2d/7d/14d/30d/all-time token and credit-estimate rollups by model, project, and session, and supports `statsMode=combined|triage|codex` cohort switching. |
 | `GET` | `/api/stats` | Compatibility alias for `/api/codex/stats` unless `UI_MY_CLI_DEFAULT_PROVIDER` overrides the default; accepts the same stats query params |
 | `GET` | `/api/:providerId/latest-prompt` | Most recent user prompt from the selected provider local state |
@@ -59,7 +59,10 @@ to (or spawn) that provider session's terminal process.
 
 Compatibility alias: `/ws/terminal/:sessionId` uses the default provider.
 
-**Optional query parameters:** `?cols=80&rows=24`
+**Optional query parameters:** `cols` and `rows` set the initial PTY size.
+For Codex, `controlPlane=1` requests the shared app-server transport used by
+native Adaptive routing; if it cannot start, the server falls back to a direct
+terminal. The legacy `adaptive=1` spelling remains a compatibility alias.
 
 **Client → Server:**
 
@@ -91,6 +94,8 @@ Compatibility alias: `/ws/status` uses the default provider.
 | --- | --- | --- |
 | `sessions` | `{ type: "sessions", data: Session[] }` | Every 3 seconds + immediately on connect + after mutations |
 | `latest-prompt` | `{ type: "latest-prompt", data: { content, timestamp, isShell } }` | DB write events + immediately on connect |
+| `rekey` | `{ type: "rekey", tempKey: string, realId: string }` | A pending session persists and receives its provider session ID |
+| `pending-expired` | `{ type: "pending-expired", tempKey: string }` | A pending terminal exits before its session persists |
 
 ## Environment Variables
 
