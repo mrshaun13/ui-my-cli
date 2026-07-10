@@ -63,6 +63,20 @@ Check("conversation search safely handles every prefix of a multi-character quer
         ConversationSearch.Normalize(new string('x', ConversationSearch.MaximumQueryLength + 20)).Length);
 });
 
+Check("session titles are compacted for constrained native chrome", () =>
+{
+    Equal("Untitled session", SessionTitleDisplay.Compact(" \r\n\t "));
+    Equal(
+        "I want to continue a read-only reconciliation between AWS Direct Connect costs and Kentik.",
+        SessionTitleDisplay.Compact(
+            "I want to continue a read-only reconciliation\r\n\r\n  between AWS Direct Connect costs\n  and Kentik."));
+
+    var compact = SessionTitleDisplay.Compact(new string('x', 200));
+    Equal(SessionTitleDisplay.MaximumLength, compact.Length);
+    Equal(true, compact.EndsWith('…'));
+    Equal(false, compact.Contains('\n'));
+});
+
 Check("terminal selection geometry maps and clamps pointer positions", () =>
 {
     Equal(new TerminalCell(0, 0), TerminalSelectionGeometry.CellAt(0, 0, 1200, 600, 120, 30));

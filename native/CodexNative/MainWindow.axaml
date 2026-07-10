@@ -444,9 +444,9 @@
                     <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="22,*,Auto" Margin="12,8,12,9">
                       <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StatusGlyph}"
                                  Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
-                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding DisplayTitle}"
+                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CompactDisplayTitle}"
                                  Foreground="{DynamicResource PrimaryBrush}" FontWeight="SemiBold"
-                                 TextTrimming="CharacterEllipsis" />
+                                 MaxLines="1" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                       <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DisplayMeta}"
                                  Foreground="{DynamicResource SecondaryBrush}" FontSize="11"
                                  TextTrimming="CharacterEllipsis" />

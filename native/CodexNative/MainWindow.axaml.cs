@@ -1559,7 +1559,9 @@ public sealed partial class MainWindow : Window
         _openTabs.Remove(OpenTabRegistryKey(state));
         state.Key = realId;
         state.Session = session;
-        state.TitleBlock.Text = session?.DisplayTitle ?? state.TitleBlock.Text;
+        state.TitleBlock.Text = session is null
+            ? SessionTitleDisplay.Compact(state.TitleBlock.Text)
+            : session.CompactDisplayTitle;
         AutomationProperties.SetName(state.Tab, state.TitleBlock.Text ?? ProviderNoun(state.ProviderId));
         state.RenameBox.Text = session?.DisplayTitle ?? state.RenameBox.Text;
         state.ArchiveButton.IsVisible = session is not null;
@@ -1802,8 +1804,8 @@ public sealed partial class MainWindow : Window
             _openTabs.Remove(OpenTabRegistryKey(state));
             state.Key = candidate.Id;
             state.Session = candidate;
-            state.TitleBlock.Text = candidate.DisplayTitle;
-            AutomationProperties.SetName(state.Tab, candidate.DisplayTitle);
+            state.TitleBlock.Text = candidate.CompactDisplayTitle;
+            AutomationProperties.SetName(state.Tab, candidate.CompactDisplayTitle);
             state.RenameBox.Text = candidate.DisplayTitle;
             state.ArchiveButton.IsVisible = true;
             state.SummaryButton.IsVisible = true;
@@ -2859,6 +2861,7 @@ public sealed partial class MainWindow : Window
         TerminalPaneState pane,
         string? providerId = null)
     {
+        var displayTitle = SessionTitleDisplay.Compact(title);
         var isLocalShell = kind == TerminalSessionKind.LocalShell;
         providerId = isLocalShell
             ? string.Empty
@@ -3329,9 +3332,11 @@ public sealed partial class MainWindow : Window
         if (!isLocalShell) ToolTip.SetTip(statusGlyph, $"{providerLabel} terminal");
         var titleBlock = new TextBlock
         {
-            Text = title,
+            Text = displayTitle,
             FontSize = tabFontSize,
             MaxWidth = 220,
+            MaxLines = 1,
+            TextWrapping = TextWrapping.NoWrap,
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center,
         };
@@ -3366,7 +3371,7 @@ public sealed partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             VerticalContentAlignment = VerticalAlignment.Stretch,
         };
-        AutomationProperties.SetName(tab, title);
+        AutomationProperties.SetName(tab, displayTitle);
         var state = new SessionTabState(
             key, tab, terminal, content, screenshotButton, microphoneButton,
             adaptiveToggleButton, adaptivePulseHalo, adaptiveComposer, adaptivePromptBox, adaptiveSendButton, adaptiveRouteText,
@@ -3462,7 +3467,7 @@ public sealed partial class MainWindow : Window
         titleBlock.DoubleTapped += (_, args) =>
         {
             args.Handled = true;
-            inlineRenameBox.Text = titleBlock.Text;
+            inlineRenameBox.Text = state.RenameBox.Text ?? titleBlock.Text;
             titleBlock.IsVisible = false;
             inlineRenameBox.IsVisible = true;
             inlineRenameBox.Focus();
@@ -4613,7 +4618,8 @@ public sealed partial class MainWindow : Window
     {
         if (state.Session is null)
         {
-            state.TitleBlock.Text = state.RenameBox.Text?.Trim() ?? state.TitleBlock.Text;
+            state.TitleBlock.Text = SessionTitleDisplay.Compact(
+                state.RenameBox.Text?.Trim() ?? state.TitleBlock.Text);
             AutomationProperties.SetName(
                 state.Tab,
                 state.TitleBlock.Text ?? (state.Kind == TerminalSessionKind.LocalShell
@@ -4629,8 +4635,8 @@ public sealed partial class MainWindow : Window
         try
         {
             await _api.RenameAsync(state.Session.Id, title, providerId: state.ProviderId);
-            state.TitleBlock.Text = title;
-            AutomationProperties.SetName(state.Tab, title);
+            state.TitleBlock.Text = SessionTitleDisplay.Compact(title);
+            AutomationProperties.SetName(state.Tab, state.TitleBlock.Text);
             await RefreshAllAsync();
         }
         catch (Exception ex)
@@ -4814,7 +4820,7 @@ public sealed partial class MainWindow : Window
             Spacing = 4,
             Children =
             {
-                new TextBlock { Text = session.DisplayTitle, Foreground = ResourceBrush("PrimaryBrush"), FontWeight = FontWeight.Bold, TextWrapping = TextWrapping.Wrap },
+                new TextBlock { Text = session.CompactDisplayTitle, Foreground = ResourceBrush("PrimaryBrush"), FontWeight = FontWeight.Bold, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis },
                 new TextBlock { Text = session.DisplayMeta, Foreground = ResourceBrush("SecondaryBrush"), FontSize = 11 },
                 new TextBlock { Text = $"status · {session.Status}", Foreground = ResourceBrush("AccentBrush"), FontSize = 11 },
                 new TextBlock { Text = session.LastUserPrompt, Foreground = ResourceBrush("MutedBrush"), FontSize = 11, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis },
@@ -4880,7 +4886,7 @@ public sealed partial class MainWindow : Window
             Children =
             {
                 new TextBlock { Text = session.IsHeadless ? "◈" : "ⓘ", FontSize = TabIconFontSize(textSize), Foreground = ResourceBrush("AccentBrush") },
-                new TextBlock { Text = session.DisplayTitle, FontSize = TabHeaderFontSize(textSize), MaxWidth = 220, TextTrimming = TextTrimming.CharacterEllipsis },
+                new TextBlock { Text = session.CompactDisplayTitle, FontSize = TabHeaderFontSize(textSize), MaxWidth = 220, MaxLines = 1, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
                 close,
             },
         };
@@ -4897,8 +4903,9 @@ public sealed partial class MainWindow : Window
         {
             await _api.RenameAsync(session.Id, title, providerId: providerId);
             session.Title = title;
-            if (header.Children.ElementAtOrDefault(1) is TextBlock titleBlock) titleBlock.Text = title;
-            if (tab is not null) AutomationProperties.SetName(tab, $"Session summary: {title}");
+            var displayTitle = SessionTitleDisplay.Compact(title);
+            if (header.Children.ElementAtOrDefault(1) is TextBlock titleBlock) titleBlock.Text = displayTitle;
+            if (tab is not null) AutomationProperties.SetName(tab, $"Session summary: {displayTitle}");
             await RefreshSessionsAsync();
             SetStatus($"Renamed {title}", RunningBrush);
         }

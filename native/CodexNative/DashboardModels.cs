@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using CodexNative.Core;
 
 namespace CodexNative;
 
@@ -32,6 +33,9 @@ public class DashboardSession
 
     [JsonIgnore]
     public string DisplayTitle => string.IsNullOrWhiteSpace(Title) ? "Untitled session" : Title;
+
+    [JsonIgnore]
+    public string CompactDisplayTitle => SessionTitleDisplay.Compact(DisplayTitle);
 
     [JsonIgnore]
     public string DisplayMeta => $"{Project} · {LastActivityAgo}".Trim(' ', '·');

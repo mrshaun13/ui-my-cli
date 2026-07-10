@@ -201,11 +201,13 @@ public sealed class SessionPreviewControl : UserControl
         var panel = new StackPanel { Spacing = 5 };
         panel.Children.Add(new TextBlock
         {
-            Text = preview.DisplayTitle,
+            Text = preview.CompactDisplayTitle,
             FontSize = 22,
             FontWeight = FontWeight.Bold,
             Foreground = _brush("PrimaryBrush"),
+            MaxLines = 2,
             TextWrapping = TextWrapping.Wrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
         });
         panel.Children.Add(new TextBlock
         {
