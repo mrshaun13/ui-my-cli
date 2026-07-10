@@ -18,6 +18,7 @@ Check("platform profiles select the correct terminal host and release runtime", 
     var windows = NativePlatformProfile.For(NativePlatform.Windows);
     Equal(true, windows.UsesWsl);
     Equal("CodexNative.TerminalHost.exe", windows.TerminalHostFileName);
+    Equal("CodexNative.SpeechHost.exe", windows.SpeechHostFileName);
     Equal("win-x64", windows.ReleaseRuntimeIdentifier);
 
     var macArm = NativePlatformProfile.For(
@@ -25,8 +26,29 @@ Check("platform profiles select the correct terminal host and release runtime", 
         System.Runtime.InteropServices.Architecture.Arm64);
     Equal(false, macArm.UsesWsl);
     Equal("macOS shell", macArm.LocalShellLabel);
+    Equal("CodexNative.SpeechHost", macArm.SpeechHostFileName);
     Equal("CodexNative.TerminalHost", macArm.TerminalHostFileName);
     Equal("osx-arm64", macArm.ReleaseRuntimeIdentifier);
+});
+
+Check("speech parity WAV fixtures round-trip and resample safely", () =>
+{
+    var path = Path.Combine(Path.GetTempPath(), $"codex-speech-{Guid.NewGuid():N}.wav");
+    try
+    {
+        var samples = Enumerable.Range(0, 200_000)
+            .Select(index => (float)(Math.Sin(index * 2 * Math.PI * 440 / 16000) * 0.4))
+            .ToArray();
+        SpeechWaveFile.WritePcm16Mono(path, samples, 16000);
+        var restored = SpeechWaveFile.ReadMono(path, 8000);
+        Equal(100_000, restored.Length);
+        Equal(true, restored.Max(value => Math.Abs(value)) is > 0.39f and < 0.41f);
+        Throws<ArgumentException>(() => SpeechWaveFile.WritePcm16Mono("relative.wav", samples, 16000));
+    }
+    finally
+    {
+        File.Delete(path);
+    }
 });
 
 Check("conversation search safely handles every prefix of a multi-character query", () =>
@@ -164,12 +186,14 @@ Check("macOS dashboard repository recovery skips stale checkouts without depende
     Equal(false, stale.IsReady);
 });
 
-Check("dashboard API v2 rejects legacy analytics contracts", () =>
+Check("dashboard API v5 requires remote sessions to preserve their selected root", () =>
 {
     Equal(false, DashboardApiCompatibility.IsCompatible(0));
     Equal(false, DashboardApiCompatibility.IsCompatible(1));
-    Equal(true, DashboardApiCompatibility.IsCompatible(2));
+    Equal(false, DashboardApiCompatibility.IsCompatible(2));
     Equal(false, DashboardApiCompatibility.IsCompatible(3));
+    Equal(false, DashboardApiCompatibility.IsCompatible(4));
+    Equal(true, DashboardApiCompatibility.IsCompatible(5));
 });
 
 Check("token activity input and output share one truthful chart scale", () =>
@@ -601,6 +625,72 @@ Check("terminal pane layout follows viewport changes while preserving usable pro
         TerminalPaneLayoutMath.FitPaneWidths([460d], 1200, 460, 5));
 });
 
+Check("speech lifecycle serializes recording, transcription, cancellation, and failure", () =>
+{
+    var lifecycle = new SpeechSessionStateMachine();
+    Equal(true, lifecycle.TryStart("one"));
+    Equal(false, lifecycle.TryStart("two"));
+    Equal(false, lifecycle.TryBeginTranscription("two"));
+    Equal(true, lifecycle.TryBeginTranscription("one"));
+    Equal(true, lifecycle.TryFail("one", "model failed"));
+    Equal(SpeechStage.Failed, lifecycle.Stage);
+    Equal("model failed", lifecycle.LastError);
+    Equal(true, lifecycle.TryCancel("one"));
+    Equal(SpeechStage.Idle, lifecycle.Stage);
+    Equal(true, lifecycle.TryBeginDownload("model"));
+    Equal(true, lifecycle.TryComplete("model"));
+});
+
+Check("speech operation cleanup cannot replace a newer operation", () =>
+{
+    var ownership = new SpeechOperationOwnership<object>();
+    var first = new object();
+    var second = new object();
+    ownership.Set(first);
+    Equal(true, ownership.ClearIfCurrent(first));
+    ownership.Set(second);
+    Equal(false, ownership.ClearIfCurrent(first));
+    Equal(second, ownership.Current);
+});
+
+Check("speech capture is bounded to the two-minute policy", () =>
+{
+    Equal(120, SpeechCapturePolicy.MaximumDurationSeconds);
+    Equal(1_920_000, SpeechCapturePolicy.MaximumSampleCount(16000));
+    Throws<ArgumentOutOfRangeException>(() => SpeechCapturePolicy.MaximumSampleCount(0));
+
+    var buffer = new SpeechSampleBuffer(5);
+    Equal(false, buffer.Append(new float[] { 1, 2, 3 }));
+    Equal(true, buffer.Append(new float[] { 4, 5, 6 }));
+    Equal(false, buffer.Append(new float[] { 7 }));
+    Equal(5, buffer.Count);
+    SequenceEqual(new float[] { 1, 2, 3, 4, 5 }, buffer.Drain());
+    Equal(0, buffer.Count);
+});
+
+Check("speech parity measures capture health and word error rate", () =>
+{
+    var samples = Enumerable.Repeat(0f, 1600)
+        .Concat(Enumerable.Repeat(0.25f, 12800))
+        .Concat(Enumerable.Repeat(0f, 1600))
+        .ToArray();
+    var metrics = SpeechCaptureAnalysis.Analyze(samples, 16000, 80);
+    Equal(1000d, metrics.DurationMs);
+    Equal(100d, metrics.LeadingSilenceMs);
+    Equal(100d, metrics.TrailingSilenceMs);
+    Equal(0d, metrics.ClippedSamplePercent);
+    Equal(0d, SpeechParityEvaluator.WordErrorRate("Route this prompt", "route this prompt"));
+    Equal(1d / 3d, SpeechParityEvaluator.WordErrorRate("route prompt", "route this prompt"));
+    Equal(true, SpeechParityEvaluator.Evaluate(metrics, "route this prompt", "route this prompt").Passed);
+
+    var failed = SpeechParityEvaluator.Evaluate(
+        metrics with { StartLatencyMs = 400, ClippedSamplePercent = 2 },
+        "wrong words",
+        "route this prompt");
+    Equal(false, failed.Passed);
+    Equal(3, failed.Failures.Count);
+});
+
 Check("clipboard screenshot paths become standalone host composer references", () =>
 {
     var wslPath = ScreenshotAttachmentPath.ToWslPath(
@@ -734,14 +824,24 @@ static async Task VerifyReleaseArtifactsAsync(
                 {
                     Path.Combine(extraction, "CodexNative.exe"),
                     Path.Combine(extraction, "CodexNative.TerminalHost.exe"),
+                    Path.Combine(extraction, "CodexNative.SpeechHost.exe"),
                     Path.Combine(extraction, "CodexNative.Updater.exe"),
+                    Path.Combine(extraction, "runtimes", "win-x64", "whisper.dll"),
+                    Path.Combine(extraction, "runtimes", "win-x64", "ggml-whisper.dll"),
+                    Path.Combine(extraction, "runtimes", "win-x64", "ggml-base-whisper.dll"),
+                    Path.Combine(extraction, "runtimes", "win-x64", "ggml-cpu-whisper.dll"),
                 }
                 :
                 [
                     Path.Combine(extraction, "CodexNative.app", "Contents", "Info.plist"),
                     Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "CodexNative"),
                     Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "CodexNative.TerminalHost"),
+                    Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "CodexNative.SpeechHost"),
                     Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "CodexNative.Updater"),
+                    Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "runtimes", runtime == "osx-arm64" ? "macos-arm64" : "macos-x64", "libwhisper.dylib"),
+                    Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "runtimes", runtime == "osx-arm64" ? "macos-arm64" : "macos-x64", "libggml-whisper.dylib"),
+                    Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "runtimes", runtime == "osx-arm64" ? "macos-arm64" : "macos-x64", "libggml-base-whisper.dylib"),
+                    Path.Combine(extraction, "CodexNative.app", "Contents", "MacOS", "runtimes", runtime == "osx-arm64" ? "macos-arm64" : "macos-x64", "libggml-cpu-whisper.dylib"),
                 ];
             foreach (var requiredFile in required)
             {

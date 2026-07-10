@@ -586,8 +586,8 @@ export default function App() {
     }
   }, [rekeyMap])
 
-  // When the server reports a pending session's rekey poll expired (session
-  // never got a real ID), close the orphaned tab and clean up pendingMeta.
+  // When a pending terminal exits before its session persists, close the dead
+  // placeholder tab and clean up pendingMeta.
   useEffect(() => {
     if (expiredPending.size === 0) return
     for (const tempKey of expiredPending) {

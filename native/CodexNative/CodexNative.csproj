@@ -21,9 +21,25 @@
 
   <ItemGroup>
     <ProjectReference Include="../CodexNative.Core/CodexNative.Core.csproj" />
+    <ProjectReference Include="../CodexNative.SpeechHost/CodexNative.SpeechHost.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <AvaloniaResource Include="Assets/**" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <SpeechHostOutputDirectory>$(MSBuildThisFileDirectory)../CodexNative.SpeechHost/bin/$(Configuration)/$(TargetFramework)/$(RuntimeIdentifier)/</SpeechHostOutputDirectory>
+  </PropertyGroup>
+
+  <Target Name="CopySpeechHostForLocalRun" AfterTargets="Build">
+    <ItemGroup>
+      <SpeechHostOutput Include="$(SpeechHostOutputDirectory)**/*"
+                        Exclude="$(SpeechHostOutputDirectory)ref/**" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SpeechHostOutput)"
+          DestinationFiles="@(SpeechHostOutput->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

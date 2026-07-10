@@ -215,7 +215,13 @@ public sealed class NativeUpdatePackage : IDisposable
             RequireFiles(extracted,
                 "CodexNative.exe",
                 "CodexNative.TerminalHost.exe",
+                "CodexNative.SpeechHost.exe",
                 "CodexNative.Updater.exe");
+            RequireFiles(Path.Combine(extracted, "runtimes", "win-x64"),
+                "whisper.dll",
+                "ggml-whisper.dll",
+                "ggml-base-whisper.dll",
+                "ggml-cpu-whisper.dll");
             return extracted;
         }
 
@@ -224,11 +230,26 @@ public sealed class NativeUpdatePackage : IDisposable
         RequireFiles(executableDirectory,
             "CodexNative",
             "CodexNative.TerminalHost",
+            "CodexNative.SpeechHost",
             "CodexNative.Updater");
+        var speechRuntime = platform.ReleaseRuntimeIdentifier == "osx-arm64"
+            ? "macos-arm64"
+            : "macos-x64";
+        RequireFiles(Path.Combine(executableDirectory, "runtimes", speechRuntime),
+            "libwhisper.dylib",
+            "libggml-whisper.dylib",
+            "libggml-base-whisper.dylib",
+            "libggml-cpu-whisper.dylib");
         RequireFiles(Path.Combine(app, "Contents"), "Info.plist");
         if (!OperatingSystem.IsWindows())
         {
-            foreach (var name in new[] { "CodexNative", "CodexNative.TerminalHost", "CodexNative.Updater" })
+            foreach (var name in new[]
+                     {
+                         "CodexNative",
+                         "CodexNative.TerminalHost",
+                         "CodexNative.SpeechHost",
+                         "CodexNative.Updater",
+                     })
                 File.SetUnixFileMode(Path.Combine(executableDirectory, name), ExecutableMode);
         }
         return extracted;

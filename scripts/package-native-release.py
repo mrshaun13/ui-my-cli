@@ -32,9 +32,21 @@ def archive_entries(rid: str) -> list[tuple[Path, str]]:
         names = [
             "CodexNative.exe",
             "CodexNative.TerminalHost.exe",
+            "CodexNative.SpeechHost.exe",
             "CodexNative.Updater.exe",
         ]
         entries = [(source / name, name) for name in names]
+        runtime = source / "runtimes" / "win-x64"
+        runtime_names = [
+            "whisper.dll",
+            "ggml-whisper.dll",
+            "ggml-base-whisper.dll",
+            "ggml-cpu-whisper.dll",
+        ]
+        entries.extend(
+            (runtime / name, (Path("runtimes") / "win-x64" / name).as_posix())
+            for name in runtime_names
+        )
     else:
         app = source / "CodexNative.app"
         entries = [

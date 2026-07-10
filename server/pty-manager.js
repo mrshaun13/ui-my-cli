@@ -316,24 +316,27 @@ function spawnPty(providerId, sessionId, workingDir, ws, cols = 80, rows = 24, o
     return entry.pty;
   }
 
+  // Use the session's working directory so Codex resumes with the same root.
+  // Fall back to home if the directory no longer exists (deleted repo, etc.).
+  const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
   const provider = getProvider(providerId);
   const shell = getShell();
   const { command, args } = provider.buildCommand(sessionId, {
     shell,
     platform: process.platform,
     remoteEndpoint: options.remoteEndpoint || null,
+    // Remote Codex uses the app-server process as its implicit CWD. Pass the
+    // selected root explicitly so a new thread cannot inherit the dashboard
+    // checkout instead of the project chosen by the user.
+    workingDirectory: cwd,
   });
-
-  // Use the session's working directory so Codex resumes with the same root.
-  // Fall back to home if the directory no longer exists (deleted repo, etc.).
-  const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
 
   const entry = doSpawn(provider.id, command, args, cwd, cols, rows, ws);
   if (!entry) return null;
 
   entry.providerId = provider.id;
   entry.sessionId = sessionId;
-  entry.adaptive = Boolean(options.remoteEndpoint);
+  entry.controlPlane = Boolean(options.remoteEndpoint);
   entry.clients.add(ws);
   ptys.set(key, entry);
   // Wire events immediately after map insertion so no PTY output is lost
@@ -424,12 +427,12 @@ function isPtyActive(providerId, sessionId) {
   return ptys.has(ptyKey(providerId, sessionId));
 }
 
-function isPtyAdaptive(providerId, sessionId) {
+function isPtyControlPlane(providerId, sessionId) {
   if (sessionId === undefined) {
     sessionId = providerId;
     providerId = DEFAULT_PROVIDER_ID;
   }
-  return Boolean(ptys.get(ptyKey(providerId, sessionId))?.adaptive);
+  return Boolean(ptys.get(ptyKey(providerId, sessionId))?.controlPlane);
 }
 
 /**
@@ -442,7 +445,10 @@ function activePtySessions(providerId = null) {
       key,
       providerId: entry.providerId,
       sessionId: entry.sessionId,
-      adaptive: Boolean(entry.adaptive),
+      controlPlane: Boolean(entry.controlPlane),
+      // Compatibility alias for v2/browser clients. This describes the PTY
+      // transport, not whether native Adaptive routing is currently enabled.
+      adaptive: Boolean(entry.controlPlane),
     }));
 }
 
@@ -460,21 +466,22 @@ function spawnNewSession(providerId, tempKey, workingDir, cols = 80, rows = 24, 
     tempKey = providerId;
     providerId = DEFAULT_PROVIDER_ID;
   }
+  const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
   const provider = getProvider(providerId);
   const shell = getShell();
   const { command, args } = provider.buildCommand(null, {
     shell,
     platform: process.platform,
     remoteEndpoint: options.remoteEndpoint || null,
+    workingDirectory: cwd,
   });
-  const cwd = (workingDir && fs.existsSync(workingDir)) ? workingDir : os.homedir();
 
   const entry = doSpawn(provider.id, command, args, cwd, cols, rows, null);
   if (!entry) return null;
 
   entry.providerId = provider.id;
   entry.sessionId = tempKey;
-  entry.adaptive = Boolean(options.remoteEndpoint);
+  entry.controlPlane = Boolean(options.remoteEndpoint);
   ptys.set(ptyKey(provider.id, tempKey), entry);
   wirePtyEvents(entry);
 
@@ -543,7 +550,7 @@ module.exports = {
   attachClient,
   killPty,
   isPtyActive,
-  isPtyAdaptive,
+  isPtyControlPlane,
   activePtySessions,
   spawnNewSession,
   rekeyPty,

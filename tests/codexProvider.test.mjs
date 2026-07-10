@@ -48,16 +48,41 @@ test('CODEX_BIN explicitly selects the Codex executable', () => {
   }
 })
 
-test('Codex provider can launch the authentic TUI through an Adaptive app-server endpoint', () => {
+test('Codex provider preserves the selected root through a remote app-server endpoint', () => {
   const previous = process.env.CODEX_BIN
   try {
     process.env.CODEX_BIN = '/opt/codex/current/bin/codex'
-    assert.deepEqual(provider.buildCommand('session-id', { remoteEndpoint: 'ws://127.0.0.1:45678' }), {
+    assert.deepEqual(provider.buildCommand('session-id', {
+      remoteEndpoint: 'ws://127.0.0.1:45678',
+      workingDirectory: '/home/tester/selected-project',
+    }), {
       command: '/opt/codex/current/bin/codex',
       args: [
         '-c', 'tui.animations=false',
         '--remote', 'ws://127.0.0.1:45678',
+        '-C', '/home/tester/selected-project',
         'resume', 'session-id',
+      ],
+    })
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_BIN
+    else process.env.CODEX_BIN = previous
+  }
+})
+
+test('new Codex sessions receive the chosen working root as a structured argument', () => {
+  const previous = process.env.CODEX_BIN
+  try {
+    process.env.CODEX_BIN = '/opt/codex/current/bin/codex'
+    assert.deepEqual(provider.buildCommand(null, {
+      remoteEndpoint: 'ws://127.0.0.1:45678',
+      workingDirectory: '/home/tester/project with spaces',
+    }), {
+      command: '/opt/codex/current/bin/codex',
+      args: [
+        '-c', 'tui.animations=false',
+        '--remote', 'ws://127.0.0.1:45678',
+        '-C', '/home/tester/project with spaces',
       ],
     })
   } finally {

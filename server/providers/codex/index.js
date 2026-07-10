@@ -28,6 +28,7 @@ function buildCommand(sessionId, options = {}) {
   // terminal renderers do not repaint the Working row and cursor continuously.
   const args = ['-c', 'tui.animations=false'];
   if (options.remoteEndpoint) args.push('--remote', options.remoteEndpoint);
+  if (options.workingDirectory) args.push('-C', options.workingDirectory);
   if (sessionId) args.push('resume', sessionId);
   return { command, args };
 }
