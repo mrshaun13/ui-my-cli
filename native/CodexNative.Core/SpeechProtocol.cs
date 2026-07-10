@@ -124,6 +124,20 @@ public sealed class SpeechSessionStateMachine
     }
 }
 
+public sealed class SpeechOperationOwnership<TOperation> where TOperation : class
+{
+    private TOperation? _current;
+
+    public TOperation? Current => Volatile.Read(ref _current);
+
+    public void Set(TOperation operation) => Volatile.Write(ref _current, operation);
+
+    public bool ClearIfCurrent(TOperation operation) =>
+        ReferenceEquals(Interlocked.CompareExchange(ref _current, null, operation), operation);
+
+    public TOperation? Clear() => Interlocked.Exchange(ref _current, null);
+}
+
 public static class SpeechCaptureAnalysis
 {
     private const float VoiceThreshold = 0.015f;

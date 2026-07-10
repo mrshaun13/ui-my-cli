@@ -641,6 +641,18 @@ Check("speech lifecycle serializes recording, transcription, cancellation, and f
     Equal(true, lifecycle.TryComplete("model"));
 });
 
+Check("speech operation cleanup cannot replace a newer operation", () =>
+{
+    var ownership = new SpeechOperationOwnership<object>();
+    var first = new object();
+    var second = new object();
+    ownership.Set(first);
+    Equal(true, ownership.ClearIfCurrent(first));
+    ownership.Set(second);
+    Equal(false, ownership.ClearIfCurrent(first));
+    Equal(second, ownership.Current);
+});
+
 Check("speech parity measures capture health and word error rate", () =>
 {
     var samples = Enumerable.Repeat(0f, 1600)

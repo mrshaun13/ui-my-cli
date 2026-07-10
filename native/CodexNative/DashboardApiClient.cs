@@ -105,11 +105,30 @@ public sealed class DashboardApiClient : IDisposable
         CancellationToken cancellationToken = default,
         string? providerId = null)
     {
-        var terminals = await GetProviderAsync<List<TerminalDescriptor>>("terminals", cancellationToken, providerId);
+        var terminals = await GetActiveTerminalsAsync(cancellationToken, providerId);
         return terminals
             .Where(terminal => !string.IsNullOrWhiteSpace(terminal.SessionId))
             .Select(terminal => terminal.SessionId)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    public async Task<bool?> GetTerminalControlPlaneAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default,
+        string? providerId = null)
+    {
+        var terminals = await GetActiveTerminalsAsync(cancellationToken, providerId);
+        return terminals.FirstOrDefault(terminal => terminal.SessionId == sessionId)?.ControlPlane;
+    }
+
+    public async Task<Dictionary<string, bool>> GetActiveTerminalControlPlanesAsync(
+        CancellationToken cancellationToken = default,
+        string? providerId = null)
+    {
+        var terminals = await GetActiveTerminalsAsync(cancellationToken, providerId);
+        return terminals
+            .Where(terminal => !string.IsNullOrWhiteSpace(terminal.SessionId))
+            .ToDictionary(terminal => terminal.SessionId, terminal => terminal.ControlPlane, StringComparer.Ordinal);
     }
 
     public Task<List<DashboardSession>> GetArchivedSessionsAsync(
@@ -163,7 +182,7 @@ public sealed class DashboardApiClient : IDisposable
             $"sessions/search?q={Uri.EscapeDataString(query)}&archived={(includeArchived ? 1 : 0)}",
             cancellationToken);
 
-    public async Task<string> CreateSessionAsync(
+    public async Task<(string TempKey, bool ControlPlane)> CreateSessionAsync(
         string workingDirectory,
         bool useControlPlane = false,
         CancellationToken cancellationToken = default,
@@ -175,8 +194,11 @@ public sealed class DashboardApiClient : IDisposable
             cancellationToken);
         response.EnsureSuccessStatusCode();
         using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
-        return body.RootElement.GetProperty("tempKey").GetString()
+        var tempKey = body.RootElement.GetProperty("tempKey").GetString()
             ?? throw new InvalidDataException("Dashboard did not return a temporary session key.");
+        var controlPlane = body.RootElement.TryGetProperty("controlPlane", out var transport)
+            && transport.ValueKind == JsonValueKind.True;
+        return (tempKey, controlPlane);
     }
 
     public async Task<AdaptiveRouteResult> SubmitAdaptivePromptAsync(
@@ -317,8 +339,14 @@ public sealed class DashboardApiClient : IDisposable
 
     public void Dispose() => _http.Dispose();
 
+    private Task<List<TerminalDescriptor>> GetActiveTerminalsAsync(
+        CancellationToken cancellationToken,
+        string? providerId) =>
+        GetProviderAsync<List<TerminalDescriptor>>("terminals", cancellationToken, providerId);
+
     private sealed class TerminalDescriptor
     {
         public string SessionId { get; set; } = string.Empty;
+        public bool ControlPlane { get; set; }
     }
 }

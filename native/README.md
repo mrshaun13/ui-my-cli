@@ -277,7 +277,7 @@ private service, backend stdout and stderr are written to
 card also displays the provider error instead of reducing it to
 `Unavailable · version unknown`.
 
-The native client requires dashboard API v2 for analytics. It will not attach
+The native client requires dashboard API v5 for analytics. It will not attach
 to an older long-running service that lacks the complete usage-rollup, pricing,
 hourly, and heatmap window contract; it starts the current private service on
 port 7577 instead. This prevents absent fields from being presented as real

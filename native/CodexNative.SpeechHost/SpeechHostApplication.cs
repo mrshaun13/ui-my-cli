@@ -17,9 +17,7 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
     private readonly Channel<SpeechHostEvent> _events = Channel.CreateUnbounded<SpeechHostEvent>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly CancellationTokenSource _shutdown = new();
-    private CancellationTokenSource? _operationCancellation;
-    private string? _referenceText;
-    private string? _captureOutputPath;
+    private readonly SpeechOperationOwnership<SpeechOperation> _operations = new();
 
     private SpeechHostApplication()
     {
@@ -122,7 +120,7 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
         var operationId = command.OperationId ?? $"model-{Guid.NewGuid():N}";
         if (!_lifecycle.TryBeginDownload(operationId))
             throw new InvalidOperationException("Speech is already recording or processing.");
-        _operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        var operation = BeginOperation(operationId);
         Emit(new SpeechHostEvent("state", operationId, SpeechStage.Downloading));
         await _recognizer.EnsureModelsAsync(
             progress =>
@@ -130,10 +128,10 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
                 Emit(new SpeechHostEvent("download_progress", operationId, SpeechStage.Downloading, Progress: progress));
                 return Task.CompletedTask;
             },
-            _operationCancellation.Token);
-        _lifecycle.TryComplete(operationId);
-        Emit(new SpeechHostEvent("model_ready", operationId, SpeechStage.Idle));
-        ClearOperationCancellation();
+            operation.Token);
+        if (_lifecycle.TryComplete(operationId))
+            Emit(new SpeechHostEvent("model_ready", operationId, SpeechStage.Idle));
+        ClearOperation(operation);
     }
 
     private void StartCapture(SpeechHostCommand command)
@@ -141,9 +139,10 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
         var operationId = command.OperationId ?? throw new InvalidOperationException("A speech operation id is required.");
         if (!_lifecycle.TryStart(operationId))
             throw new InvalidOperationException("Speech is already recording or processing.");
-        _referenceText = command.ReferenceText;
-        _captureOutputPath = ValidateAudioPath(command.AudioPath, output: true);
-        _operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        var operation = BeginOperation(
+            operationId,
+            command.ReferenceText,
+            ValidateAudioPath(command.AudioPath, output: true));
         try
         {
             _capture.Start(command.DeviceId);
@@ -154,12 +153,13 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
                     Emit(new SpeechHostEvent("download_progress", operationId, SpeechStage.Recording, Progress: progress));
                     return Task.CompletedTask;
                 },
-                _operationCancellation.Token);
+                operation.Token);
         }
         catch
         {
+            _capture.Cancel();
             _lifecycle.TryCancel(operationId);
-            ClearOperationCancellation();
+            ClearOperation(operation);
             throw;
         }
     }
@@ -167,16 +167,18 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
     private void StopCapture(SpeechHostCommand command)
     {
         var operationId = command.OperationId ?? throw new InvalidOperationException("A speech operation id is required.");
+        var operation = FindOperation(operationId)
+            ?? throw new InvalidOperationException("That speech operation is not active.");
         if (!_lifecycle.TryBeginTranscription(operationId))
             throw new InvalidOperationException("That speech operation is not recording.");
         var recording = _capture.Stop();
-        if (_captureOutputPath is not null)
+        if (operation.CaptureOutputPath is not null)
             SpeechWaveFile.WritePcm16Mono(
-                _captureOutputPath,
+                operation.CaptureOutputPath,
                 recording.Samples,
                 SpeechAudioCapture.SampleRate);
         Emit(new SpeechHostEvent("state", operationId, SpeechStage.Transcribing, Metrics: recording.Metrics));
-        _ = CompleteTranscriptionAsync(operationId, recording);
+        _ = CompleteTranscriptionAsync(operation, recording);
     }
 
     private async Task TranscribeFileAsync(SpeechHostCommand command)
@@ -186,31 +188,29 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
             throw new InvalidOperationException("Speech is already recording or processing.");
         var path = ValidateAudioPath(command.AudioPath, output: false)
             ?? throw new InvalidOperationException("A speech WAV path is required.");
-        _referenceText = command.ReferenceText;
-        _operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        var operation = BeginOperation(operationId, command.ReferenceText);
         Emit(new SpeechHostEvent("state", operationId, SpeechStage.Transcribing));
         var samples = await Task.Run(
             () => SpeechWaveFile.ReadMono(path, SpeechAudioCapture.SampleRate),
-            _operationCancellation.Token);
+            operation.Token);
         var recording = new SpeechCapture(
             samples,
             SpeechCaptureAnalysis.Analyze(samples, SpeechAudioCapture.SampleRate, startLatencyMs: 0));
-        await CompleteTranscriptionAsync(operationId, recording);
+        await CompleteTranscriptionAsync(operation, recording);
     }
 
-    private async Task CompleteTranscriptionAsync(string operationId, SpeechCapture recording)
+    private async Task CompleteTranscriptionAsync(SpeechOperation operation, SpeechCapture recording)
     {
         try
         {
-            var cancellationToken = _operationCancellation?.Token ?? _shutdown.Token;
-            var text = await _recognizer.TranscribeAsync(recording.Samples, cancellationToken);
+            var text = await _recognizer.TranscribeAsync(recording.Samples, operation.Token);
             SpeechParityResult? parity = null;
-            if (!string.IsNullOrWhiteSpace(_referenceText))
-                parity = SpeechParityEvaluator.Evaluate(recording.Metrics, text, _referenceText);
-            if (!_lifecycle.TryComplete(operationId)) return;
+            if (!string.IsNullOrWhiteSpace(operation.ReferenceText))
+                parity = SpeechParityEvaluator.Evaluate(recording.Metrics, text, operation.ReferenceText);
+            if (!_lifecycle.TryComplete(operation.Id)) return;
             Emit(new SpeechHostEvent(
                 "result",
-                operationId,
+                operation.Id,
                 SpeechStage.Idle,
                 Text: text,
                 Metrics: recording.Metrics,
@@ -218,33 +218,33 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            _lifecycle.TryCancel(operationId);
-            Emit(new SpeechHostEvent("cancelled", operationId, SpeechStage.Idle));
+            if (_lifecycle.TryCancel(operation.Id))
+                Emit(new SpeechHostEvent("cancelled", operation.Id, SpeechStage.Idle));
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine(ex);
-            _lifecycle.TryFail(operationId, ex.Message);
-            Emit(new SpeechHostEvent("error", operationId, SpeechStage.Failed, Error: ex.Message));
-            _lifecycle.TryCancel(operationId);
+            if (_lifecycle.TryFail(operation.Id, ex.Message))
+            {
+                Emit(new SpeechHostEvent("error", operation.Id, SpeechStage.Failed, Error: ex.Message));
+                _lifecycle.TryCancel(operation.Id);
+            }
         }
         finally
         {
-            _referenceText = null;
-            _captureOutputPath = null;
-            ClearOperationCancellation();
+            ClearOperation(operation);
         }
     }
 
     private void Cancel(string? operationId = null)
     {
-        _operationCancellation?.Cancel();
+        var operation = _operations.Current;
+        if (operation is null || operationId is not null && operation.Id != operationId) return;
+        try { operation.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
         _capture.Cancel();
-        if (_lifecycle.TryCancel(operationId))
-            Emit(new SpeechHostEvent("cancelled", operationId, SpeechStage.Idle));
-        _referenceText = null;
-        _captureOutputPath = null;
-        ClearOperationCancellation();
+        if (_lifecycle.TryCancel(operation.Id))
+            Emit(new SpeechHostEvent("cancelled", operation.Id, SpeechStage.Idle));
+        ClearOperation(operation);
     }
 
     private void FailAndReset(string? operationId, string error)
@@ -254,13 +254,20 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
             Emit(new SpeechHostEvent("error", Error: error));
             return;
         }
+        var operation = FindOperation(operationId);
+        if (operation is null)
+        {
+            Emit(new SpeechHostEvent("error", operationId, Error: error));
+            return;
+        }
         _capture.Cancel();
-        _lifecycle.TryFail(operationId, error);
-        Emit(new SpeechHostEvent("error", operationId, SpeechStage.Failed, Error: error));
-        _lifecycle.TryCancel(operationId);
-        _referenceText = null;
-        _captureOutputPath = null;
-        ClearOperationCancellation();
+        try { operation.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
+        if (_lifecycle.TryFail(operation.Id, error))
+        {
+            Emit(new SpeechHostEvent("error", operation.Id, SpeechStage.Failed, Error: error));
+            _lifecycle.TryCancel(operation.Id);
+        }
+        ClearOperation(operation);
     }
 
     private static string? ValidateAudioPath(string? path, bool output)
@@ -287,10 +294,30 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
         }
     }
 
-    private void ClearOperationCancellation()
+    private SpeechOperation BeginOperation(
+        string operationId,
+        string? referenceText = null,
+        string? captureOutputPath = null)
     {
-        var cancellation = Interlocked.Exchange(ref _operationCancellation, null);
-        cancellation?.Dispose();
+        var operation = new SpeechOperation(
+            operationId,
+            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token),
+            referenceText,
+            captureOutputPath);
+        _operations.Set(operation);
+        return operation;
+    }
+
+    private SpeechOperation? FindOperation(string operationId)
+    {
+        var operation = _operations.Current;
+        return operation?.Id == operationId ? operation : null;
+    }
+
+    private void ClearOperation(SpeechOperation operation)
+    {
+        _operations.ClearIfCurrent(operation);
+        operation.Dispose();
     }
 
     public async ValueTask DisposeAsync()
@@ -299,6 +326,26 @@ internal sealed class SpeechHostApplication : IAsyncDisposable
         _capture.Dispose();
         await _recognizer.DisposeAsync();
         _shutdown.Dispose();
-        ClearOperationCancellation();
+        var operation = _operations.Clear();
+        operation?.Dispose();
+    }
+
+    private sealed class SpeechOperation(
+        string id,
+        CancellationTokenSource cancellation,
+        string? referenceText,
+        string? captureOutputPath) : IDisposable
+    {
+        private int _disposed;
+        public string Id { get; } = id;
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+        public CancellationToken Token { get; } = cancellation.Token;
+        public string? ReferenceText { get; } = referenceText;
+        public string? CaptureOutputPath { get; } = captureOutputPath;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0) Cancellation.Dispose();
+        }
     }
 }

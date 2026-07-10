@@ -248,7 +248,7 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
         console.warn(`[${provider.id}:create] pending re-key poll failed: ${error.message}`),
     });
 
-    res.json({ tempKey });
+    res.json({ tempKey, controlPlane: Boolean(remoteEndpoint) });
   } catch (err) {
     console.error(`[${provider.id}:create] error:`, err.message);
     res.status(500).json({ error: err.message });

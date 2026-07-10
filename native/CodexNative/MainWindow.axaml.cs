@@ -704,6 +704,11 @@ public sealed partial class MainWindow : Window
         IsCodexSession(state)
         && state.Key.StartsWith("pending-", StringComparison.Ordinal);
 
+    private static bool IsAdaptiveEnabled(SessionTabState state) =>
+        IsCodexSession(state)
+        && state.ControlPlaneAvailable == true
+        && state.Pane.AdaptiveEnabled;
+
     private DashboardTheme EffectivePaneTheme(TerminalPaneState pane) =>
         string.IsNullOrWhiteSpace(pane.StyleId)
             ? _currentTheme
@@ -792,23 +797,33 @@ public sealed partial class MainWindow : Window
     private void UpdateAdaptiveControls(SessionTabState state)
     {
         var codex = IsCodexSession(state);
-        var enabled = codex && state.Pane.AdaptiveEnabled;
+        var enabled = IsAdaptiveEnabled(state);
         var pending = IsPendingCodexSession(state);
         state.AdaptiveToggleButton.IsVisible = codex;
         state.AdaptiveToggleButton.IsChecked = enabled;
-        state.AdaptiveToggleButton.Content = enabled ? "Adaptive on" : "Adaptive off";
-        state.AdaptiveToggleButton.IsEnabled = codex && !state.Pane.AdaptiveChanging;
+        state.AdaptiveToggleButton.Content = state.ControlPlaneAvailable switch
+        {
+            true => enabled ? "Adaptive on" : "Adaptive off",
+            false => "Adaptive unavailable",
+            _ => "Adaptive checking…",
+        };
+        state.AdaptiveToggleButton.IsEnabled = codex
+            && state.ControlPlaneAvailable == true
+            && !state.Pane.AdaptiveChanging;
         state.AdaptiveComposer.IsVisible = enabled;
         state.AdaptivePromptBox.IsEnabled = !state.AdaptiveSubmitting && !state.Pane.AdaptiveChanging;
         state.AdaptiveSendButton.IsEnabled = !state.AdaptiveSubmitting && !state.Pane.AdaptiveChanging;
         ApplyAdaptiveToggleTheme(state, EffectivePaneTheme(state.Pane));
         ToolTip.SetTip(
             state.AdaptiveToggleButton,
-            pending
-                ? "Adaptive will create this Codex session when you send its first routed prompt"
-                : enabled
-                    ? "Adaptive routes prompts submitted in the native composer; click to return to manual prompting"
-                    : "Automatically choose a Codex model and reasoning effort for each native prompt");
+            state.ControlPlaneAvailable switch
+            {
+                false => "This persistent terminal uses direct transport, so Adaptive routing is unavailable. The terminal remains running.",
+                null => "Checking whether this persistent terminal uses the Codex control plane.",
+                _ when pending => "Adaptive will create this Codex session when you send its first routed prompt",
+                _ when enabled => "Adaptive routes prompts submitted in the native composer; click to return to manual prompting",
+                _ => "Automatically choose a Codex model and reasoning effort for each native prompt",
+            });
     }
 
     private void UpdatePaneAdaptiveControls(TerminalPaneState pane)
@@ -832,7 +847,7 @@ public sealed partial class MainWindow : Window
             await SaveWorkspaceAsync();
             SetStatus(
                 enabled
-                    ? $"Adaptive enabled for {PaneLabel(pane)} · use the native prompt composer"
+                    ? $"Adaptive enabled for compatible terminals in {PaneLabel(pane)} · use the native prompt composer"
                     : $"Adaptive disabled for {PaneLabel(pane)} · terminal session kept running",
                 RunningBrush);
         }
@@ -864,7 +879,7 @@ public sealed partial class MainWindow : Window
 
     private async Task SubmitAdaptivePromptAsync(SessionTabState state)
     {
-        if (!IsCodexSession(state) || !state.Pane.AdaptiveEnabled) return;
+        if (!IsAdaptiveEnabled(state)) return;
         var text = state.AdaptivePromptBox.Text?.Trim();
         if (string.IsNullOrWhiteSpace(text) || state.AdaptiveSubmitting) return;
 
@@ -903,6 +918,8 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             state.SuppressReconnect = false;
+            if (ex.Message.Contains("control plane is unavailable", StringComparison.OrdinalIgnoreCase))
+                state.ControlPlaneAvailable = false;
             state.AdaptiveRouteText.Text = "Routing failed · prompt preserved";
             NativeLog.Write($"Adaptive prompt failed for {state.Key}: {ex}");
             SetStatus($"Adaptive prompt failed: {ex.Message}", ErrorBrush);
@@ -1865,7 +1882,7 @@ public sealed partial class MainWindow : Window
                 .ToList();
             var sessionsByProvider = new Dictionary<string, List<DashboardSession>>(StringComparer.Ordinal);
             var archivedByProvider = new Dictionary<string, List<DashboardSession>>(StringComparer.Ordinal);
-            var terminalsByProvider = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            var terminalTransportsByProvider = new Dictionary<string, Dictionary<string, bool>>(StringComparer.Ordinal);
             foreach (var providerId in providerIds)
             {
                 try
@@ -1876,14 +1893,14 @@ public sealed partial class MainWindow : Window
                     archivedByProvider[providerId] = providerId == _api.ProviderId
                         ? _archivedSessions
                         : await _api.GetArchivedSessionsAsync(providerId: providerId);
-                    terminalsByProvider[providerId] = await _api.GetActiveTerminalIdsAsync(providerId: providerId);
+                    terminalTransportsByProvider[providerId] = await _api.GetActiveTerminalControlPlanesAsync(providerId: providerId);
                 }
                 catch (Exception ex)
                 {
                     NativeLog.Write($"Could not restore {providerId} workspace state: {ex.Message}");
                     sessionsByProvider[providerId] = [];
                     archivedByProvider[providerId] = [];
-                    terminalsByProvider[providerId] = [];
+                    terminalTransportsByProvider[providerId] = [];
                 }
             }
 
@@ -1905,7 +1922,15 @@ public sealed partial class MainWindow : Window
                                 var session = sessionsByProvider[providerId]
                                     .FirstOrDefault(candidate => candidate.Id == sessionId && !candidate.IsHeadless);
                                 if (session is not null)
+                                {
                                     await OpenSessionAsync(session, activate: false, launch: false, targetPane: pane);
+                                    if (terminalTransportsByProvider[providerId].TryGetValue(sessionId, out var controlPlane)
+                                        && _openTabs.TryGetValue(ProviderTabKey(providerId, sessionId), out var state))
+                                    {
+                                        state.ControlPlaneAvailable = controlPlane;
+                                        UpdateAdaptiveControls(state);
+                                    }
+                                }
                                 break;
                             }
                         case "codex-pending":
@@ -1920,9 +1945,17 @@ public sealed partial class MainWindow : Window
                                         : Math.Abs(candidate.CreatedAt - savedTab.LaunchedAt))
                                     .FirstOrDefault();
                                 if (registered is not null)
+                                {
                                     await OpenSessionAsync(registered, activate: false, launch: false, targetPane: pane);
-                                else if (terminalsByProvider[providerId].Contains(savedTab.Key))
-                                    RestorePendingProviderTab(savedTab, pane);
+                                    if (terminalTransportsByProvider[providerId].TryGetValue(registered.Id, out var controlPlane)
+                                        && _openTabs.TryGetValue(ProviderTabKey(providerId, registered.Id), out var state))
+                                    {
+                                        state.ControlPlaneAvailable = controlPlane;
+                                        UpdateAdaptiveControls(state);
+                                    }
+                                }
+                                else if (terminalTransportsByProvider[providerId].TryGetValue(savedTab.Key, out var controlPlane))
+                                    RestorePendingProviderTab(savedTab, pane, controlPlane);
                                 break;
                             }
                         case "ubuntu":
@@ -1968,7 +2001,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void RestorePendingProviderTab(NativePaneTabLayout savedTab, TerminalPaneState pane)
+    private void RestorePendingProviderTab(
+        NativePaneTabLayout savedTab,
+        TerminalPaneState pane,
+        bool controlPlane)
     {
         var providerId = string.IsNullOrWhiteSpace(savedTab.ProviderId) ? "codex" : savedTab.ProviderId;
         if (_openTabs.ContainsKey(ProviderTabKey(providerId, savedTab.Key))) return;
@@ -1981,6 +2017,7 @@ public sealed partial class MainWindow : Window
             pane: pane,
             providerId: providerId);
         state.LaunchedAt = savedTab.LaunchedAt;
+        state.ControlPlaneAvailable = controlPlane;
         _openTabs[OpenTabRegistryKey(state)] = state;
         AddTabToPane(pane, state.Tab);
         state.IsAttached = true;
@@ -2742,10 +2779,11 @@ public sealed partial class MainWindow : Window
         {
             var providerId = _api.ProviderId;
             var knownSessionIds = _sessions.Select(session => session.Id).ToHashSet(StringComparer.Ordinal);
-            var key = await _api.CreateSessionAsync(
+            var createdSession = await _api.CreateSessionAsync(
                 workingDirectory,
                 useControlPlane: string.Equals(providerId, "codex", StringComparison.Ordinal),
                 providerId: providerId);
+            var key = createdSession.TempKey;
             var project = workingDirectory.TrimEnd('/').Split('/').LastOrDefault() ?? workingDirectory;
             var state = CreateTerminalTab(
                 key,
@@ -2757,6 +2795,7 @@ public sealed partial class MainWindow : Window
                 providerId);
             state.KnownSessionIdsAtLaunch = knownSessionIds;
             state.LaunchedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            state.ControlPlaneAvailable = createdSession.ControlPlane;
             _openTabs.Add(OpenTabRegistryKey(state), state);
             AddTabToPane(targetPane, state.Tab);
             state.IsAttached = true;
@@ -3503,7 +3542,7 @@ public sealed partial class MainWindow : Window
         }
 
         AttachTerminalVisualStyling(state);
-        if (!state.Pane.AdaptiveEnabled
+        if (!IsAdaptiveEnabled(state)
             && (state.TerminalView
                 ?? state.Terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault()) is null)
         {
@@ -3514,7 +3553,7 @@ public sealed partial class MainWindow : Window
         var operation = $"speech-{Guid.NewGuid():N}";
         _speechTarget = state;
         _speechOperationId = operation;
-        _speechUseAdaptiveComposer = state.Pane.AdaptiveEnabled;
+        _speechUseAdaptiveComposer = IsAdaptiveEnabled(state);
         _speechStage = SpeechStage.Recording;
         UpdateSpeechButtons();
         SetStatus("Starting local microphone capture…", StartingBrush);
@@ -3763,7 +3802,7 @@ public sealed partial class MainWindow : Window
 
             var attachmentPath = await ResolveScreenshotAttachmentPathAsync(hostPath);
             var composerReference = ScreenshotAttachmentPath.ComposerReference(attachmentPath);
-            if (state.Pane.AdaptiveEnabled && state.Session is not null)
+            if (IsAdaptiveEnabled(state) && state.Session is not null)
             {
                 InsertAdaptiveComposerText(state.AdaptivePromptBox, composerReference);
                 SetStatus(
@@ -4068,6 +4107,13 @@ public sealed partial class MainWindow : Window
         }
         try
         {
+            if (IsCodexSession(state))
+            {
+                state.ControlPlaneAvailable = await _api.GetTerminalControlPlaneAsync(
+                    state.Key,
+                    providerId: state.ProviderId);
+                UpdateAdaptiveControls(state);
+            }
             var hostExecutable = Path.Combine(AppContext.BaseDirectory, _platform.TerminalHostFileName);
             var spec = state.Kind switch
             {
@@ -4075,7 +4121,7 @@ public sealed partial class MainWindow : Window
                     hostExecutable,
                     _api.TerminalWebSocketUri(
                         state.Key,
-                        useControlPlane: IsCodexSession(state),
+                        useControlPlane: IsCodexSession(state) && state.ControlPlaneAvailable != false,
                         providerId: state.ProviderId).AbsoluteUri),
                 TerminalSessionKind.LocalShell => NativeLaunchBuilder.LocalShell(
                     _platform.Platform,
@@ -4099,6 +4145,7 @@ public sealed partial class MainWindow : Window
             state.ReconnectBanner.IsVisible = false;
             state.StatusGlyph.Foreground = RunningBrush;
             state.Terminal.Focus();
+            if (IsCodexSession(state)) _ = ConfirmTerminalControlPlaneAsync(state);
             SetStatus(
                 state.Kind == TerminalSessionKind.LocalShell
                     ? $"{_platform.LocalShellLabel} ready · host PID {state.Terminal.Pid} · {state.WorkingDirectory}"
@@ -4118,6 +4165,36 @@ public sealed partial class MainWindow : Window
             SetStatus(ex.Message, ErrorBrush);
             return false;
         }
+    }
+
+    private async Task ConfirmTerminalControlPlaneAsync(SessionTabState state)
+    {
+        var generation = ++state.ControlPlaneCheckGeneration;
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            try
+            {
+                var controlPlane = await _api.GetTerminalControlPlaneAsync(
+                    state.Key,
+                    providerId: state.ProviderId);
+                if (generation != state.ControlPlaneCheckGeneration || !state.IsAttached) return;
+                if (controlPlane is not null)
+                {
+                    state.ControlPlaneAvailable = controlPlane;
+                    UpdateAdaptiveControls(state);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                NativeLog.Write($"Could not confirm terminal transport for {state.Key}: {ex.Message}");
+                return;
+            }
+            await Task.Delay(100);
+        }
+        if (generation != state.ControlPlaneCheckGeneration || !state.IsAttached) return;
+        state.ControlPlaneAvailable = false;
+        UpdateAdaptiveControls(state);
     }
 
     private async Task EnsureTerminalLaunchedAsync(SessionTabState state)
@@ -5657,7 +5734,7 @@ public sealed partial class MainWindow : Window
 
     private static void ApplyAdaptiveToggleTheme(SessionTabState state, DashboardTheme theme)
     {
-        var enabled = IsCodexSession(state) && state.Pane.AdaptiveEnabled;
+        var enabled = IsAdaptiveEnabled(state);
         var elevated = Brush.Parse(theme.Elevated);
         var hover = Brush.Parse(theme.Hover);
         var borderBright = Brush.Parse(theme.BorderBright);
@@ -6471,6 +6548,8 @@ public sealed partial class MainWindow : Window
         public bool IsLaunching { get; set; }
         public bool IsLaunched { get; set; }
         public bool IsRunning { get; set; }
+        public bool? ControlPlaneAvailable { get; set; }
+        public int ControlPlaneCheckGeneration { get; set; }
         public bool SuppressReconnect { get; set; }
         public bool ReconnectLoopActive { get; set; }
         public bool AdaptiveSubmitting { get; set; }
