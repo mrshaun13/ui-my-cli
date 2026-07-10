@@ -37,7 +37,7 @@ with an appropriate HTTP status code.
 | `GET` | `/api/sessions/:id/subagents` | Compatibility alias for default provider subagents. |
 | `GET` | `/api/:providerId/sessions/:id/context` | Estimated context breakdown for one provider session. Returns `{ categories, totalUsed, maxContext, freeTokens, compactionCount, model }`. |
 | `GET` | `/api/sessions/:id/context` | Compatibility alias for default provider context. |
-| `GET` | `/api/:providerId/sessions/:id/config` | Per-session provider configuration metadata. Returns `{ rules, activeSkills, permissions, model, permissionMode }` where available. |
+| `GET` | `/api/:providerId/sessions/:id/config` | Per-session provider configuration metadata. Returns `{ rules, activeSkills, permissions, model, reasoningEffort, permissionMode }` where available. |
 | `GET` | `/api/sessions/:id/config` | Compatibility alias for default provider config. |
 | `GET` | `/api/:providerId/sessions/:id` | Single provider session with `ptyActive` flag |
 | `GET` | `/api/sessions/:id` | Single session with `ptyActive` flag |
