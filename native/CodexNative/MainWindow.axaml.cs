@@ -3581,69 +3581,99 @@ public sealed partial class MainWindow : Window
             && message.OperationId != _speechOperationId)
             return;
 
-        switch (message.Type)
+        try
         {
-            case "state" when message.Stage is not null:
-                _speechStage = message.Stage.Value;
-                UpdateSpeechButtons(message.Level);
-                SetStatus(
-                    _speechStage == SpeechStage.Recording
-                        ? "Listening · click the stop button when you are finished."
-                        : "Transcribing locally…",
-                    _speechStage == SpeechStage.Recording ? ErrorBrush : StartingBrush);
-                break;
-            case "level":
-                UpdateSpeechButtons(message.Level);
-                break;
-            case "capture_limit":
-                _speechStage = SpeechStage.Transcribing;
-                UpdateSpeechButtons();
-                SetStatus("Two-minute voice capture limit reached · transcribing locally…", StartingBrush);
-                break;
-            case "download_progress" when message.Progress is not null:
-                SetStatus(
-                    $"Downloading the local speech model · {message.Progress.Value:P0}",
-                    StartingBrush);
-                break;
-            case "result":
+            switch (message.Type)
             {
-                var target = _speechTarget;
-                var useAdaptive = _speechUseAdaptiveComposer;
-                var text = message.Text?.Trim() ?? string.Empty;
-                ResetSpeechUi();
-                if (target is null || !target.IsAttached)
+                case "state" when message.Stage is not null:
+                    _speechStage = message.Stage.Value;
+                    UpdateSpeechButtons(message.Level);
+                    SetStatus(
+                        _speechStage == SpeechStage.Recording
+                            ? "Listening · click the stop button when you are finished."
+                            : "Transcribing locally…",
+                        _speechStage == SpeechStage.Recording ? ErrorBrush : StartingBrush);
+                    break;
+                case "level":
+                    UpdateSpeechButtons(message.Level);
+                    break;
+                case "capture_limit":
+                    _speechStage = SpeechStage.Transcribing;
+                    UpdateSpeechButtons();
+                    SetStatus("Two-minute voice capture limit reached · transcribing locally…", StartingBrush);
+                    break;
+                case "download_progress" when message.Progress is not null:
+                    SetStatus(
+                        $"Downloading the local speech model · {message.Progress.Value:P0}",
+                        StartingBrush);
+                    break;
+                case "result":
                 {
-                    SetStatus("Voice transcription was discarded because its terminal closed.", StartingBrush);
-                    return;
+                    var target = _speechTarget;
+                    var useAdaptive = _speechUseAdaptiveComposer;
+                    var text = message.Text?.Trim() ?? string.Empty;
+                    ResetSpeechUi();
+                    if (target is null || !target.IsAttached)
+                    {
+                        SetStatus("Voice transcription was discarded because its terminal closed.", StartingBrush);
+                        return;
+                    }
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        SetStatus("No speech was detected.", StartingBrush);
+                        return;
+                    }
+                    if (useAdaptive)
+                    {
+                        InsertAdaptiveComposerText(target.AdaptivePromptBox, $"{text} ");
+                        SetStatus("Voice transcription added to the Adaptive prompt.", RunningBrush);
+                    }
+                    else
+                    {
+                        try
+                        {
+                            await InsertSpeechIntoTerminalAsync(target, $"{text} ");
+                            SetStatus("Voice transcription added to the terminal input.", RunningBrush);
+                        }
+                        catch (Exception ex)
+                        {
+                            NativeLog.Write($"Voice transcription insertion failed: {ex}");
+                            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+                            try
+                            {
+                                if (clipboard is null)
+                                    throw new InvalidOperationException("The system clipboard is unavailable.");
+                                await clipboard.SetTextAsync(text);
+                                SetStatus("Voice transcription could not be pasted; it was copied to the clipboard.", ErrorBrush);
+                            }
+                            catch (Exception clipboardError)
+                            {
+                                NativeLog.Write($"Voice transcription clipboard fallback failed: {clipboardError}");
+                                SetStatus($"Voice transcription could not be inserted: {ex.Message}", ErrorBrush);
+                            }
+                            return;
+                        }
+                    }
+                    if (message.Parity is { Passed: false } parity)
+                        SetStatus($"Voice parity check failed · {string.Join(" ", parity.Failures)}", ErrorBrush);
+                    break;
                 }
-                if (string.IsNullOrWhiteSpace(text))
-                {
-                    SetStatus("No speech was detected.", StartingBrush);
-                    return;
-                }
-                if (useAdaptive)
-                {
-                    InsertAdaptiveComposerText(target.AdaptivePromptBox, $"{text} ");
-                    SetStatus("Voice transcription added to the Adaptive prompt.", RunningBrush);
-                }
-                else
-                {
-                    await InsertSpeechIntoTerminalAsync(target, $"{text} ");
-                    SetStatus("Voice transcription added to the terminal input.", RunningBrush);
-                }
-                if (message.Parity is { Passed: false } parity)
-                    SetStatus($"Voice parity check failed · {string.Join(" ", parity.Failures)}", ErrorBrush);
-                break;
+                case "cancelled":
+                    ResetSpeechUi();
+                    SetStatus("Voice capture canceled.", StartingBrush);
+                    break;
+                case "error":
+                    NativeLog.Write($"Speech host error: {message.Error}");
+                    ResetSpeechUi();
+                    SetStatus($"Voice-to-text failed: {message.Error ?? "unknown speech-host error"}", ErrorBrush);
+                    break;
             }
-            case "cancelled":
-                ResetSpeechUi();
-                SetStatus("Voice capture canceled.", StartingBrush);
-                break;
-            case "error":
-                NativeLog.Write($"Speech host error: {message.Error}");
-                ResetSpeechUi();
-                SetStatus($"Voice-to-text failed: {message.Error ?? "unknown speech-host error"}", ErrorBrush);
-                break;
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Speech event handling failed: {ex}");
+            ResetSpeechUi();
+            SetStatus($"Voice-to-text failed: {ex.Message}", ErrorBrush);
         }
     }
 

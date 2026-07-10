@@ -296,8 +296,11 @@ app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
       }
       const route = await codexAppServer.startAdaptiveTurn(workingDir, text, preference);
       const realId = route.threadId;
+      const trackedId = pendingToReal.get(pendingKey('codex', sessionId));
       pendingToReal.set(pendingKey('codex', sessionId), realId);
       killPty('codex', sessionId);
+      killPty('codex', realId);
+      if (trackedId && trackedId !== realId) killPty('codex', trackedId);
       broadcastRekey('codex', sessionId, realId);
       broadcastSessions('codex');
       console.log(`[codex:adaptive] first turn ${sessionId.slice(0, 20)}… → ${realId.slice(0, 8)}… · ${route.model} · ${route.effort}`);
