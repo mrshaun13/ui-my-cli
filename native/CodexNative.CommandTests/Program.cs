@@ -428,7 +428,7 @@ Check("updater result is bounded, persisted, and consumed once", () =>
     }
 });
 
-Check("running updater marker defers previous install cleanup", () =>
+Check("updater marker validates live process identity", () =>
 {
     var root = Path.Combine(Path.GetTempPath(), $"codex-native-marker-{Guid.NewGuid():N}");
     Directory.CreateDirectory(root);
@@ -439,6 +439,19 @@ Check("running updater marker defers previous install cleanup", () =>
         Equal(true, NativeUpdateInstallationState.IsInProgress(root));
         NativeUpdateInstallationState.Clear(root);
         Equal(false, NativeUpdateInstallationState.IsInProgress(root));
+
+        var marker = Path.Combine(root, ".codex-native-update-in-progress");
+        File.WriteAllText(marker, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Equal(true, NativeUpdateInstallationState.IsInProgress(root));
+        NativeUpdateInstallationState.Clear(root);
+
+        File.WriteAllText(marker, $"{Environment.ProcessId}\n0");
+        Equal(false, NativeUpdateInstallationState.IsInProgress(root));
+        Equal(false, File.Exists(marker));
+
+        File.WriteAllText(marker, int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Equal(false, NativeUpdateInstallationState.IsInProgress(root));
+        Equal(false, File.Exists(marker));
     }
     finally
     {
