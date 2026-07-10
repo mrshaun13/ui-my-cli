@@ -54,12 +54,6 @@ function getReadDb() {
   return new Database(resolveStateDbPath(), { readonly: true, fileMustExist: true });
 }
 
-function getWriteDb() {
-  const db = new Database(resolveStateDbPath(), { fileMustExist: true });
-  db.pragma('busy_timeout = 5000');
-  return db;
-}
-
 function hasColumn(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column);
 }
@@ -879,33 +873,24 @@ function normalizeNativeTitle(title) {
   return trimmed;
 }
 
-function renameSession(id, title) {
-  if (transcriptHeadless.isTranscriptHeadlessId(id)) return dashboardStore.setTitle(id, title);
+function resolveNativeRenameTitle(id, title) {
+  const thread = getThread(id, { includeArchived: true, includeSystem: false });
+  if (!thread) throw new Error('Codex session not found');
+  const nextTitle = title === null
+    ? (thread.first_user_message || thread.preview || thread.title || thread.id.slice(0, 8))
+    : normalizeNativeTitle(title);
+  return { id, title: nextTitle };
+}
 
-  const db = getWriteDb();
-  try {
-    const rename = db.transaction(() => {
-      const thread = db.prepare(`
-        SELECT id, title, first_user_message, preview
-        FROM threads
-        WHERE id = ? AND source IN ('cli', 'vscode')
-      `).get(id);
-      if (!thread) throw new Error('Codex session not found');
-
-      const nextTitle = title === null
-        ? (thread.first_user_message || thread.preview || thread.title || thread.id.slice(0, 8))
-        : normalizeNativeTitle(title);
-      db.prepare('UPDATE threads SET title = ? WHERE id = ?').run(nextTitle, id);
-      return { id, title: nextTitle };
-    });
-    const result = rename();
-    // Remove any title written by older dashboard versions so stale metadata
-    // cannot be mistaken for the native Codex title later.
-    dashboardStore.setTitle(id, null);
-    return result;
-  } finally {
-    db.close();
+function renameTranscriptSession(id, title) {
+  if (!transcriptHeadless.isTranscriptHeadlessId(id)) {
+    throw new Error('Transcript session not found');
   }
+  return dashboardStore.setTitle(id, title);
+}
+
+function clearLegacyTitle(id) {
+  dashboardStore.setTitle(id, null);
 }
 
 function runCodexCommand(args) {
@@ -1392,7 +1377,9 @@ module.exports = {
   getSessionConversation,
   getSessionContextBreakdown,
   getSessionConfig,
-  renameSession,
+  resolveNativeRenameTitle,
+  renameTranscriptSession,
+  clearLegacyTitle,
   hideSession,
   restoreSession,
   listRepos,

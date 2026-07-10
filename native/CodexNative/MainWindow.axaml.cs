@@ -58,6 +58,7 @@ public sealed partial class MainWindow : Window
     private readonly List<TerminalPaneState> _panes = [];
     private readonly List<Border> _paneSplitters = [];
     private readonly HashSet<TerminalPaneState> _paneRemovalsInProgress = [];
+    private readonly Dictionary<string, PendingSessionRename> _pendingSessionRenames = [];
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _connectionPulseTimer;
     private readonly DispatcherTimer _sessionHoverAnimationTimer;
@@ -1541,6 +1542,7 @@ public sealed partial class MainWindow : Window
     private void ApplyPushedSessions(IReadOnlyList<DashboardSession> sessions)
     {
         var ordered = sessions.OrderByDescending(session => session.LastActivityAt).ToList();
+        ReconcilePendingSessionRenames(ordered);
         if (SessionListsMateriallyEqual(_sessions, ordered))
         {
             ReconcilePendingSessions();
@@ -1666,6 +1668,8 @@ public sealed partial class MainWindow : Window
 
             var sessions = sessionsTask.Result.OrderByDescending(session => session.LastActivityAt).ToList();
             var archivedSessions = archivedTask.Result.OrderByDescending(session => session.LastActivityAt).ToList();
+            ReconcilePendingSessionRenames(sessions);
+            ReconcilePendingSessionRenames(archivedSessions);
             var sessionsChanged = !SessionListsMateriallyEqual(_sessions, sessions);
             var archivedSessionsChanged = !SessionListsMateriallyEqual(_archivedSessions, archivedSessions);
             if (sessionsChanged) _sessions = sessions;
@@ -1716,7 +1720,7 @@ public sealed partial class MainWindow : Window
                 .OrderByDescending(session => session.LastActivityAt)
                 .ToList();
             if (!IsCurrentProviderData(providerId, epoch)) return;
-
+            ReconcilePendingSessionRenames(sessions);
             var sessionsChanged = !SessionListsMateriallyEqual(_sessions, sessions);
             if (sessionsChanged) _sessions = sessions;
             var archivedSessionsChanged = false;
@@ -1726,6 +1730,7 @@ public sealed partial class MainWindow : Window
                     .OrderByDescending(session => session.LastActivityAt)
                     .ToList();
                 if (!IsCurrentProviderData(providerId, epoch)) return;
+                ReconcilePendingSessionRenames(archivedSessions);
                 archivedSessionsChanged = !SessionListsMateriallyEqual(_archivedSessions, archivedSessions);
                 if (archivedSessionsChanged) _archivedSessions = archivedSessions;
             }
@@ -4678,17 +4683,107 @@ public sealed partial class MainWindow : Window
         }
         try
         {
-            await _api.RenameAsync(state.Session.Id, title, providerId: state.ProviderId);
-            state.RawTitle = title;
-            state.TitleBlock.Text = SessionTitleDisplay.Compact(title);
+            var renamedTitle = await RenameDashboardSessionAsync(state.Session, title);
+            state.RawTitle = renamedTitle;
+            state.RenameBox.Text = renamedTitle;
+            state.TitleBlock.Text = SessionTitleDisplay.Compact(renamedTitle);
             AutomationProperties.SetName(state.Tab, state.TitleBlock.Text);
-            await RefreshAllAsync();
+            await SaveWorkspaceAsync();
+            await RefreshSessionsAsync();
+            SetStatus($"Renamed {renamedTitle}", RunningBrush);
         }
         catch (Exception ex)
         {
             SetStatus($"Rename failed: {ex.Message}", ErrorBrush);
         }
     }
+
+    private async Task<string> RenameDashboardSessionAsync(DashboardSession session, string title)
+    {
+        var expectedTitle = title.Trim();
+        var key = SessionRenameKey(session.Provider, session.Id);
+        _pendingSessionRenames[key] = new PendingSessionRename(
+            expectedTitle,
+            DateTimeOffset.UtcNow.AddSeconds(12));
+        SessionRenameResult result;
+        try
+        {
+            result = await _api.RenameAsync(session.Id, expectedTitle, providerId: session.Provider);
+        }
+        catch
+        {
+            if (_pendingSessionRenames.TryGetValue(key, out var pending)
+                && pending.ExpectedTitle == expectedTitle)
+            {
+                _pendingSessionRenames.Remove(key);
+            }
+            throw;
+        }
+
+        var canonicalTitle = string.IsNullOrWhiteSpace(result.Title) ? expectedTitle : result.Title;
+        var renamedSessionId = string.IsNullOrWhiteSpace(result.Id) ? session.Id : result.Id;
+        _pendingSessionRenames[key] = new PendingSessionRename(
+            canonicalTitle,
+            DateTimeOffset.UtcNow.AddSeconds(12));
+        ApplySuccessfulSessionRename(session.Provider, renamedSessionId, canonicalTitle);
+        return canonicalTitle;
+    }
+
+    private void ApplySuccessfulSessionRename(string provider, string sessionId, string title)
+    {
+        foreach (var candidate in _sessions
+                     .Concat(_archivedSessions)
+                     .Concat(_searchResults ?? []))
+        {
+            if (candidate.Id == sessionId
+                && string.Equals(candidate.Provider, provider, StringComparison.OrdinalIgnoreCase))
+            {
+                candidate.Title = title;
+            }
+        }
+        foreach (var state in _openTabs.Values)
+        {
+            if (state.Session?.Id != sessionId
+                || !string.Equals(state.Session.Provider, provider, StringComparison.OrdinalIgnoreCase)) continue;
+            state.Session.Title = title;
+            state.RenameBox.Text = title;
+            state.TitleBlock.Text = SessionTitleDisplay.Compact(title);
+            AutomationProperties.SetName(state.Tab, state.TitleBlock.Text);
+        }
+        if (_previewTabs.TryGetValue($"preview:{sessionId}", out var previewTab)
+            && previewTab.Header is StackPanel previewHeader
+            && previewHeader.Children.ElementAtOrDefault(1) is TextBlock previewTitle)
+        {
+            var displayTitle = SessionTitleDisplay.Compact(title);
+            previewTitle.Text = displayTitle;
+            AutomationProperties.SetName(previewTab, $"Session summary: {displayTitle}");
+        }
+        ApplySessionFilter();
+    }
+
+    private void ReconcilePendingSessionRenames(IList<DashboardSession> sessions)
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var key in _pendingSessionRenames
+                     .Where(entry => !SessionRenameGuard.IsActive(entry.Value, now))
+                     .Select(entry => entry.Key)
+                     .ToList())
+        {
+            _pendingSessionRenames.Remove(key);
+        }
+        foreach (var session in sessions)
+        {
+            if (_pendingSessionRenames.TryGetValue(
+                    SessionRenameKey(session.Provider, session.Id),
+                    out var pending))
+            {
+                session.Title = SessionRenameGuard.ResolveTitle(session.Title, pending, now);
+            }
+        }
+    }
+
+    private static string SessionRenameKey(string provider, string sessionId) =>
+        $"{(string.IsNullOrWhiteSpace(provider) ? "codex" : provider).ToLowerInvariant()}:{sessionId}";
 
     private async Task ArchiveSessionAsync(SessionTabState state)
     {
@@ -4946,13 +5041,13 @@ public sealed partial class MainWindow : Window
         }
         async Task RenamePreviewAsync(string title)
         {
-            await _api.RenameAsync(session.Id, title, providerId: providerId);
-            session.Title = title;
-            var displayTitle = SessionTitleDisplay.Compact(title);
+            var renamedTitle = await RenameDashboardSessionAsync(session, title);
+            session.Title = renamedTitle;
+            var displayTitle = SessionTitleDisplay.Compact(renamedTitle);
             if (header.Children.ElementAtOrDefault(1) is TextBlock titleBlock) titleBlock.Text = displayTitle;
             if (tab is not null) AutomationProperties.SetName(tab, $"Session summary: {displayTitle}");
             await RefreshSessionsAsync();
-            SetStatus($"Renamed {title}", RunningBrush);
+            SetStatus($"Renamed {renamedTitle}", RunningBrush);
         }
         async Task ArchivePreviewAsync()
         {
@@ -5259,6 +5354,7 @@ public sealed partial class MainWindow : Window
             await Task.Delay(250, cancellationToken);
             var results = await _api.SearchSessionsAsync(query, ArchivedCheckBox.IsChecked == true, cancellationToken);
             if (!IsCurrentProviderData(providerId, epoch)) return;
+            ReconcilePendingSessionRenames(results);
             _searchResults = results;
             ApplySessionFilter();
         }
@@ -5298,8 +5394,9 @@ public sealed partial class MainWindow : Window
             try
             {
                 var archivedSessions = await _api.GetArchivedSessionsAsync(providerId: providerId);
-                if (IsCurrentProviderData(providerId, epoch))
-                    _archivedSessions = archivedSessions;
+                if (!IsCurrentProviderData(providerId, epoch)) return;
+                ReconcilePendingSessionRenames(archivedSessions);
+                _archivedSessions = archivedSessions;
             }
             catch (Exception ex)
             {

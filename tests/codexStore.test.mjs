@@ -32,7 +32,7 @@ function createStateDb(file) {
   db.close()
 }
 
-test('native Codex rename persists in the shared threads database', async () => {
+test('native Codex rename validation resolves a title without writing Codex state', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'ui-my-cli-rename-'))
   const statePath = path.join(dir, 'state_5.sqlite')
   createStateDb(statePath)
@@ -41,18 +41,17 @@ test('native Codex rename persists in the shared threads database', async () => 
   process.env.UI_MY_CLI_DB_PATH = path.join(dir, 'dashboard.sqlite')
 
   try {
-    const { renameSession } = await import('../server/codex-store.js')
-    assert.deepEqual(renameSession(threadId, 'Fix keyboard shortcuts and rename functionality'), {
+    const { resolveNativeRenameTitle } = await import('../server/codex-store.js')
+    assert.deepEqual(resolveNativeRenameTitle(threadId, 'Fix keyboard shortcuts and rename functionality'), {
       id: threadId,
       title: 'Fix keyboard shortcuts and rename functionality',
     })
 
     const db = new Database(statePath, { readonly: true })
-    assert.equal(db.prepare('SELECT title FROM threads WHERE id = ?').get(threadId).title,
-      'Fix keyboard shortcuts and rename functionality')
+    assert.equal(db.prepare('SELECT title FROM threads WHERE id = ?').get(threadId).title, 'Old title')
     db.close()
-    assert.throws(() => renameSession(threadId, 'bad\nname'), /control characters/)
-    assert.throws(() => renameSession(threadId, 'x'.repeat(201)), /1-200 characters/)
+    assert.throws(() => resolveNativeRenameTitle(threadId, 'bad\nname'), /control characters/)
+    assert.throws(() => resolveNativeRenameTitle(threadId, 'x'.repeat(201)), /1-200 characters/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
     delete process.env.CODEX_HOME

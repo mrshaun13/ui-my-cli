@@ -331,7 +331,7 @@ public sealed class DashboardApiClient : IDisposable
         string? providerId = null) =>
         GetProviderAsync<List<SubagentData>>($"sessions/{Uri.EscapeDataString(sessionId)}/subagents", cancellationToken, providerId);
 
-    public async Task RenameAsync(
+    public async Task<SessionRenameResult> RenameAsync(
         string sessionId,
         string title,
         CancellationToken cancellationToken = default,
@@ -341,7 +341,23 @@ public sealed class DashboardApiClient : IDisposable
             ProviderUri($"sessions/{Uri.EscapeDataString(sessionId)}/rename", providerId),
             new { title },
             cancellationToken);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            string? message = null;
+            try
+            {
+                using var body = await JsonDocument.ParseAsync(
+                    await response.Content.ReadAsStreamAsync(cancellationToken),
+                    cancellationToken: cancellationToken);
+                message = body.RootElement.TryGetProperty("error", out var error)
+                    ? error.GetString()
+                    : null;
+            }
+            catch (JsonException) { }
+            throw new InvalidOperationException(message ?? $"Session rename failed ({(int)response.StatusCode}).");
+        }
+        return await response.Content.ReadFromJsonAsync<SessionRenameResult>(JsonOptions, cancellationToken)
+            ?? throw new InvalidDataException("Dashboard returned no session rename result.");
     }
 
     public async Task ArchiveAsync(

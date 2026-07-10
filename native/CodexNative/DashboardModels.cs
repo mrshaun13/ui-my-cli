@@ -59,6 +59,12 @@ public sealed class DashboardRepo
     public override string ToString() => string.IsNullOrWhiteSpace(Project) ? WorkingDir : Project;
 }
 
+public sealed class SessionRenameResult
+{
+    public string Id { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+}
+
 public sealed class DashboardStats
 {
     public ActivityStats Activity { get; set; } = new();

@@ -4,8 +4,10 @@
 
 const { execFileSync } = require('child_process');
 const codex = require('../../codex-store');
+const transcriptHeadless = require('../../transcript-headless-store');
 const { resolveCodexHome, resolveStateDbPath, resolveSessionsDir } = require('../../codex-paths');
 const { resolveCodexExecutable } = require('./executable');
+const { renameCodexSession } = require('./rename');
 
 const metadata = {
   id: 'codex',
@@ -59,6 +61,18 @@ function watchPaths() {
   return [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, resolveSessionsDir()];
 }
 
+function renameSession(id, title, { codexAppServer } = {}) {
+  return renameCodexSession(id, title, {
+    appServer: codexAppServer,
+    isTranscriptHeadlessId: transcriptHeadless.isTranscriptHeadlessId,
+    setTranscriptTitle: codex.renameTranscriptSession,
+    resolveNativeTitle: codex.resolveNativeRenameTitle,
+    clearLegacyTitle: codex.clearLegacyTitle,
+    onCleanupError: error => console.warn(
+      `[codex:sessions] durable rename succeeded but legacy title cleanup failed: ${error.message}`),
+  });
+}
+
 module.exports = {
   ...metadata,
   availability,
@@ -72,7 +86,7 @@ module.exports = {
   getSessionConversation: codex.getSessionConversation,
   getSessionContextBreakdown: codex.getSessionContextBreakdown,
   getSessionConfig: codex.getSessionConfig,
-  renameSession: codex.renameSession,
+  renameSession,
   hideSession: codex.hideSession,
   restoreSession: codex.restoreSession,
   listRepos: codex.listRepos,

@@ -403,13 +403,13 @@ app.get(['/api/:providerId/sessions/:id', '/api/sessions/:id'], providerRoute((p
   }
 }));
 
-app.post(['/api/:providerId/sessions/:id/rename', '/api/sessions/:id/rename'], providerRoute((provider, req, res) => {
+app.post(['/api/:providerId/sessions/:id/rename', '/api/sessions/:id/rename'], providerRoute(async (provider, req, res) => {
   try {
     const { title } = req.body;
     if (typeof title !== 'string' && title !== null) {
       return res.status(400).json({ error: 'title must be a string or null' });
     }
-    const result = provider.renameSession(req.params.id, title);
+    const result = await provider.renameSession(req.params.id, title, { codexAppServer });
     // Push updated session list immediately to all status feed clients
     broadcastSessions(provider.id);
     res.json(result);

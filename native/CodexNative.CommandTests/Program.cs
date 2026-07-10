@@ -77,6 +77,15 @@ Check("session titles are compacted for constrained native chrome", () =>
     Equal(false, compact.Contains('\n'));
 });
 
+Check("pending session rename resists stale status titles only during its guard window", () =>
+{
+    var now = DateTimeOffset.Parse("2026-07-10T12:00:00Z");
+    var pending = new PendingSessionRename("New durable title", now.AddSeconds(12));
+    Equal("New durable title", SessionRenameGuard.ResolveTitle("Old title", pending, now.AddSeconds(3)));
+    Equal("New durable title", SessionRenameGuard.ResolveTitle("New durable title", pending, now.AddSeconds(3)));
+    Equal("Another client title", SessionRenameGuard.ResolveTitle("Another client title", pending, now.AddSeconds(12)));
+});
+
 Check("terminal selection geometry maps and clamps pointer positions", () =>
 {
     Equal(new TerminalCell(0, 0), TerminalSelectionGeometry.CellAt(0, 0, 1200, 600, 120, 30));
