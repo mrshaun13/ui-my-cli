@@ -28,7 +28,7 @@ with an appropriate HTTP status code.
 | `GET` | `/api/sessions/search` | Compatibility alias for default provider search |
 | `GET` | `/api/:providerId/repos` | List all unique repos (working directories) from one provider's past sessions |
 | `GET` | `/api/repos` | Compatibility alias for default provider repos |
-| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string, controlPlane?: boolean }`); returns `{ tempKey, controlPlane }`, where `controlPlane` reports the transport actually selected |
+| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string, controlPlane?: boolean, adaptive?: boolean }`); returns `{ tempKey, controlPlane }`, where `controlPlane` reports the transport actually selected. The status feed later sends `rekey` after ownership-safe persistence or `pending-expired` when an unregistered terminal exits or stays detached. |
 | `POST` | `/api/sessions/create` | Compatibility alias for default provider session creation |
 | `GET` | `/api/:providerId/sessions/:id/preview` | Provider-scoped rich read-only session detail — chat history, stats, top tools |
 | `GET` | `/api/sessions/:id/preview` | Rich read-only session detail — chat history, stats, top tools |
@@ -95,8 +95,8 @@ Compatibility alias: `/ws/status` uses the default provider.
 | --- | --- | --- |
 | `sessions` | `{ type: "sessions", data: Session[] }` | Every 3 seconds + immediately on connect + after mutations |
 | `latest-prompt` | `{ type: "latest-prompt", data: { content, timestamp, isShell } }` | DB write events + immediately on connect |
-| `rekey` | `{ type: "rekey", tempKey: string, realId: string }` | A pending session persists and receives its provider session ID |
-| `pending-expired` | `{ type: "pending-expired", tempKey: string }` | A pending terminal exits before its session persists |
+| `rekey` | `{ type: "rekey", tempKey: string, realId: string }` | A temporary new-session PTY is safely correlated to its persisted provider session |
+| `pending-expired` | `{ type: "pending-expired", tempKey: string }` | A temporary PTY exits or remains detached before session registration |
 
 ## Environment Variables
 

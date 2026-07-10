@@ -77,21 +77,30 @@ UI-owned and end when their tab or the app closes.
   native application exits.
 - Automatic terminal-bridge reconnect with bounded backoff and a manual
   "Retry now" action when a terminal view disconnects unexpectedly.
+- Terminal selection copy and a **Copy all** control for the full terminal
+  scrollback. On Windows use `Ctrl+Shift+C` to copy a selection and
+  `Ctrl+Shift+A` to copy all; on macOS use `Cmd+C` and `Cmd+A`. `Ctrl+C`
+  remains available to the terminal application as an interrupt, and text
+  paste continues to use `Ctrl+V` / `Cmd+V`. Windows also supports
+  `Ctrl+Insert` to copy a selection and `Shift+Insert` to paste; hold `Shift`
+  while dragging to select when the terminal application tracks the mouse.
 - New-session chooser with selected-provider agent and platform-shell modes plus
-  projects and paths. Shell tabs open a direct login shell in the selected
-  project and close the shell when the tab or application closes. Codex tabs
-  pass that selected project as an explicit working root even when their TUI is
-  connected through the shared app-server control plane.
-- Automatic reconciliation of new terminals with their saved Codex session ID.
-  A healthy blank terminal remains open until its first prompt creates the
-  persisted thread; only a terminal that actually exits is dismissed.
-- Per-terminal Adaptive model routing for Codex. When enabled, a native prompt composer
-  uses local task-shape rules first, calls a small ephemeral classifier only
-  for low-confidence requests, validates the decision against Codex's live
-  `model/list` catalog, and submits the turn with a supported model and reasoning
-  effort. Compatible native Codex terminals keep one persistent app-server-backed
-  PTY whether Adaptive routing is on or off. Existing direct or fallback PTYs stay
-  running and show Adaptive as unavailable instead of being restarted or migrated.
+  searchable known projects and paths. Shell tabs open a direct login shell in
+  the selected project and close the shell when the tab or application closes.
+  Codex tabs pass that selected project as an explicit working root even when
+  their TUI is connected through the shared app-server control plane.
+- Automatic, ownership-safe reconciliation of new terminals with their saved
+  provider session ID; attached temporary terminals stay available until that
+  provider session is persisted, exits, or remains detached beyond its grace
+  period.
+- Per-terminal Adaptive model routing for Codex. When enabled, a native prompt
+  composer uses local task-shape rules first, calls a small ephemeral classifier
+  only for low-confidence requests, validates the decision against Codex's live
+  `model/list` catalog, and submits the turn with a supported model and
+  reasoning effort. Compatible native Codex terminals keep one persistent
+  app-server-backed PTY whether Adaptive routing is on or off. Existing direct
+  or fallback PTYs stay running and show Adaptive as unavailable instead of
+  being restarted or migrated.
 - Clipboard-aware screenshot paste: copy a Windows or macOS image, press
   `Ctrl+V` in a Codex terminal, and the native client stores a managed temporary
   PNG and inserts its host-accessible image reference into the composer. Windows
@@ -112,6 +121,9 @@ UI-owned and end when their tab or the app closes.
 - Live per-session context usage, model, reasoning, permissions, rules, active
   skills, latest prompt, rename, and archive controls. Persisted `turn_context`
   changes from either `/model` or Adaptive routing refresh the open inspector.
+  Display titles and latest-prompt previews are normalized to bounded
+  single-line text, and injected Codex context envelopes are not presented as
+  user prompts.
 - Native session summaries with complete conversation history, copy actions,
   an interactive context-composition ring, tool usage, model changes, and real
   Codex subagent lifecycle timelines with task/result details.
@@ -247,11 +259,16 @@ Additional release/runtime capabilities preserved from v1.1.2:
   starts a private service on the first available loopback port from 7577
   through 7596 without exposing it to the network. Incompatible leftovers are
   skipped instead of trapping startup in a port-conflict loop.
-- Checks stable GitHub Releases for a newer platform package. Updates are
+- Checks stable GitHub Releases for a newer platform package. Checks are
+  coalesced, cached for up to 30 minutes, and revalidated with GitHub ETags;
+  a manual **Check updates** action forces a fresh request. Updates are
   bounded, SHA-256 verified, staged outside the installation, and installed
-  only after two consecutive checks find no active Codex sessions
-  or running local-shell tabs. An external helper replaces the app, restores
-  the prior payload if handoff fails, and restarts the new version.
+  only after two consecutive checks find no active provider sessions or
+  local-shell tabs. The external helper also waits for UI-owned terminal hosts,
+  retries transient install-directory locks, verifies the installed version and
+  restarted process, keeps the previous payload until startup validation
+  completes, restores and relaunches it on failure, and reports the outcome
+  once at the next launch.
 
 ## Prerequisites
 
@@ -328,6 +345,11 @@ speech, and updater hosts plus the local Whisper runtime. Cross-publishing
 verifies their structure from Linux, but final
 release packages still require macOS launch testing, code signing, and Apple
 notarization before distribution outside a development machine.
+
+Each `npm run native:publish:*` invocation explicitly restores every native
+project for its requested runtime before publishing it. This keeps sequential
+Windows and macOS package builds from reusing another runtime's shared Core
+intermediate assets.
 
 ## Run
 
@@ -426,3 +448,23 @@ developer toolchain. It updates only the desktop release. The independently
 managed dashboard service and its persistent PTYs remain running during the
 desktop swap. macOS signing and notarization are still required before treating
 a tagged package as a broadly distributable trusted application.
+
+### Update checks and recovery
+
+The native client checks GitHub Releases without credentials by default and
+surfaces the server-provided retry time when GitHub rate-limits a check. If
+anonymous GitHub API limits are insufficient, set
+`CODEX_NATIVE_GITHUB_TOKEN` only in the environment that launches Codex Native;
+the native update client sends that token as a GitHub Bearer token only when it
+is explicitly supplied. Do not add it to project files, settings, or release
+artifacts.
+
+During installation, the helper waits for the desktop process and UI-owned
+terminal hosts, and only stops terminal-host executables located in the current
+Codex Native installation. It retries transient install-directory locks for a
+bounded period, verifies that the payload version matches the updater, and
+checks that the replacement process remains running. The previous payload stays
+available until that startup check succeeds. If replacement or restart fails,
+the helper restores and relaunches the previous install, writes the failure
+result for a one-time status message on the next launch, and shows a native
+failure dialog even when the restored version predates result reporting.

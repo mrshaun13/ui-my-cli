@@ -2,7 +2,7 @@
 
 ## Overview
 
-The browser dashboard server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. The React client and the Avalonia native shell each expose a hard provider switch so Codex and Devin sessions never mix in one dashboard view; both load the catalog from `/api/providers` and scope list/search/stats/archive/PTY traffic to the selected provider. The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches provider-scoped session tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Tabs and previews retain their provider identity across switches; native settings persist the selected provider and each pane tab's provider. A separate on-demand speech helper owns microphone capture, Silero VAD, and local Whisper transcription so audio and model faults cannot destabilize the dashboard process. Windows keeps provider CLIs and project files in WSL2; macOS uses the local Node service and provider state, recovers a ready ui-my-cli checkout with installed Node dependencies when a configured path is stale, launches its private service through `nohup`, and exposes a menu-bar lifecycle for hide/reopen/stop/quit. Non-Codex analytics omit Codex-only credit rollups and pricing telemetry. The Node PTY manager self-heals a missing executable bit on node-pty's Unix spawn-helper before spawn. Direct login-shell tabs run in validated project paths and end when their tab or the application closes. Native updates consume platform-specific GitHub Release archives, verify their SHA-256 manifests, stage them outside the installation, wait for active work to drain across open provider tabs, and hand replacement/restart to an external helper with rollback.
+The browser dashboard server is a single Node.js process (Express + ws) with provider adapters for Codex and Devin. Each provider owns its local state reader, archive/restore behavior, stats adapter, and PTY command builder. The React client and the Avalonia native shell each expose a hard provider switch so Codex and Devin sessions never mix in one dashboard view; both load the catalog from `/api/providers` and scope list/search/stats/archive/PTY traffic to the selected provider. The Codex provider can also read transcript-pipeline headless ledgers that explicitly record `runtime_metadata.agent_id = "codex"`; those external runs stay read-only and are surfaced as transcript-pipeline headless sessions. New browser sessions start on a temporary PTY key, then re-key only after exact Codex originator correlation or one uniquely identifiable Devin candidate created after the PTY starts confirms ownership; a live attached terminal is never discarded merely because its first prompt has not been persisted. Synthetic Codex context envelopes are excluded from user-prompt metadata, while session titles and native prompt previews are normalized to bounded single-line display text. The cross-platform native frontend uses Avalonia for the dashboard and a native PTY terminal control for rendering. Its console bridge attaches provider-scoped session tabs to the same buffered server PTYs as the browser, so sessions can outlive either UI. Tabs and previews retain their provider identity across switches; native settings persist the selected provider and each pane tab's provider. A separate on-demand speech helper owns microphone capture, Silero VAD, and local Whisper transcription so audio and model faults cannot destabilize the dashboard process. Windows keeps provider CLIs and project files in WSL2; macOS uses the local Node service and provider state, recovers a ready ui-my-cli checkout with installed Node dependencies when a configured path is stale, launches its private service through `nohup`, and exposes a menu-bar lifecycle for hide/reopen/stop/quit. Non-Codex analytics omit Codex-only credit rollups and pricing telemetry. The Node PTY manager self-heals a missing executable bit on node-pty's Unix spawn-helper before spawn. Direct login-shell tabs run in validated project paths and end when their tab or the application closes. Native updates cache and ETag-revalidate platform release metadata, report rate-limit reset times, verify their SHA-256 manifests, stage outside the installation, wait for active work to drain, and hand replacement to an external helper that retries transient locks, verifies the installed version and restart, preserves rollback until that health check completes, and reports the final result once on the next launch.
 
 ## Data Flow
 
@@ -11,6 +11,7 @@ Codex CLI / VS Code  →  ~/.codex state DB + rollout JSONL  →  Codex provider
 transcript-pipeline Codex headless ledger  →  data/headless-sessions status/events files  →  Codex provider external-read adapter  →  React client / native app
 Devin CLI  →  Devin sessions.db + dashboard.db  →  Devin provider adapter  →  WebSocket push  →  React client / native app
 Browser  →  xterm.js keystrokes  →  provider-scoped WebSocket  →  node-pty  →  selected provider resume command
+New-session POST  →  temporary PTY  →  exact Codex originator correlation / bounded Devin candidate  →  re-keyed provider session
 Native app Agent selector  →  GET /api/providers  →  provider-scoped /api/:providerId/* and /ws/:providerId/*
 Windows native app  →  Avalonia terminal control  →  ConPTY  →  console bridge  →  provider-scoped WebSocket  →  persistent WSL2 PTY  →  selected provider CLI
 Windows native app  →  Avalonia terminal control  →  ConPTY  →  validated WSL2 launch  →  Ubuntu login shell
@@ -41,6 +42,8 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | `server/providers/codex/executable.js` | Resolves Codex for desktop processes that do not inherit a login-shell PATH. |
 | `server/providers/devin/index.js` | Devin provider adapter wiring legacy Devin CLI state into the dashboard contract. |
 | `server/providers/devin/paths.js` | Resolves Devin-related database paths across platforms. |
+| `server/pending-session-lifecycle.js` | Pending-session lifecycle policy for safe re-keying, connected-terminal retention, expiry, and bounded fallback correlation. |
+| `server/session-display-text.js` | Shared bounded session-title formatting and filtering of injected Codex context from user-prompt metadata. |
 
 ## Client Files
 
@@ -80,15 +83,20 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | `native/CodexNative.Core/DashboardServicePorts.cs` | Bounded private-service port policy used to bypass incompatible or orphaned loopback services safely. |
 | `native/CodexNative.Core/TerminalPaneLayoutMath.cs` | Pure layout math for fitting and resizing horizontally scrollable native terminal panes to the viewport. |
 | `native/CodexNative.Core/TokenChartMath.cs` | Shared-scale chart math that keeps native input/output token comparisons proportional. |
-| `native/CodexNative.Core/GitHubReleaseClient.cs` | Selects a newer stable GitHub Release and its exact platform archive/checksum through trusted HTTPS URLs. |
+| `native/CodexNative.Core/GitHubReleaseClient.cs` | Queries trusted stable GitHub Release metadata with ETag revalidation, rate-limit reset reporting, and opt-in token authentication. |
 | `native/CodexNative.Core/NativeUpdatePackage.cs` | Downloads bounded release assets, verifies SHA-256, and rejects traversal, links, or incomplete native payloads. |
-| `native/CodexNative.Core/NativeInstallRequest.cs` | Validated structured update handoff arguments and installed-app layout resolution. |
-| `native/CodexNative/NativeUpdateService.cs` | Native release check, verified staging, and external updater launch orchestration. |
-| `native/CodexNative.Updater/Program.cs` | Out-of-process atomic installation, rollback, and native-app restart helper. |
+| `native/CodexNative.Core/NativeInstallRequest.cs` | Validated structured update handoff arguments, related terminal-host process IDs, and installed-app layout resolution. |
+| `native/CodexNative.Core/NativeInstallProcessPolicy.cs` | Confirms that a candidate terminal host or app process belongs to the current native installation before updater cleanup or restart checks. |
+| `native/CodexNative.Core/NativeUpdateInstallationState.cs` | Marks an installation while post-restart update validation is in progress so the previous payload is not removed too early. |
+| `native/CodexNative.Core/NativeUpdateResultStore.cs` | Persists one bounded updater result for display on the next native launch. |
+| `native/CodexNative.Core/SessionDisplayText.cs` | Normalizes and length-bounds native session titles and prompt previews for fixed dashboard layouts. |
+| `native/CodexNative.Core/TerminalClipboardShortcut.cs` | Maps platform-safe terminal copy, copy-all, and paste shortcuts without taking ordinary shell control keys. |
+| `native/CodexNative/NativeUpdateService.cs` | Coalesced cached native release checks, verified staging, and external updater launch orchestration. |
+| `native/CodexNative.Updater/Program.cs` | Out-of-process retrying installation, version/startup validation, rollback, result reporting, and native-app restart helper. |
 | `native/CodexNative/DashboardStatusFeed.cs` | Reconnecting provider-scoped status-feed client for push-driven native session, rekey, and pending-terminal expiry events. |
 | `native/CodexNative/AnalyticsControls.cs` | Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition. |
 | `native/CodexNative/SessionPreviewControl.cs` | Rich native session summary with provider-scoped conversation history, context composition, model changes, and Codex subagent timelines. |
-| `native/CodexNative/DashboardModels.cs` | Typed multi-provider dashboard, context, analytics, conversation, rate-limit, provider-catalog, and subagent payload models. |
+| `native/CodexNative/DashboardModels.cs` | Typed multi-provider dashboard, bounded session-display, context, analytics, conversation, rate-limit, provider-catalog, and subagent payload models. |
 | `native/CodexNative/NativeSettings.cs` | Persisted native preferences including selected provider, pane layouts, and per-tab provider identity. |
 
 ## Server Dependencies
@@ -149,7 +157,11 @@ The server maintains two WebSocket namespaces:
    the same terminal stream. A rolling 256 KB scrollback buffer replays
    terminal history to new connections. Codex clients can request the shared
    app-server control-plane transport without coupling it to the pane's current
-   Adaptive preference.
+   Adaptive preference. New-session requests use a temporary
+   PTY key until the provider safely correlates its first persisted record;
+   Codex uses the injected originator marker and Devin accepts only one
+   uniquely identifiable candidate created after the PTY starts. A live attached pending terminal remains available
+   until it registers, exits, or stays detached beyond the grace period.
 
 2. **Status feed** (`/ws/:providerId/status`) — Server-push only. Sends the full session
    list every 3 seconds plus pending-session rekey/expiry and latest-prompt

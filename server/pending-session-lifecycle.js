@@ -1,5 +1,12 @@
 'use strict';
 
+/**
+ * Determines whether a temporary new-session PTY keeps waiting, re-keys to a
+ * persisted provider session, or expires after the terminal exits or remains
+ * detached. Also bounds fallback correlation where a provider lacks an exact
+ * session-origin marker.
+ */
+
 const DEFAULT_DETACHED_GRACE_MS = 60_000;
 const FALLBACK_CORRELATION_WINDOW_MS = 5_000;
 

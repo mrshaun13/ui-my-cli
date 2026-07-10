@@ -47,9 +47,12 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 | `server/codex-store.js` | Core Codex session data model, status detection, archive logic |
 | `server/providers/devin/store.js` | Legacy Devin session data model, status detection, archive logic |
 | `server/index.js` | All REST endpoints, WebSocket protocol, broadcast logic |
+| `server/pending-session-lifecycle.js` | Pending-session re-key, retention, and expiry policy |
 | `client/src/hooks/useStatusFeed.js` | How the client receives live session updates |
 | `client/src/components/Terminal.jsx` | xterm.js + PTY WebSocket bridge |
 | `server/pty-manager.js` | node-pty lifecycle, scrollback buffer, WSL env handling, Unix spawn-helper executable repair |
+| `native/CodexNative/NativeUpdateService.cs` | Cached native release checks, verified staging, and updater launch |
+| `native/CodexNative.Updater/Program.cs` | Retrying installation, rollback, and native restart verification |
 | `native/CodexNative/MainWindow.axaml.cs` | Native Agent provider switcher, provider-scoped tabs, analytics, and preferences |
 | `native/CodexNative/DashboardApiClient.cs` | Provider-scoped native REST/WebSocket client for the loopback dashboard API |
 | `Directory.Build.props` | Native version source of truth (`Version` / assembly / file versions) for packaging and CI |
@@ -101,6 +104,7 @@ list". Archive behavior is provider-owned: Codex uses `codex archive` /
 - The client uses ES modules with React 19 + Vite.
 - The native Windows/macOS frontend uses .NET 10, Avalonia, and an XTerm-compatible native PTY control; it does not embed a browser. Local provider APIs and provider-scoped WebSockets carry metadata and terminal streams only over loopback. The native Agent selector persists `ProviderId` in `CodexNative/settings.json` and stores each pane tab's `ProviderId` so open tabs reattach to the correct provider after reloads and provider switches.
 - Native desktop releases are versioned by `Directory.Build.props`; every artifact is named `CodexNative-v<version>-<runtime>.zip`. Stable `vX.Y.Z` tags must match that version. A matching tag, or an explicit `publish_release=true` workflow dispatch on `main`, publishes immutable Windows x64, macOS Intel, and macOS Apple Silicon ZIP/checksum pairs to GitHub Releases. GitHub Packages is intentionally not used for generic desktop archives.
+- Native update checks are anonymous by default. `CODEX_NATIVE_GITHUB_TOKEN` is an optional launch-environment variable for GitHub API rate limits; the native update client uses no credential unless that variable is explicitly supplied.
 - **Release hygiene is mandatory on every user-facing native PR** — see **Native release process** below. At minimum: bump `Directory.Build.props`, add bullets under `CHANGELOG.md` → `## Unreleased`, update release-facing docs (`native/README.md` / `scripts/doc-prose.js` as needed), run `npm run docs` and `npm run native:version:check`. A PR that ships native behavior without a version + changelog entry is incomplete.
 - The portable Windows native release belongs under `%LOCALAPPDATA%\Programs\CodexNative`, not Desktop, Downloads, OneDrive, or a network-synchronized directory. Users must verify the GitHub release SHA-256 before using Windows Properties to unblock each currently unsigned executable; organization security policy must not be bypassed. Keep all four executables together so terminal bridging, local speech, in-place update, rollback, restart, and taskbar shortcuts remain valid.
 - Never commit local tool caches under `.tools/`, NuGet/HTTP caches, or SDK installs. Keep `.tools/` gitignored. Accidental commits of these trees break GitHub PR file views (often showing 0 files changed) and must be purged before merge.

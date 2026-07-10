@@ -1,5 +1,11 @@
 'use strict';
 
+/**
+ * Normalizes user-facing session text so sidebar and native layouts receive
+ * bounded single-line titles and omit injected Codex context envelopes from
+ * user-prompt metadata.
+ */
+
 const MAXIMUM_SESSION_TITLE = 160;
 
 function singleLine(value) {

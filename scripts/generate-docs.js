@@ -266,15 +266,25 @@ function collect() {
   fileDescs['native/CodexNative.Core/TokenChartMath.cs'] =
     'Shared-scale chart math that keeps native input/output token comparisons proportional.';
   fileDescs['native/CodexNative.Core/GitHubReleaseClient.cs'] =
-    'Selects a newer stable GitHub Release and its exact platform archive/checksum through trusted HTTPS URLs.';
+    'Queries trusted stable GitHub Release metadata with ETag revalidation, rate-limit reset reporting, and opt-in token authentication.';
   fileDescs['native/CodexNative.Core/NativeUpdatePackage.cs'] =
     'Downloads bounded release assets, verifies SHA-256, and rejects traversal, links, or incomplete native payloads.';
   fileDescs['native/CodexNative.Core/NativeInstallRequest.cs'] =
-    'Validated structured update handoff arguments and installed-app layout resolution.';
+    'Validated structured update handoff arguments, related terminal-host process IDs, and installed-app layout resolution.';
+  fileDescs['native/CodexNative.Core/NativeInstallProcessPolicy.cs'] =
+    'Confirms that a candidate terminal host or app process belongs to the current native installation before updater cleanup or restart checks.';
+  fileDescs['native/CodexNative.Core/NativeUpdateInstallationState.cs'] =
+    'Marks an installation while post-restart update validation is in progress so the previous payload is not removed too early.';
+  fileDescs['native/CodexNative.Core/NativeUpdateResultStore.cs'] =
+    'Persists one bounded updater result for display on the next native launch.';
+  fileDescs['native/CodexNative.Core/SessionDisplayText.cs'] =
+    'Normalizes and length-bounds native session titles and prompt previews for fixed dashboard layouts.';
+  fileDescs['native/CodexNative.Core/TerminalClipboardShortcut.cs'] =
+    'Maps platform-safe terminal copy, copy-all, and paste shortcuts without taking ordinary shell control keys.';
   fileDescs['native/CodexNative/NativeUpdateService.cs'] =
-    'Native release check, verified staging, and external updater launch orchestration.';
+    'Coalesced cached native release checks, verified staging, and external updater launch orchestration.';
   fileDescs['native/CodexNative.Updater/Program.cs'] =
-    'Out-of-process atomic installation, rollback, and native-app restart helper.';
+    'Out-of-process retrying installation, version/startup validation, rollback, result reporting, and native-app restart helper.';
   fileDescs['native/CodexNative/DashboardStatusFeed.cs'] =
     'Reconnecting provider-scoped status-feed client for push-driven native session, rekey, and pending-terminal expiry events.';
   fileDescs['native/CodexNative/AnalyticsControls.cs'] =
@@ -282,9 +292,13 @@ function collect() {
   fileDescs['native/CodexNative/SessionPreviewControl.cs'] =
     'Rich native session summary with provider-scoped conversation history, context composition, model changes, and Codex subagent timelines.';
   fileDescs['native/CodexNative/DashboardModels.cs'] =
-    'Typed multi-provider dashboard, context, analytics, conversation, rate-limit, provider-catalog, and subagent payload models.';
+    'Typed multi-provider dashboard, bounded session-display, context, analytics, conversation, rate-limit, provider-catalog, and subagent payload models.';
   fileDescs['native/CodexNative/NativeSettings.cs'] =
     'Persisted native preferences including selected provider, pane layouts, and per-tab provider identity.';
+  fileDescs['server/pending-session-lifecycle.js'] =
+    'Pending-session lifecycle policy for safe re-keying, connected-terminal retention, expiry, and bounded fallback correlation.';
+  fileDescs['server/session-display-text.js'] =
+    'Shared bounded session-title formatting and filtering of injected Codex context from user-prompt metadata.';
 
   const statusJsdoc  = extractStatusJsdoc(sessionsSrc);
   const statusRows   = parseStatusTable(statusJsdoc);
@@ -406,7 +420,10 @@ provider-scoped sessions/tabs/actions, push-driven updates, multi-project and
 archived search, rich previews, interactive cohort analytics (Codex credit
 rollups only on Codex), latest-prompt navigation, context composition, Codex
 subagent timelines, desktop shortcuts, provider/quota health, styles, and text
-resizing.
+resizing. Native release checks are cached and ETag-revalidated; verified
+updates wait for active work and then use an external helper that retries
+transient install locks, validates replacement startup, and restores the
+previous payload if it fails.
 Closing the native UI leaves provider PTYs running; reopening it reattaches
 with recent scrollback. A private loopback service is started automatically when
 needed. On macOS the service is launched through \`nohup\`, window close hides to
@@ -637,8 +654,8 @@ ${mdTable(
   [
     ['`sessions`',      '`{ type: "sessions", data: Session[] }`',                              'Every 3 seconds + immediately on connect + after mutations'],
     ['`latest-prompt`', '`{ type: "latest-prompt", data: { content, timestamp, isShell } }`',   'DB write events + immediately on connect'],
-    ['`rekey`',         '`{ type: "rekey", tempKey: string, realId: string }`',                 'A pending session persists and receives its provider session ID'],
-    ['`pending-expired`', '`{ type: "pending-expired", tempKey: string }`',                     'A pending terminal exits before its session persists'],
+    ['`rekey`',         '`{ type: "rekey", tempKey: string, realId: string }`',                  'A temporary new-session PTY is safely correlated to its persisted provider session'],
+    ['`pending-expired`', '`{ type: "pending-expired", tempKey: string }`',                      'A temporary PTY exits or remains detached before session registration'],
   ]
 )}
 
@@ -762,7 +779,11 @@ The server maintains two WebSocket namespaces:
    the same terminal stream. A rolling 256 KB scrollback buffer replays
    terminal history to new connections. Codex clients can request the shared
    app-server control-plane transport without coupling it to the pane's current
-   Adaptive preference.
+   Adaptive preference. New-session requests use a temporary
+   PTY key until the provider safely correlates its first persisted record;
+   Codex uses the injected originator marker and Devin accepts only one
+   uniquely identifiable candidate created after the PTY starts. A live attached pending terminal remains available
+   until it registers, exits, or stays detached beyond the grace period.
 
 2. **Status feed** (\`/ws/:providerId/status\`) — Server-push only. Sends the full session
    list every 3 seconds plus pending-session rekey/expiry and latest-prompt
@@ -822,9 +843,12 @@ ${scriptList}
 | \`server/codex-store.js\` | Core Codex session data model, status detection, archive logic |
 | \`server/providers/devin/store.js\` | Legacy Devin session data model, status detection, archive logic |
 | \`server/index.js\` | All REST endpoints, WebSocket protocol, broadcast logic |
+| \`server/pending-session-lifecycle.js\` | Pending-session re-key, retention, and expiry policy |
 | \`client/src/hooks/useStatusFeed.js\` | How the client receives live session updates |
 | \`client/src/components/Terminal.jsx\` | xterm.js + PTY WebSocket bridge |
 | \`server/pty-manager.js\` | node-pty lifecycle, scrollback buffer, WSL env handling, Unix spawn-helper executable repair |
+| \`native/CodexNative/NativeUpdateService.cs\` | Cached native release checks, verified staging, and updater launch |
+| \`native/CodexNative.Updater/Program.cs\` | Retrying installation, rollback, and native restart verification |
 | \`native/CodexNative/MainWindow.axaml.cs\` | Native Agent provider switcher, provider-scoped tabs, analytics, and preferences |
 | \`native/CodexNative/DashboardApiClient.cs\` | Provider-scoped native REST/WebSocket client for the loopback dashboard API |
 | \`Directory.Build.props\` | Native version source of truth (\`Version\` / assembly / file versions) for packaging and CI |
