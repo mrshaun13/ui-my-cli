@@ -3886,7 +3886,8 @@ public sealed partial class MainWindow : Window
             ReferenceEquals(candidate.Terminal, terminal));
         var selection = terminalView.Terminal.Selection;
 
-        if (IsPrimaryModifierKey(args.Key) && selection.HasSelection)
+        if (IsPrimaryModifierKey(args.Key)
+            && (selection.HasSelection || !string.IsNullOrEmpty(state?.TerminalSelectedText)))
         {
             // Keep the terminal library from clearing its selection when the
             // standalone Ctrl/Cmd key event arrives before the copy shortcut.
@@ -3904,33 +3905,47 @@ public sealed partial class MainWindow : Window
             // Cmd+C owns clipboard copying on macOS. Let Control+C continue
             // to the PTY as SIGINT even when a selection is visible.
             selection.ClearSelection();
+            if (state is not null) state.TerminalSelectedText = null;
             terminalView.InvalidateVisual();
             return;
         }
 
         if (standardCopy || action == TerminalClipboardAction.CopySelection)
         {
-            var selectedText = selection.HasSelection ? selection.GetSelectionText() : null;
-            args.Handled = true;
+            var selectedText = selection.HasSelection
+                ? selection.GetSelectionText()
+                : state?.TerminalSelectedText;
             if (string.IsNullOrEmpty(selectedText))
             {
-                SetStatus("Select terminal text first, or use Copy all", StartingBrush);
+                if (action == TerminalClipboardAction.CopySelection)
+                {
+                    args.Handled = true;
+                    SetStatus("Select terminal text first, or use Copy all", StartingBrush);
+                    return;
+                }
+            }
+            else
+            {
+                args.Handled = true;
+                try
+                {
+                    var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
+                        ?? throw new InvalidOperationException("The system clipboard is unavailable.");
+                    await clipboard.SetTextAsync(selectedText);
+                    if (state is not null) state.TerminalSelectedText = selectedText;
+                    SetStatus("Terminal selection copied to clipboard", RunningBrush);
+                }
+                catch (Exception ex)
+                {
+                    NativeLog.Write($"Terminal copy failed: {ex}");
+                    SetStatus($"Copy failed: {ex.Message}", ErrorBrush);
+                }
                 return;
             }
-            try
-            {
-                var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
-                    ?? throw new InvalidOperationException("The system clipboard is unavailable.");
-                await clipboard.SetTextAsync(selectedText);
-                SetStatus("Terminal selection copied to clipboard", RunningBrush);
-            }
-            catch (Exception ex)
-            {
-                NativeLog.Write($"Terminal copy failed: {ex}");
-                SetStatus($"Copy failed: {ex.Message}", ErrorBrush);
-            }
-            return;
         }
+
+        if (!IsModifierKey(args.Key) && state is not null)
+            state.TerminalSelectedText = null;
 
         if (action == TerminalClipboardAction.CopyAll)
         {
@@ -3973,6 +3988,12 @@ public sealed partial class MainWindow : Window
             SetStatus($"Copy all failed: {ex.Message}", ErrorBrush);
         }
     }
+
+    private static bool IsModifierKey(Key key) => key is
+        Key.LeftCtrl or Key.RightCtrl
+        or Key.LeftShift or Key.RightShift
+        or Key.LeftAlt or Key.RightAlt
+        or Key.LWin or Key.RWin;
 
     private static bool IsPrimaryModifierKey(Key key) => OperatingSystem.IsMacOS()
         ? key is Key.LWin or Key.RWin
@@ -6241,6 +6262,7 @@ public sealed partial class MainWindow : Window
         state.TerminalSelectionAnchor = cell;
         state.TerminalSelectionActive = true;
         state.TerminalSelectionStarted = args.ClickCount > 1;
+        state.TerminalSelectedText = null;
         if (state.TerminalSelectionStarted)
         {
             var mode = args.ClickCount >= 3
@@ -6287,6 +6309,7 @@ public sealed partial class MainWindow : Window
         {
             var selection = terminalView.Terminal.Selection;
             selection.EndSelection();
+            state.TerminalSelectedText = selection.GetSelectionText();
             terminalView.InvalidateVisual();
         }
         state.TerminalSelectionActive = false;
@@ -6983,6 +7006,7 @@ public sealed partial class MainWindow : Window
         public bool TerminalSelectionActive { get; set; }
         public bool TerminalSelectionStarted { get; set; }
         public string RawTitle { get; set; } = session?.DisplayTitle ?? renameBox.Text ?? titleBlock.Text ?? key;
+        public string? TerminalSelectedText { get; set; }
         public Color MutedTextColor { get; set; } = Colors.Gray;
         public Border Inspector { get; } = inspector;
         public ScrollViewer InspectorBody { get; } = inspectorBody;
