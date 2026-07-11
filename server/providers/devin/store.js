@@ -21,13 +21,14 @@ const fs = require('fs');
 const { resolveDbPath, resolveDashboardDbPath } = require('./paths');
 const { formatDuration } = require('./stats');
 const { sessionsWithSubagents, countSubagents } = require('./subagents');
-const { isFallbackPendingSessionCandidate } = require('../../pending-session-lifecycle');
 
 // ── Devin CLI sessions.db ──────────────────────────────────────────────────────
 
 let readDb;
 let writeDb;
 const IN_FLIGHT_TOOL_STALE_SEC = 24 * 60 * 60;
+const PENDING_SESSION_CLOCK_TOLERANCE_MS = 2_000;
+const PENDING_SESSION_LOG_SCAN_BYTES = 1024 * 1024;
 
 /**
  * Returns a readonly connection to sessions.db.
@@ -1096,20 +1097,60 @@ function listSessionIds() {
  * Returns the session ID or null if not found.
  */
 function findNewSessionInDir(workingDir, excludeIds, ownership = null) {
+  const processId = Number(ownership?.processId);
+  const startedAt = Number(ownership?.startedAt);
+  if (!Number.isSafeInteger(processId) || processId <= 0 || !Number.isFinite(startedAt)) {
+    return null;
+  }
+
+  const logsDir = path.join(path.dirname(resolveDbPath()), 'logs');
+  const processLogPattern = new RegExp(`^devin_[0-9]{8}-[0-9]{6}_${processId}\\.log$`);
+  let logFiles;
+  try {
+    logFiles = fs.readdirSync(logsDir, { withFileTypes: true })
+      .filter(entry => entry.isFile() && processLogPattern.test(entry.name))
+      .map(entry => path.join(logsDir, entry.name));
+  } catch {
+    return null;
+  }
+
+  let ownedId = null;
+  for (const logPath of logFiles) {
+    try {
+      const stat = fs.statSync(logPath);
+      const createdAt = stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.ctimeMs;
+      if (createdAt < startedAt - PENDING_SESSION_CLOCK_TOLERANCE_MS) continue;
+      const fd = fs.openSync(logPath, 'r');
+      try {
+        const length = Math.min(stat.size, PENDING_SESSION_LOG_SCAN_BYTES);
+        const first = Buffer.alloc(length);
+        fs.readSync(fd, first, 0, length, 0);
+        const last = stat.size > length ? Buffer.alloc(length) : Buffer.alloc(0);
+        if (last.length) fs.readSync(fd, last, 0, length, stat.size - length);
+        const match = `${first.toString('utf8')}\n${last.toString('utf8')}`
+          .match(/Created new session: ([A-Za-z0-9][A-Za-z0-9_-]{0,127})/);
+        if (match) {
+          ownedId = match[1];
+          break;
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      continue;
+    }
+  }
+  if (!ownedId || excludeIds.has(ownedId)) return null;
+
   const freshDb = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
   try {
-    const rows = freshDb.prepare(`
+    const row = freshDb.prepare(`
       SELECT id, created_at FROM sessions
-      WHERE working_directory = ?
-      ORDER BY created_at DESC
-    `).all(workingDir);
-
-    const candidates = rows.filter(row =>
-      !excludeIds.has(row.id)
-      && (!ownership?.startedAt
-        || isFallbackPendingSessionCandidate(row.created_at * 1000, ownership.startedAt))
-    );
-    return candidates.length === 1 ? candidates[0].id : null;
+      WHERE id = ? AND working_directory = ?
+    `).get(ownedId, workingDir);
+    return row && row.created_at * 1000 >= startedAt - PENDING_SESSION_CLOCK_TOLERANCE_MS
+      ? row.id
+      : null;
   } finally {
     freshDb.close();
   }

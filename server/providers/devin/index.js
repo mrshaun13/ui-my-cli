@@ -26,18 +26,11 @@ function withProviderList(list) {
   return Array.isArray(list) ? list.map(withProviderSession) : list;
 }
 
-function quoteShellArg(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
-function buildCommand(sessionId, { shell, platform } = {}) {
-  const bin = 'devin';
-  const base = sessionId
-    ? `${bin} --resume ${quoteShellArg(sessionId)} --respect-workspace-trust false`
-    : `${bin} --respect-workspace-trust false`;
-
-  if (platform === 'win32') return { command: 'cmd.exe', args: ['/k', base] };
-  return { command: shell, args: ['-lc', base] };
+function buildCommand(sessionId) {
+  const args = [];
+  if (sessionId) args.push('--resume', sessionId);
+  args.push('--respect-workspace-trust', 'false');
+  return { command: 'devin', args };
 }
 
 let cachedVersion;

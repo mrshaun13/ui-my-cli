@@ -1,7 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
-  isFallbackPendingSessionCandidate,
   pendingReconciliationDelay,
   PENDING_REKEY_COMPATIBILITY_MS,
   pendingSessionExclusionIds,
@@ -22,12 +21,6 @@ test('pending metadata expires only after its PTY exits', () => {
   assert.equal(pendingSessionDisposition(null, null), 'expire');
   const detached = { active: true, clientCount: 0, startedAt: 1000, detachedAt: 2000 };
   assert.equal(pendingSessionDisposition(null, detached), 'continue');
-});
-
-test('fallback ownership accepts a uniquely discovered session even after a slow startup', () => {
-  assert.equal(isFallbackPendingSessionCandidate(10_500, 10_000), true);
-  assert.equal(isFallbackPendingSessionCandidate(15_001, 10_000), true);
-  assert.equal(isFallbackPendingSessionCandidate(7_999, 10_000), false);
 });
 
 test('pending reconciliation backs off while retaining the live PTY', () => {

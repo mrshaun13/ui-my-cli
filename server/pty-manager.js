@@ -273,6 +273,7 @@ function doSpawn(providerId, command, args, cwd, cols, rows, ws, envOverrides = 
     if (ensurePtySpawnHelperIsExecutable()) {
       console.info('[pty] Restored executable permission to node-pty spawn-helper.');
     }
+    const startedAt = Date.now();
     const p = pty.spawn(command, args, {
       name: 'xterm-256color',
       cols,
@@ -286,7 +287,7 @@ function doSpawn(providerId, command, args, cwd, cols, rows, ws, envOverrides = 
       clients: new Set(),
       scrollback: [],
       scrollbackSize: 0,
-      startedAt: Date.now(),
+      startedAt,
       lastClientDetachedAt: null,
     };
   } catch (err) {

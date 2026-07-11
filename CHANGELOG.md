@@ -56,8 +56,8 @@
   explicitly supplied `CODEX_NATIVE_GITHUB_TOKEN` environment variable.
 - Fixed new-session prompt loss in both browser and native clients. A pending
   session remains live through UI detach/restart until its PTY exits or is
-  explicitly canceled, with exact Codex origin correlation and an ownership-
-  safe fallback preventing unrelated same-folder sessions from being claimed.
+  explicitly canceled, with exact Codex origin correlation and process-owned
+  Devin correlation preventing unrelated same-folder sessions from being claimed.
 - Added cross-platform copy/select-all shortcuts and a visible **Copy all**
   action for terminal scrollback.
 - Bounded new-session titles and prompt previews at API and native layout
