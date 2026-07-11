@@ -506,10 +506,14 @@ function canonicalThreadTitle(thread, firstUserPrompt = storedUserPrompt(thread)
     thread.id.slice(0, 8));
 }
 
+function safeRolloutUserMessages(rollout) {
+  return rollout.messages.filter(
+    message => message.role === 'user' && !isSyntheticUserMessage(message.text));
+}
+
 function normalizeThread(thread, _overrides = null, rollout = null) {
   const parsed = rollout || readRolloutSummary(thread);
-  const userMessages = parsed.messages.filter(
-    message => message.role === 'user' && !isSyntheticUserMessage(message.text));
+  const userMessages = safeRolloutUserMessages(parsed);
   const firstUser = storedUserPrompt(thread)
     || userMessages[0]?.text
     || null;
@@ -1019,14 +1023,21 @@ function searchSessions(query, includeArchived) {
 
 function latestPrompt() {
   const threads = listThreads({ includeArchived: true, includeSystem: false });
-  const thread = threads.find(storedPromptOrPreview);
-  const native = thread ? {
-    sessionId: thread.id,
-    title: canonicalThreadTitle(thread),
-    project: projectName(thread.cwd),
-    prompt: storedPromptOrPreview(thread),
-    timestamp: thread.updated_at,
-  } : null;
+  let native = null;
+  for (const thread of threads) {
+    const rolloutPrompts = safeRolloutUserMessages(readRollout(thread));
+    const firstUserPrompt = storedUserPrompt(thread) || rolloutPrompts[0]?.text || null;
+    const prompt = storedPromptOrPreview(thread) || firstUserPrompt;
+    if (!prompt) continue;
+    native = {
+      sessionId: thread.id,
+      title: canonicalThreadTitle(thread, firstUserPrompt),
+      project: projectName(thread.cwd),
+      prompt,
+      timestamp: thread.updated_at,
+    };
+    break;
+  }
   const external = transcriptHeadless.latestPrompt();
   if (!native) return external;
   if (!external) return native;

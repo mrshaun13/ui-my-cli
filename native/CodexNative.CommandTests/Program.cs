@@ -705,11 +705,53 @@ Check("native install lock is target-specific and exclusive", () =>
 
 Check("native startup rejects arbitrary launches during an update lock", () =>
 {
-    Equal(true, NativeInstallLock.CanStart(lockHeld: false, []));
-    Equal(false, NativeInstallLock.CanStart(lockHeld: true, []));
+    Equal(true, NativeInstallLock.CanStart(
+        lockHeld: false,
+        updateInProgress: false,
+        hasStartupHealthToken: false,
+        []));
+    Equal(false, NativeInstallLock.CanStart(
+        lockHeld: true,
+        updateInProgress: true,
+        hasStartupHealthToken: false,
+        [NativeInstallLock.AuthorizedRestartArgument]));
+    Equal(false, NativeInstallLock.CanStart(
+        lockHeld: false,
+        updateInProgress: true,
+        hasStartupHealthToken: false,
+        []));
     Equal(true, NativeInstallLock.CanStart(
         lockHeld: true,
+        updateInProgress: true,
+        hasStartupHealthToken: true,
         [NativeInstallLock.AuthorizedRestartArgument]));
+});
+
+Check("native startup health requires framework-ready signal", () =>
+{
+    var parent = Path.Combine(Path.GetTempPath(), $"codex-native-health-{Guid.NewGuid():N}");
+    var install = Path.Combine(parent, "CodexNative");
+    Directory.CreateDirectory(install);
+    try
+    {
+        var token = NativeStartupHealthHandshake.CreateToken();
+        Equal(token, NativeStartupHealthHandshake.ParseToken(
+            [NativeStartupHealthHandshake.Argument, token]));
+        Equal(0, NativeStartupHealthHandshake.RemoveArguments(
+            [NativeStartupHealthHandshake.Argument, token]).Count);
+        Equal(false, NativeStartupHealthHandshake.IsReady(install, token, Environment.ProcessId));
+        NativeStartupHealthHandshake.SignalReady(install, token);
+        Equal(false, NativeStartupHealthHandshake.IsReady(install, token, Environment.ProcessId + 1));
+        Equal(true, NativeStartupHealthHandshake.IsReady(install, token, Environment.ProcessId));
+        NativeStartupHealthHandshake.Clear(install, token);
+        Equal(false, NativeStartupHealthHandshake.IsReady(install, token, Environment.ProcessId));
+        Throws<ArgumentException>(() => NativeStartupHealthHandshake.ParseToken(
+            [NativeStartupHealthHandshake.Argument, "invalid"]));
+    }
+    finally
+    {
+        Directory.Delete(parent, recursive: true);
+    }
 });
 
 await CheckAsync("GitHub release selection requires the matching runtime and checksum", async () =>

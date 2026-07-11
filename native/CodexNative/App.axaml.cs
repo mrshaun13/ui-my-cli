@@ -8,6 +8,11 @@ namespace CodexNative;
 
 public sealed partial class App : Application
 {
+    private static Action? _startupHealthSignal;
+    internal static Action? StartupHealthSignal
+    {
+        set => _startupHealthSignal = value;
+    }
     private TrayIcon? _menuBarIcon;
 
     public override void Initialize()
@@ -25,6 +30,7 @@ public sealed partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+        Interlocked.Exchange(ref _startupHealthSignal, null)?.Invoke();
     }
 
     private void ConfigureMacMenuBar(MainWindow window)

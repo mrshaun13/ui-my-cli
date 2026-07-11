@@ -55,8 +55,14 @@ public sealed class NativeInstallLock : IDisposable
         }
     }
 
-    public static bool CanStart(bool lockHeld, IReadOnlyList<string> arguments) =>
-        !lockHeld || arguments.Contains(AuthorizedRestartArgument, StringComparer.Ordinal);
+    public static bool CanStart(
+        bool lockHeld,
+        bool updateInProgress,
+        bool hasStartupHealthToken,
+        IReadOnlyList<string> arguments) =>
+        !lockHeld && !updateInProgress
+        || hasStartupHealthToken
+            && arguments.Contains(AuthorizedRestartArgument, StringComparer.Ordinal);
 
     public static string LockPath(string installDirectory)
     {

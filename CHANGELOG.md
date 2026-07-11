@@ -17,7 +17,8 @@
 - Fixed the confirmed Windows updater handoff failure that left v1.1.3 in
   place after repeated v1.1.4 downloads. The helper now waits for UI-owned
   terminal hosts, retries transient install-directory locks, verifies the
-  installed version, checks the relaunched process through startup, preserves
+  installed version, transfers the install lock to the replacement through a
+  framework-ready startup handshake, preserves
   rollback, protects the backup until startup validation completes, and
   automatically relaunches the previous install after failure.
 - Added one-time update-result reporting and updater-owned failure dialogs so

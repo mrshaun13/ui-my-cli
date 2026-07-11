@@ -10,13 +10,14 @@ internal static class Program
 {
     private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan InstallRetryTimeout = TimeSpan.FromSeconds(45);
-    private static readonly TimeSpan RestartHealthWindow = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RestartHealthWindow = TimeSpan.FromSeconds(15);
 
     private static int Main(string[] args)
     {
         NativeInstallRequest? request = null;
         NativeInstallLock? installLock = null;
         var parentExited = false;
+        var allowFailureRestart = true;
         try
         {
             request = NativeInstallRequest.Parse(
@@ -39,10 +40,18 @@ internal static class Program
                 WriteResult(
                     succeeded: true,
                     $"Codex Native {UpdaterVersion()} installed successfully.");
-                Restart(request);
+                Restart(request, ref installLock);
+            }
+            catch (RestartProcessStillRunningException)
+            {
+                allowFailureRestart = false;
+                throw;
             }
             catch
             {
+                installLock ??= NativeInstallLock.Acquire(
+                    request.TargetDirectory,
+                    ProcessExitTimeout);
                 RestorePreviousInstall(request.TargetDirectory, hadPreviousInstall);
                 throw;
             }
@@ -66,7 +75,7 @@ internal static class Program
                 WriteResult(
                     succeeded: false,
                     failureMessage);
-                if (parentExited) TryRestartPreviousInstall(request);
+                if (parentExited && allowFailureRestart) TryRestartPreviousInstall(request);
                 ShowFailure(request.Platform, failureMessage);
             }
             return 1;
@@ -295,10 +304,11 @@ internal static class Program
         if (hadPreviousInstall && Directory.Exists(backup)) Directory.Move(backup, target);
     }
 
-    private static void Restart(NativeInstallRequest request)
+    private static void Restart(NativeInstallRequest request, ref NativeInstallLock? installLock)
     {
+        var healthToken = NativeStartupHealthHandshake.CreateToken();
+        NativeStartupHealthHandshake.Clear(request.TargetDirectory, healthToken);
         ProcessStartInfo startInfo;
-        DateTimeOffset? restartRequestedAt = null;
         if (request.Platform == NativePlatform.Windows)
         {
             startInfo = new ProcessStartInfo
@@ -308,72 +318,62 @@ internal static class Program
                 WorkingDirectory = request.TargetDirectory,
             };
             startInfo.ArgumentList.Add(NativeInstallLock.AuthorizedRestartArgument);
+            startInfo.ArgumentList.Add(NativeStartupHealthHandshake.Argument);
+            startInfo.ArgumentList.Add(healthToken);
         }
         else
         {
-            restartRequestedAt = DateTimeOffset.UtcNow;
             startInfo = new ProcessStartInfo
             {
-                FileName = "/usr/bin/open",
+                FileName = Path.Combine(
+                    request.TargetDirectory,
+                    "Contents",
+                    "MacOS",
+                    "CodexNative"),
                 UseShellExecute = false,
+                WorkingDirectory = request.TargetDirectory,
             };
-            startInfo.ArgumentList.Add("-n");
-            startInfo.ArgumentList.Add(request.TargetDirectory);
-            startInfo.ArgumentList.Add("--args");
             startInfo.ArgumentList.Add(NativeInstallLock.AuthorizedRestartArgument);
+            startInfo.ArgumentList.Add(NativeStartupHealthHandshake.Argument);
+            startInfo.ArgumentList.Add(healthToken);
         }
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The operating system did not restart Codex Native.");
-        if (request.Platform == NativePlatform.Windows)
+        installLock?.Dispose();
+        installLock = null;
+        try
         {
-            if (process.WaitForExit((int)RestartHealthWindow.TotalMilliseconds))
-                throw new InvalidOperationException(
-                    $"The restarted Codex Native process exited during its startup health window with code {process.ExitCode}.");
-            return;
-        }
-        if (process.WaitForExit((int)TimeSpan.FromSeconds(10).TotalMilliseconds)
-            && process.ExitCode != 0)
-            throw new InvalidOperationException($"macOS rejected the app restart with exit code {process.ExitCode}.");
-        var deadline = Stopwatch.StartNew();
-        while (deadline.Elapsed < TimeSpan.FromSeconds(10))
-        {
-            if (IsMainApplicationRunning(request, restartRequestedAt!.Value)) return;
-            Thread.Sleep(TimeSpan.FromMilliseconds(250));
-        }
-        throw new InvalidOperationException("macOS accepted the open request, but Codex Native did not remain running.");
-    }
-
-    private static bool IsMainApplicationRunning(
-        NativeInstallRequest request,
-        DateTimeOffset startedAfter)
-    {
-        foreach (var candidate in Process.GetProcessesByName("CodexNative"))
-        {
-            using (candidate)
+            var deadline = Stopwatch.StartNew();
+            while (deadline.Elapsed < RestartHealthWindow)
             {
-                string? executable;
-                try { executable = candidate.MainModule?.FileName; }
-                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
-                {
-                    continue;
-                }
-                if (NativeInstallProcessPolicy.IsMainApplication(
-                        request.Platform,
+                if (NativeStartupHealthHandshake.IsReady(
                         request.TargetDirectory,
-                        executable)
-                    && ProcessStartedAt(candidate) >= startedAfter) return true;
+                        healthToken,
+                        process.Id)) return;
+                if (process.HasExited)
+                    throw new InvalidOperationException(
+                        $"The restarted Codex Native process exited before startup completed with code {process.ExitCode}.");
+                Thread.Sleep(TimeSpan.FromMilliseconds(100));
             }
-        }
-        return false;
-
-        static DateTimeOffset ProcessStartedAt(Process process)
-        {
-            try { return new DateTimeOffset(process.StartTime.ToUniversalTime()); }
-            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            try
             {
-                return DateTimeOffset.MinValue;
+                process.Kill(entireProcessTree: true);
+                if (!process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds))
+                    throw new RestartProcessStillRunningException();
             }
+            catch (Exception ex) when (ex is InvalidOperationException
+                                           or System.ComponentModel.Win32Exception
+                                           or NotSupportedException)
+            {
+                throw new RestartProcessStillRunningException(ex);
+            }
+            throw new TimeoutException(
+                $"Codex Native did not report successful startup within {RestartHealthWindow.TotalSeconds:0} seconds.");
+        }
+        finally
+        {
+            NativeStartupHealthHandshake.Clear(request.TargetDirectory, healthToken);
         }
     }
 
@@ -451,7 +451,26 @@ internal static class Program
                 : request.TargetDirectory;
             if (request.Platform == NativePlatform.Windows && !File.Exists(executable)) return;
             if (request.Platform == NativePlatform.MacOS && !Directory.Exists(executable)) return;
-            Restart(request);
+            var startInfo = request.Platform == NativePlatform.Windows
+                ? new ProcessStartInfo
+                {
+                    FileName = executable,
+                    UseShellExecute = true,
+                    WorkingDirectory = request.TargetDirectory,
+                }
+                : new ProcessStartInfo
+                {
+                    FileName = "/usr/bin/open",
+                    UseShellExecute = false,
+                };
+            if (request.Platform == NativePlatform.MacOS)
+            {
+                startInfo.ArgumentList.Add("-n");
+                startInfo.ArgumentList.Add(request.TargetDirectory);
+            }
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException(
+                    "The operating system did not restart the previous Codex Native installation.");
             UpdateLog.Write("Relaunched the previous Codex Native installation after update failure.");
         }
         catch (Exception restartError)
@@ -467,6 +486,17 @@ internal static class Program
             .ToArray());
         if (detail.Length > 1600) detail = detail[..1600];
         return $"Codex Native could not install the update. The previous installation was preserved. {detail}";
+    }
+
+    private sealed class RestartProcessStillRunningException : Exception
+    {
+        public RestartProcessStillRunningException(Exception? innerException = null)
+            : base(
+                "Codex Native did not report successful startup and could not be stopped safely; " +
+                "the installed files were left in place.",
+                innerException)
+        {
+        }
     }
 
     private static void ShowFailure(NativePlatform platform, string message)

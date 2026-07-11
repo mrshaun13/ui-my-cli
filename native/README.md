@@ -269,9 +269,10 @@ Additional release/runtime capabilities preserved from v1.1.2:
   service PID, loopback endpoint, and instance identity it owns. The helper
   revalidates that same instance has zero active provider sessions and PTYs immediately before asking
   it to shut down gracefully; unrelated terminal hosts, CLIs, IDEs, and apps
-  are never scanned or terminated. It retries
-  holds a target-specific install lock through replacement and rollback, verifies the installed version and
-  restarted process, keeps the previous payload until startup validation
+  are never scanned or terminated. It holds a target-specific install lock
+  through replacement and rollback, verifies the installed version, launches
+  the replacement while still holding the lock, then transfers the lock to the
+  new process through framework initialization and its ready handshake. It keeps the previous payload until startup validation
   completes, restores and relaunches it on failure, and reports the outcome
   once at the next launch.
 
@@ -478,9 +479,10 @@ still has zero active provider sessions and PTYs, authenticates the graceful shu
 bounded time for only that PID to exit. It never scans or terminates unrelated
 terminal hosts, CLIs, IDEs, or native apps. The helper retries
 transient install-directory locks for a bounded period, holds a target-specific
-exclusive lock through replacement, rollback, and restart verification, verifies that the
-payload version matches the updater, and
-checks that the replacement process remains running. The previous payload stays
+  exclusive lock through replacement and rollback and verifies that the
+  payload version matches the updater. It launches the replacement while the
+  lock is held, transfers the lock to that process through initialization, and
+  requires an explicit framework-ready handshake instead of treating a blocked process as healthy. The previous payload stays
 available until that startup check succeeds. If replacement or restart fails,
 the helper restores and relaunches the previous install, writes the failure
 result for a one-time status message on the next launch, and shows a native

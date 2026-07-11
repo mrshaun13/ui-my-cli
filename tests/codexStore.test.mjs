@@ -127,6 +127,8 @@ test('native Codex rename validation resolves a title without writing Codex stat
     assert.equal(rolloutSession.title, 'safe rollout prompt')
     assert.equal(rolloutSession.firstUserPrompt, 'safe rollout prompt')
     assert.equal(rolloutSession.lastUserPrompt, 'safe rollout prompt')
+    assert.equal(latestPrompt().title, 'safe rollout prompt')
+    assert.equal(latestPrompt().prompt, 'safe rollout prompt')
 
     const expectedRollout = path.join(dir, 'expected.jsonl')
     const unrelatedRollout = path.join(dir, 'unrelated.jsonl')
