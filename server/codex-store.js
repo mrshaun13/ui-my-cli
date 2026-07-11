@@ -603,6 +603,22 @@ function isSessionInFlight(id) {
   return thread ? readRolloutSummary(thread).inFlightTurnCount > 0 : false;
 }
 
+function listInFlightSessionIds(sessions) {
+  const requestedIds = new Set(
+    sessions
+      .map(session => session?.id)
+      .filter(id => typeof id === 'string' && !transcriptHeadless.isTranscriptHeadlessId(id))
+  );
+  const inFlightIds = new Set();
+  if (requestedIds.size === 0) return inFlightIds;
+  for (const thread of listThreads({ includeArchived: true, includeSystem: false })) {
+    if (requestedIds.has(thread.id) && readRolloutSummary(thread).inFlightTurnCount > 0) {
+      inFlightIds.add(thread.id);
+    }
+  }
+  return inFlightIds;
+}
+
 function topTools(rollout, limit = 6) {
   const counts = {};
   for (const tool of rollout.tools) {
@@ -1465,6 +1481,7 @@ module.exports = {
   listArchivedSessions,
   getSession,
   isSessionInFlight,
+  listInFlightSessionIds,
   getSessionPreview,
   getSessionConversation,
   getSessionContextBreakdown,

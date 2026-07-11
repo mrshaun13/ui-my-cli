@@ -42,7 +42,7 @@ test('native Codex rename validation resolves a title without writing Codex stat
   process.env.UI_MY_CLI_DB_PATH = path.join(dir, 'dashboard.sqlite')
 
   try {
-    const { findNewSessionInDir, getSession, isSessionInFlight, latestPrompt, resolveNativeRenameTitle, stats } = await import('../server/codex-store.js')
+    const { findNewSessionInDir, getSession, isSessionInFlight, latestPrompt, listInFlightSessionIds, resolveNativeRenameTitle, stats } = await import('../server/codex-store.js')
     assert.deepEqual(resolveNativeRenameTitle(threadId, 'Fix keyboard shortcuts and rename functionality'), {
       id: threadId,
       title: 'Fix keyboard shortcuts and rename functionality',
@@ -144,11 +144,13 @@ test('native Codex rename validation resolves a title without writing Codex stat
       payload: { type: 'task_started', turn_id: 'archived-turn' },
     }) + '\n')
     assert.equal(isSessionInFlight(threadId), true)
+    assert.deepEqual(listInFlightSessionIds([{ id: threadId }, { id: 'tp:external' }]), new Set([threadId]))
     appendFileSync(syntheticRollout, JSON.stringify({
       timestamp: new Date().toISOString(),
       type: 'event_msg',
       payload: { type: 'task_complete', turn_id: 'archived-turn' },
     }) + '\n')
+    assert.deepEqual(listInFlightSessionIds([{ id: threadId }]), new Set())
     const unarchiveState = new Database(statePath)
     unarchiveState.prepare('UPDATE threads SET archived = 0 WHERE id = ?').run(threadId)
     unarchiveState.close()

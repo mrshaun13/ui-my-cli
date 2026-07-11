@@ -28,13 +28,14 @@ test('native update activity blocks a quiet session with an in-flight provider t
     {
       id: 'codex',
       listSessions: () => [{ id: 'quiet-turn', status: 'finished' }],
-      isSessionInFlight: id => {
-        checked.push(id);
-        return true;
+      listInFlightSessionIds: sessions => {
+        checked.push(sessions.map(session => session.id));
+        return new Set(['quiet-turn']);
       },
+      isSessionInFlight: () => { throw new Error('scalar probe must not run'); },
     },
   ]);
-  assert.deepEqual(checked, ['quiet-turn']);
+  assert.deepEqual(checked, [['quiet-turn']]);
   assert.equal(result.blockingSessions, 1);
 });
 
@@ -51,9 +52,9 @@ test('native update activity includes archived sessions once', () => {
         { id: 'archived', status: 'archived' },
         { id: 'duplicate', status: 'archived' },
       ],
-      isSessionInFlight: id => {
-        checked.push(id);
-        return id === 'archived';
+      listInFlightSessionIds: sessions => {
+        checked.push(...sessions.map(session => session.id));
+        return new Set(['archived']);
       },
     },
   ]);
@@ -108,6 +109,9 @@ test('native update activity fails closed on provider read errors', () => {
   assert.throws(() => nativeUpdateActivity([
     { id: 'codex', listSessions: () => [{ id: 'bad', status: 'finished' }], isSessionInFlight: () => null },
   ]), /invalid in-flight session state/);
+  assert.throws(() => nativeUpdateActivity([
+    { id: 'codex', listSessions: () => [{ id: 'known', status: 'finished' }], listInFlightSessionIds: () => new Set(['unknown']) },
+  ]), /invalid in-flight session set/);
   assert.throws(() => nativeUpdateActivity([
     { id: 'devin', listSessions: () => [], listArchivedSessions: () => [{ id: 'hidden', status: 'archived' }] },
   ]), /invalid archived activity status/);

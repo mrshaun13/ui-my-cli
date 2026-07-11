@@ -294,7 +294,7 @@ function collect() {
   fileDescs['native/CodexNative/NativeSettings.cs'] =
     'Persisted native preferences including selected provider, pane layouts, and per-tab provider identity.';
   fileDescs['server/pending-session-lifecycle.js'] =
-    'Pending-session lifecycle policy for safe re-keying, live-PTY retention through client detachment, exit expiry, and ownership-safe fallback correlation.';
+    'Pending-session lifecycle policy for safe re-keying, live-PTY retention through client detachment, exit expiry, and exact provider-owned correlation.';
   fileDescs['server/session-display-text.js'] =
     'Shared bounded session-title formatting and filtering of injected Codex context from user-prompt metadata.';
 
@@ -779,8 +779,8 @@ The server maintains two WebSocket namespaces:
    app-server control-plane transport without coupling it to the pane's current
    Adaptive preference. New-session requests use a temporary
    PTY key until the provider safely correlates its first persisted record;
-   Codex uses the injected originator marker and Devin accepts only one
-   uniquely identifiable candidate created after the PTY starts. A live pending
+   Codex uses the injected originator marker and Devin reads the persisted
+   session ID from the spawned process's own log. A live pending
    terminal remains available through client detachment until it registers,
    exits, or is explicitly canceled.
 

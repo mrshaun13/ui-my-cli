@@ -91,6 +91,7 @@ module.exports = {
   listArchivedSessions: codex.listArchivedSessions,
   getSession: codex.getSession,
   isSessionInFlight: codex.isSessionInFlight,
+  listInFlightSessionIds: codex.listInFlightSessionIds,
   getSessionPreview: codex.getSessionPreview,
   getSessionConversation: codex.getSessionConversation,
   getSessionContextBreakdown: codex.getSessionContextBreakdown,

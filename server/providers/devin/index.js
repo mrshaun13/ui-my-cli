@@ -67,6 +67,7 @@ module.exports = {
   listSessions: () => withProviderList(store.listSessions()),
   listArchivedSessions: () => withProviderList(store.listArchivedSessions()),
   isSessionInFlight: store.isSessionInFlight,
+  listInFlightSessionIds: store.listInFlightSessionIds,
   getSession: id => withProviderSession(store.getSession(id)),
   getSessionPreview: store.getSessionPreview,
   getSessionConversation: store.getSessionConversation,

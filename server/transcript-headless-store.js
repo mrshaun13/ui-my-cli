@@ -12,6 +12,7 @@ const dashboardStore = require('./dashboard-store');
 
 const ID_PREFIX = 'tp:';
 const DEFAULT_CONTEXT = 200000;
+const IN_FLIGHT_RUN_STALE_SEC = 24 * 60 * 60;
 
 function formatDuration(sec) {
   if (!Number.isFinite(sec) || sec < 0) sec = 0;
@@ -220,7 +221,10 @@ function normalizeRecord(record, overrides = dashboardStore.titleOverrides(), hi
     || null;
 
   let activityStatus = 'idle';
-  if (run && !run.endedAt && exitCode == null) activityStatus = 'active';
+  if (run && !run.endedAt && exitCode == null
+    && Math.floor(Date.now() / 1000) - lastActivityAt <= IN_FLIGHT_RUN_STALE_SEC) {
+    activityStatus = 'active';
+  }
   else if (exitCode === 0) activityStatus = 'finished';
   const state = hidden ? 'archived' : activityStatus;
 

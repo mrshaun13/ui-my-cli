@@ -256,6 +256,20 @@ function isSessionInFlight(id) {
   );
 }
 
+function listInFlightSessionIds(sessions) {
+  return new Set(sessions
+    .filter(session => {
+      const sessionStatus = typeof session?.status === 'string'
+        ? session.status.toLowerCase()
+        : '';
+      const status = sessionStatus === 'archived'
+        ? session.activityStatus
+        : sessionStatus;
+      return typeof status === 'string' && status.toLowerCase() === 'active';
+    })
+    .map(session => session.id));
+}
+
 /**
  * Gets a short last-message snippet for sidebar display.
  */
@@ -1372,4 +1386,4 @@ function getSessionConfig(id) {
   };
 }
 
-module.exports = { listSessions, listArchivedSessions, isSessionInFlight, getSession, getSessionPreview, getSessionConversation, getSessionContextBreakdown, getSessionConfig, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };
+module.exports = { listSessions, listArchivedSessions, isSessionInFlight, listInFlightSessionIds, getSession, getSessionPreview, getSessionConversation, getSessionContextBreakdown, getSessionConfig, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };

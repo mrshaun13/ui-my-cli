@@ -87,6 +87,7 @@ test('Devin status uses deterministic tails and preserves unresolved tool activi
     assert.equal(store.isSessionInFlight('session-2'), true);
     assert.equal(store.isSessionInFlight('session-3'), false);
     assert.equal(store.isSessionInFlight('session-4'), false);
+    assert.deepEqual(store.listInFlightSessionIds(visible), new Set(['session-2']));
   } finally {
     delete process.env.DEVIN_DB_PATH;
     delete process.env.DEVIN_DASHBOARD_DB_PATH;

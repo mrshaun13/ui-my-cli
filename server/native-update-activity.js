@@ -24,18 +24,13 @@ function nativeUpdateActivity(providers) {
       }
       sessions.push(session);
     }
+    const activityStatuses = [];
     for (const session of sessions) {
       const status = typeof session?.status === 'string'
         ? session.status.toLowerCase()
         : '';
       if (!validStatuses.has(status)) {
         throw new TypeError(`Provider ${provider.id} returned an invalid session status.`);
-      }
-      const inFlight = typeof provider.isSessionInFlight === 'function'
-        ? provider.isSessionInFlight(session.id)
-        : false;
-      if (typeof inFlight !== 'boolean') {
-        throw new TypeError(`Provider ${provider.id} returned an invalid in-flight session state.`);
       }
       let activityStatus = status;
       if (status === 'archived') {
@@ -44,11 +39,36 @@ function nativeUpdateActivity(providers) {
           if (!validStatuses.has(activityStatus) || activityStatus === 'archived') {
             throw new TypeError(`Provider ${provider.id} returned an invalid archived activity status.`);
           }
-        } else if (typeof provider.isSessionInFlight !== 'function') {
+        } else if (typeof provider.listInFlightSessionIds !== 'function'
+          && typeof provider.isSessionInFlight !== 'function') {
           throw new TypeError(`Provider ${provider.id} returned an invalid archived activity status.`);
         }
       }
-      if (activityStatus === 'active' || inFlight) blockingSessions++;
+      activityStatuses.push(activityStatus);
+    }
+    let inFlightIds;
+    if (typeof provider.listInFlightSessionIds === 'function') {
+      inFlightIds = provider.listInFlightSessionIds(sessions);
+      if (!(inFlightIds instanceof Set)
+        || [...inFlightIds].some(id => typeof id !== 'string' || !seenIds.has(id))) {
+        throw new TypeError(`Provider ${provider.id} returned an invalid in-flight session set.`);
+      }
+    } else {
+      inFlightIds = new Set();
+      for (const session of sessions) {
+        const inFlight = typeof provider.isSessionInFlight === 'function'
+          ? provider.isSessionInFlight(session.id)
+          : false;
+        if (typeof inFlight !== 'boolean') {
+          throw new TypeError(`Provider ${provider.id} returned an invalid in-flight session state.`);
+        }
+        if (inFlight) inFlightIds.add(session.id);
+      }
+    }
+    for (let index = 0; index < sessions.length; index++) {
+      if (activityStatuses[index] === 'active' || inFlightIds.has(sessions[index].id)) {
+        blockingSessions++;
+      }
     }
   }
   return { blockingSessions };

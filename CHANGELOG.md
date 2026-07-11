@@ -38,9 +38,9 @@
   transport identities, and bounded temporary-to-canonical compatibility maps.
 - Closed native update races with authenticated all-provider activity
   revalidation across visible and archived sessions, explicit Codex in-flight
-  turn detection and unresolved Devin tool-call detection with 24-hour
-  abandoned-work fail-safes, plus an install-scoped lock honored by competing
-  native starts.
+  turn detection, unresolved Devin tool-call detection, and transcript-pipeline
+  headless-run detection with 24-hour abandoned-work fail-safes, plus an
+  install-scoped lock honored by competing native starts.
 - Blocked self-update before download when connected to the unowned shared
   dashboard on port 7575, with instructions to stop it so native can start an
   authenticated private service without terminating arbitrary processes.
