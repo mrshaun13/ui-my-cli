@@ -288,15 +288,36 @@ internal static class Program
             Directory.Move(installStaging, target);
             return targetMoved;
         }
-        catch
+        catch (Exception installFailure)
         {
-            RetryFileOperation(
-                () => TryDeleteDirectory(installStaging),
-                "remove the incomplete staged installation");
+            Exception? restoreFailure = null;
             if (targetMoved && !Directory.Exists(target) && Directory.Exists(backup))
+            {
+                try
+                {
+                    RetryFileOperation(
+                        () => Directory.Move(backup, target),
+                        "restore the previous installation after install failure");
+                }
+                catch (Exception recoveryFailure)
+                {
+                    restoreFailure = recoveryFailure;
+                }
+            }
+            try
+            {
                 RetryFileOperation(
-                    () => Directory.Move(backup, target),
-                    "restore the previous installation after install failure");
+                    () => TryDeleteDirectory(installStaging),
+                    "remove the incomplete staged installation");
+            }
+            catch (Exception recoveryFailure)
+            {
+                UpdateLog.Write($"Could not remove incomplete staging after install failure: {recoveryFailure.Message}");
+            }
+            if (restoreFailure is not null)
+                throw new AggregateException(
+                    "The update installation failed and the previous installation could not be restored automatically.",
+                    [installFailure, restoreFailure]);
             throw;
         }
     }
@@ -494,7 +515,10 @@ internal static class Program
             .Select(character => char.IsControl(character) ? ' ' : character)
             .ToArray());
         if (detail.Length > 1600) detail = detail[..1600];
-        return $"Codex Native could not install the update. The previous installation was preserved. {detail}";
+        var recovery = error is AggregateException
+            ? "Automatic restoration failed; keep the .previous backup for recovery."
+            : "The previous installation was preserved.";
+        return $"Codex Native could not install the update. {recovery} {detail}";
     }
 
     private sealed class RestartProcessStillRunningException : Exception

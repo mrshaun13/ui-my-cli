@@ -22,7 +22,8 @@ function createStateDb(file) {
       sandbox_policy TEXT NOT NULL DEFAULT '',
       approval_mode TEXT NOT NULL DEFAULT '',
       first_user_message TEXT NOT NULL DEFAULT '',
-      preview TEXT NOT NULL DEFAULT ''
+      preview TEXT NOT NULL DEFAULT '',
+      archived INTEGER NOT NULL DEFAULT 0
     )
   `)
   db.prepare(`
@@ -130,6 +131,31 @@ test('native Codex rename validation resolves a title without writing Codex stat
     assert.equal(latestPrompt().title, 'safe rollout prompt')
     assert.equal(latestPrompt().prompt, 'safe rollout prompt')
 
+    assert.equal(isSessionInFlight(threadId), false)
+
+    const archivedState = new Database(statePath)
+    archivedState.prepare('UPDATE threads SET archived = 1 WHERE id = ?').run(threadId)
+    archivedState.close()
+    appendFileSync(syntheticRollout, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'archived-turn' },
+    }) + '\n')
+    assert.equal(isSessionInFlight(threadId), true)
+    appendFileSync(syntheticRollout, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'archived-turn' },
+    }) + '\n')
+    const unarchiveState = new Database(statePath)
+    unarchiveState.prepare('UPDATE threads SET archived = 0 WHERE id = ?').run(threadId)
+    unarchiveState.close()
+
+    appendFileSync(syntheticRollout, JSON.stringify({
+      timestamp: '2000-01-01T00:00:00.000Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'abandoned-turn' },
+    }) + '\n')
     assert.equal(isSessionInFlight(threadId), false)
     appendFileSync(syntheticRollout, JSON.stringify({
       type: 'event_msg',

@@ -38,12 +38,38 @@ test('native update activity blocks a quiet session with an in-flight provider t
   assert.equal(result.blockingSessions, 1);
 });
 
+test('native update activity includes archived sessions once', () => {
+  const checked = [];
+  const result = nativeUpdateActivity([
+    {
+      id: 'codex',
+      listSessions: () => [
+        { id: 'visible', status: 'finished' },
+        { id: 'duplicate', status: 'active' },
+      ],
+      listArchivedSessions: () => [
+        { id: 'archived', status: 'archived' },
+        { id: 'duplicate', status: 'archived' },
+      ],
+      isSessionInFlight: id => {
+        checked.push(id);
+        return id === 'archived';
+      },
+    },
+  ]);
+  assert.deepEqual(checked, ['visible', 'duplicate', 'archived']);
+  assert.equal(result.blockingSessions, 2);
+});
+
 test('native update activity fails closed on provider read errors', () => {
   assert.throws(() => nativeUpdateActivity([
     { id: 'codex', listSessions: () => { throw new Error('state unavailable'); } },
   ]), /state unavailable/);
   assert.throws(() => nativeUpdateActivity([
     { id: 'devin', listSessions: () => null },
+  ]), /invalid session list/);
+  assert.throws(() => nativeUpdateActivity([
+    { id: 'devin', listSessions: () => [], listArchivedSessions: () => null },
   ]), /invalid session list/);
   assert.throws(() => nativeUpdateActivity([
     { id: 'devin', listSessions: () => [{ status: 'unknown' }] },

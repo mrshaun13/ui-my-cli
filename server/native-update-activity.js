@@ -1,16 +1,28 @@
 'use strict';
 
 function nativeUpdateActivity(providers) {
-  const validStatuses = new Set(['active', 'question', 'finished', 'idle']);
+  const validStatuses = new Set(['active', 'question', 'finished', 'idle', 'archived']);
   let blockingSessions = 0;
   for (const provider of providers) {
     const availability = typeof provider.availability === 'function'
       ? provider.availability()
       : { available: true };
     if (availability?.available === false) continue;
-    const sessions = provider.listSessions();
-    if (!Array.isArray(sessions)) {
+    const visibleSessions = provider.listSessions();
+    const archivedSessions = typeof provider.listArchivedSessions === 'function'
+      ? provider.listArchivedSessions()
+      : [];
+    if (!Array.isArray(visibleSessions) || !Array.isArray(archivedSessions)) {
       throw new TypeError(`Provider ${provider.id} returned an invalid session list.`);
+    }
+    const sessions = [];
+    const seenIds = new Set();
+    for (const session of [...visibleSessions, ...archivedSessions]) {
+      if (typeof session?.id === 'string') {
+        if (seenIds.has(session.id)) continue;
+        seenIds.add(session.id);
+      }
+      sessions.push(session);
     }
     for (const session of sessions) {
       const status = typeof session?.status === 'string'

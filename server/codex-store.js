@@ -29,6 +29,7 @@ const HEADLESS_STAMP_RE = /--(?:triage|continue|workflow|research-visualizer|int
 const rolloutSummaryCache = new Map();
 const statsResultCache = new Map();
 const SUMMARY_READ_CHUNK_BYTES = 1024 * 1024;
+const IN_FLIGHT_TURN_STALE_MS = 24 * 60 * 60 * 1000;
 
 function formatDuration(sec) {
   if (!Number.isFinite(sec) || sec < 0) sec = 0;
@@ -209,12 +210,25 @@ function emptyRolloutSummary(pathname) {
     lastUser: null,
     lastAssistant: null,
     subagentIds: new Set(),
-    activeTurnIds: new Set(),
+    activeTurns: new Map(),
   };
 }
 
-function applySummaryEvent(summary, event) {
+function eventTimestamp(event, fallbackTimestamp) {
+  const parsed = Date.parse(event?.timestamp || '');
+  return Number.isFinite(parsed) ? parsed : fallbackTimestamp;
+}
+
+function applySummaryEvent(summary, event, fallbackTimestamp = Date.now()) {
   if (!event) return;
+  const observedAt = eventTimestamp(event, fallbackTimestamp);
+  for (const [turnId, lastObservedAt] of summary.activeTurns) {
+    if (observedAt - lastObservedAt > IN_FLIGHT_TURN_STALE_MS) {
+      summary.activeTurns.delete(turnId);
+    } else {
+      summary.activeTurns.set(turnId, Math.max(lastObservedAt, observedAt));
+    }
+  }
   if (event.type === 'session_meta') {
     summary.metadata = { ...summary.metadata, ...(event.payload || {}) };
     return;
@@ -240,12 +254,11 @@ function applySummaryEvent(summary, event) {
   }
   if (event.type === 'event_msg' && event.payload?.turn_id) {
     if (event.payload.type === 'task_started') {
-      summary.activeTurnIds.add(event.payload.turn_id);
+      summary.activeTurns.set(event.payload.turn_id, observedAt);
     } else if (event.payload.type === 'task_complete' || event.payload.type === 'turn_aborted') {
-      summary.activeTurnIds.delete(event.payload.turn_id);
+      summary.activeTurns.delete(event.payload.turn_id);
     }
   }
-
   const msg = event.type === 'response_item'
     ? responseMessage(event.payload || {})
     : event.type === 'event_msg'
@@ -259,7 +272,7 @@ function applySummaryEvent(summary, event) {
   }
 }
 
-function publicRolloutSummary(entry) {
+function publicRolloutSummary(entry, now = Date.now()) {
   const messages = [];
   if (entry.summary.firstUser) messages.push({ role: 'user', text: entry.summary.firstUser });
   if (entry.summary.lastUser && entry.summary.lastUser !== entry.summary.firstUser) {
@@ -274,7 +287,9 @@ function publicRolloutSummary(entry) {
     currentReasoningEffort: entry.summary.currentReasoningEffort,
     messages,
     subagentCount: entry.summary.subagentIds.size,
-    inFlightTurnCount: entry.summary.activeTurnIds.size,
+    inFlightTurnCount: [...entry.summary.activeTurns.values()]
+      .filter(lastObservedAt => now - lastObservedAt <= IN_FLIGHT_TURN_STALE_MS)
+      .length,
   };
 }
 
@@ -324,7 +339,7 @@ function readRolloutSummary(thread) {
         if (data[index] !== 0x0a) continue;
         let line = data.subarray(lineStart, index);
         if (line.length && line[line.length - 1] === 0x0d) line = line.subarray(0, -1);
-        applySummaryEvent(entry.summary, parseJsonLine(line.toString('utf8')));
+        applySummaryEvent(entry.summary, parseJsonLine(line.toString('utf8')), stat.mtimeMs);
         lineStart = index + 1;
       }
       entry.carry = lineStart < data.length ? Buffer.from(data.subarray(lineStart)) : Buffer.alloc(0);
@@ -586,7 +601,7 @@ function getSession(id) {
 }
 
 function isSessionInFlight(id) {
-  const thread = getThread(id, { includeArchived: false, includeSystem: false });
+  const thread = getThread(id, { includeArchived: true, includeSystem: false });
   return thread ? readRolloutSummary(thread).inFlightTurnCount > 0 : false;
 }
 

@@ -468,7 +468,7 @@ is explicitly supplied. Do not add it to project files, settings, or release
 artifacts.
 
 During installation, the dashboard waits at most two minutes for two clear
-checks across every provider: no active sessions reported from native, browser,
+checks across every provider: no active visible or archived sessions reported from native, browser,
 direct CLI, or IDE activity, and no local-shell tabs. The updating UI must own
 the connected private service and supplies its PID, process start time, loopback
 endpoint, instance identity, and an unguessable per-service control capability.
@@ -478,6 +478,8 @@ instance. After the desktop exits, the helper revalidates that exact instance
 still has zero active provider sessions and PTYs, authenticates the graceful shutdown request, and waits a
 bounded time for only that PID to exit. Codex readiness includes explicit
 in-flight turn markers, so a quiet long-running tool remains an update blocker.
+An unmatched marker expires only after 24 hours without rollout activity, which
+prevents an interrupted Codex process from blocking updates permanently.
 It never scans or terminates unrelated
 terminal hosts, CLIs, IDEs, or native apps. The helper retries
 transient install-directory locks for a bounded period, holds a target-specific
