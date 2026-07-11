@@ -33,12 +33,14 @@ test('canonical session titles have a 160-character control-free limit', () => {
   assert.equal(validateSessionTitle('🙂'.repeat(MAXIMUM_SESSION_TITLE)), '🙂'.repeat(MAXIMUM_SESSION_TITLE));
   assert.throws(() => validateSessionTitle('x'.repeat(MAXIMUM_SESSION_TITLE + 1)), /1-160 characters/);
   assert.throws(() => validateSessionTitle('bad\nname'), /control characters/);
+  assert.throws(() => validateSessionTitle('bad\u0085name'), /control characters/);
 });
 
 test('canonical session titles are not converted to display text', () => {
   const title = 'Preserve  internal   spaces';
   assert.equal(sessionCanonicalTitle(title), title);
   assert.equal(sessionCanonicalTitle('x'.repeat(MAXIMUM_SESSION_TITLE + 1)).endsWith('…'), true);
+  assert.equal(sessionCanonicalTitle('bad\u0085name').includes('\u0085'), false);
 });
 
 test('synthetic Codex context is not treated as a user prompt', () => {

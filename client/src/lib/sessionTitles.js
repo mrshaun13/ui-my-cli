@@ -1,4 +1,5 @@
 export const MAXIMUM_SESSION_TITLE = 160
+const CONTROL_CHARACTER_RE = /\p{Cc}/u
 
 export function validateSessionTitle(value) {
   if (typeof value !== 'string') {
@@ -6,7 +7,7 @@ export function validateSessionTitle(value) {
   }
 
   const title = value.trim()
-  if (!title || Array.from(title).length > MAXIMUM_SESSION_TITLE || /[\u0000-\u001f\u007f]/.test(title)) {
+  if (!title || Array.from(title).length > MAXIMUM_SESSION_TITLE || CONTROL_CHARACTER_RE.test(title)) {
     throw new Error(`title must be 1-${MAXIMUM_SESSION_TITLE} characters without control characters`)
   }
   return title

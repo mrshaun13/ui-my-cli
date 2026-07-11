@@ -51,6 +51,7 @@ test('native Codex rename validation resolves a title without writing Codex stat
     assert.equal(db.prepare('SELECT title FROM threads WHERE id = ?').get(threadId).title, 'Old title')
     db.close()
     assert.throws(() => resolveNativeRenameTitle(threadId, 'bad\nname'), /control characters/)
+    assert.throws(() => resolveNativeRenameTitle(threadId, 'bad\u0085name'), /control characters/)
     assert.throws(() => resolveNativeRenameTitle(threadId, 'x'.repeat(161)), /1-160 characters/)
     assert.deepEqual(resolveNativeRenameTitle(threadId, '🙂'.repeat(160)), {
       id: threadId,

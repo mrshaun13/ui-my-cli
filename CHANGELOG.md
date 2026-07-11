@@ -2,24 +2,10 @@
 
 ## Unreleased
 
-### Native desktop 1.1.6
+### Native desktop 1.1.7
 
-- Added local native voice-to-text: per-terminal microphone control, dedicated
-  cross-platform speech helper (Silero VAD + Whisper base.en), and insert into
-  terminal input or Adaptive composer without auto-submit.
-- Stabilized terminal bridges across viewport/splitter resize so live PTYs are
-  not torn down during window animations; Adaptive mode no longer force-
-  reconnects every open terminal when toggled.
-- Preserved pending Codex sessions and selected project roots through first
-  prompt / control-plane create paths; refreshed live model and context
-  metadata for open native inspectors.
-- Packaged SpeechHost into native release archives and documented keeping the
-  speech helper with the other desktop executables.
-- Limited microphone capture to two minutes with automatic transcription,
-  canceled active capture when macOS hides the window, and documented the
-  optional Windows voice runtime requirements.
-- Bumped the native version to 1.1.6 for the voice/session-stability release
-  stacked on 1.1.5 provider switcher.
+- Bumped the native version to 1.1.7 for the terminal-selection, session-title,
+  updater, and pending-session reliability release stacked on 1.1.6.
 - Made plain terminal drag select text even when an agent TUI enables mouse
   reporting, while preserving `Alt`+drag for raw TUI mouse input.
 - Added platform-native selection copying: `Ctrl+C` copies on Windows and
@@ -56,6 +42,27 @@
 - Remaining non-goals: cloud speech, auto-submit of transcribed text, macOS
   signing/notarization, and a fully self-contained desktop payload remain
   separate work.
+
+### Native desktop 1.1.6
+
+- Added local native voice-to-text: per-terminal microphone control, dedicated
+  cross-platform speech helper (Silero VAD + Whisper base.en), and insert into
+  terminal input or Adaptive composer without auto-submit.
+- Stabilized terminal bridges across viewport/splitter resize so live PTYs are
+  not torn down during window animations; Adaptive mode no longer force-
+  reconnects every open terminal when toggled.
+- Preserved pending Codex sessions and selected project roots through first
+  prompt / control-plane create paths; refreshed live model and context
+  metadata for open native inspectors.
+- Packaged SpeechHost into native release archives and documented keeping the
+  speech helper with the other desktop executables.
+- Limited microphone capture to two minutes with automatic transcription,
+  canceled active capture when macOS hides the window, and documented the
+  optional Windows voice runtime requirements.
+- Bumped the native version to 1.1.6 for the voice/session-stability release
+  stacked on 1.1.5 provider switcher.
+- Remaining non-goals: cloud speech, auto-submit of transcribed text, and
+  macOS signing/notarization remain out of scope.
 
 ### Native desktop 1.1.5
 

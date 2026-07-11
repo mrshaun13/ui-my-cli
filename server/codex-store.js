@@ -500,6 +500,12 @@ function storedPromptOrPreview(thread) {
   return storedPreview(thread);
 }
 
+function canonicalThreadTitle(thread, firstUserPrompt = storedUserPrompt(thread)) {
+  return sessionCanonicalTitle(
+    storedTitle(thread) || firstUserPrompt,
+    thread.id.slice(0, 8));
+}
+
 function normalizeThread(thread, _overrides = null, rollout = null) {
   const parsed = rollout || readRolloutSummary(thread);
   const firstUser = storedUserPrompt(thread)
@@ -507,9 +513,7 @@ function normalizeThread(thread, _overrides = null, rollout = null) {
     || null;
   const lastUser = [...parsed.messages].reverse().find(m => m.role === 'user')?.text || firstUser;
   const lastAssistant = [...parsed.messages].reverse().find(m => m.role === 'assistant')?.text || null;
-  const title = sessionCanonicalTitle(
-    storedTitle(thread) || firstUser,
-    thread.id.slice(0, 8));
+  const title = canonicalThreadTitle(thread, firstUser);
   const access = accessProfile(thread, parsed);
 
   return {
@@ -650,7 +654,7 @@ function tokenTelemetry(rollout, thread) {
 function usageRecordsForThread(thread, rollout, tokens = tokenTelemetry(rollout, thread)) {
   const session = {
     id: thread.id,
-    title: sessionCanonicalTitle(storedTitle(thread), thread.id.slice(0, 8)),
+    title: canonicalThreadTitle(thread),
     model: rollout.currentModel || thread.model || 'codex',
     reasoningEffort: rollout.currentReasoningEffort || thread.reasoning_effort || 'unknown',
   };
@@ -1014,7 +1018,7 @@ function latestPrompt() {
   const thread = threads.find(storedPromptOrPreview);
   const native = thread ? {
     sessionId: thread.id,
-    title: sessionCanonicalTitle(storedTitle(thread), thread.id.slice(0, 8)),
+    title: canonicalThreadTitle(thread),
     project: projectName(thread.cwd),
     prompt: storedPromptOrPreview(thread),
     timestamp: thread.updated_at,
@@ -1075,7 +1079,7 @@ function stats(options = {}) {
     bucket.durationSec += durationSec;
     bucket.sessions_detail.push({
       id: thread.id,
-      title: sessionCanonicalTitle(storedTitle(thread), thread.id.slice(0, 8)),
+      title: canonicalThreadTitle(thread),
       durationSec,
       durationStr: formatDuration(durationSec),
       messages: rollout.messages.length,
@@ -1165,7 +1169,7 @@ function stats(options = {}) {
     if (prompt) {
       recentPrompts.push({
         sessionId: thread.id,
-        title: sessionCanonicalTitle(storedTitle(thread), thread.id.slice(0, 8)),
+        title: canonicalThreadTitle(thread),
         project: projectName(thread.cwd),
         prompt,
         timestamp: thread.updated_at,
@@ -1225,7 +1229,7 @@ function stats(options = {}) {
     const tokens = tokenTelemetry(rollout, thread);
     return [thread.id, {
       id: thread.id,
-      title: sessionCanonicalTitle(storedTitle(thread), thread.id.slice(0, 8)),
+      title: canonicalThreadTitle(thread),
       project: projectName(thread.cwd),
       model: thread.model || 'codex',
       reasoningEffort: thread.reasoning_effort || rollout.metadata.reasoning_effort || null,

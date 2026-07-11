@@ -12,6 +12,7 @@ test('browser session-title validation matches the server contract', async () =>
   assert.equal(validateSessionTitle('🙂'.repeat(MAXIMUM_SESSION_TITLE)), '🙂'.repeat(MAXIMUM_SESSION_TITLE));
   assert.throws(() => validateSessionTitle('x'.repeat(MAXIMUM_SESSION_TITLE + 1)), /1-160 characters/);
   assert.throws(() => validateSessionTitle('bad\nname'), /control characters/);
+  assert.throws(() => validateSessionTitle('bad\u0085name'), /control characters/);
   assert.throws(() => validateSessionTitle('   '), /1-160 characters/);
   assert.equal(sessionTitleValidationError('Valid title'), '');
   assert.match(sessionTitleValidationError('bad\nname'), /control characters/);
