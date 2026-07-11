@@ -5764,6 +5764,14 @@ public sealed partial class MainWindow : Window
         UpdateButton.Content = "Cancel update";
         try
         {
+            if (!_serviceManager.OwnsServiceOnPort(_api.ConnectedPort)
+                && !await _api.IsAvailableAsync(cancellationToken))
+            {
+                await EnsureDashboardServiceAsync(cancellationToken);
+            }
+            NativeDashboardUpdatePolicy.RequireOwnedPrivateService(
+                _api.ConnectedPort,
+                _serviceManager.OwnsServiceOnPort(_api.ConnectedPort));
             SetStatus($"Downloading verified Codex Native {release.Version} package…", StartingBrush);
             var progress = new Progress<double>(value =>
             {
@@ -5913,11 +5921,11 @@ public sealed partial class MainWindow : Window
     private async Task<OwnedDashboardServiceHandoff> GetOwnedDashboardUpdateHandoffAsync(
         CancellationToken cancellationToken)
     {
-        if (!_serviceManager.OwnsServiceOnPort(_api.ConnectedPort)
-            || _serviceManager.Ownership is not { } ownership)
-            throw new InvalidOperationException(
-                "This UI does not own the connected private dashboard service. " +
-                "Restart Codex Native to re-verify service ownership, then retry the update.");
+        NativeDashboardUpdatePolicy.RequireOwnedPrivateService(
+            _api.ConnectedPort,
+            _serviceManager.OwnsServiceOnPort(_api.ConnectedPort));
+        if (_serviceManager.Ownership is not { } ownership)
+            throw new InvalidOperationException("Dashboard service ownership metadata is unavailable; no process was stopped.");
 
         var probe = await _api.ProbeOwnedUpdateReadinessAsync(ownership, cancellationToken);
         if (!probe.ControlAuthenticated)

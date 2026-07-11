@@ -9,6 +9,19 @@ public sealed record OwnedDashboardServiceHandoff(
 
 public static class NativeDashboardUpdatePolicy
 {
+    public static void RequireOwnedPrivateService(int connectedPort, bool ownsConnectedService)
+    {
+        if (ownsConnectedService && DashboardServicePorts.IsPrivateCandidate(connectedPort)) return;
+        if (connectedPort == DashboardServicePorts.Shared)
+            throw new InvalidOperationException(
+                "Codex Native is connected to the shared dashboard service on port 7575. " +
+                "Stop that shared service, then retry the update; Codex Native will start and own an isolated private service. " +
+                "No process was stopped.");
+        throw new InvalidOperationException(
+            $"Codex Native does not own the dashboard service on port {connectedPort}. " +
+            "Stop it from the native app that owns it, then retry the update. No process was stopped.");
+    }
+
     public static async Task RevalidateThenStopAsync(
         string expectedInstanceId,
         Func<CancellationToken, Task<DashboardApiProbeResult>> revalidate,

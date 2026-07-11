@@ -42,7 +42,7 @@ test('native Codex rename validation resolves a title without writing Codex stat
   process.env.UI_MY_CLI_DB_PATH = path.join(dir, 'dashboard.sqlite')
 
   try {
-    const { findNewSessionInDir, getSession, isSessionInFlight, latestPrompt, resolveNativeRenameTitle } = await import('../server/codex-store.js')
+    const { findNewSessionInDir, getSession, isSessionInFlight, latestPrompt, resolveNativeRenameTitle, stats } = await import('../server/codex-store.js')
     assert.deepEqual(resolveNativeRenameTitle(threadId, 'Fix keyboard shortcuts and rename functionality'), {
       id: threadId,
       title: 'Fix keyboard shortcuts and rename functionality',
@@ -130,6 +130,7 @@ test('native Codex rename validation resolves a title without writing Codex stat
     assert.equal(rolloutSession.lastUserPrompt, 'safe rollout prompt')
     assert.equal(latestPrompt().title, 'safe rollout prompt')
     assert.equal(latestPrompt().prompt, 'safe rollout prompt')
+    assert.equal(stats({ statsMode: 'codex' }).recentPrompts[0].prompt, 'safe rollout prompt')
 
     assert.equal(isSessionInFlight(threadId), false)
 
@@ -156,6 +157,19 @@ test('native Codex rename validation resolves a title without writing Codex stat
       type: 'event_msg',
       payload: { type: 'task_started', turn_id: 'abandoned-turn' },
     }) + '\n')
+    assert.equal(isSessionInFlight(threadId), false)
+    appendFileSync(syntheticRollout, [
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: 'event_msg',
+        payload: { type: 'task_started', turn_id: 'later-turn' },
+      }),
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: 'event_msg',
+        payload: { type: 'task_complete', turn_id: 'later-turn' },
+      }),
+    ].join('\n') + '\n')
     assert.equal(isSessionInFlight(threadId), false)
     appendFileSync(syntheticRollout, JSON.stringify({
       type: 'event_msg',

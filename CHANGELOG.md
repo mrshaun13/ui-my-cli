@@ -38,8 +38,13 @@
   transport identities, and bounded temporary-to-canonical compatibility maps.
 - Closed native update races with authenticated all-provider activity
   revalidation across visible and archived sessions, explicit Codex in-flight
-  turn detection with a 24-hour abandoned-marker fail-safe, and an
+  turn detection with a per-turn 24-hour abandoned-marker fail-safe, and an
   install-scoped lock honored by competing native starts.
+- Blocked self-update before download when connected to the unowned shared
+  dashboard on port 7575, with instructions to stop it so native can start an
+  authenticated private service without terminating arbitrary processes.
+- Kept safe rollout-derived prompts in analytics when cached Codex prompt
+  metadata contains a synthetic environment or AGENTS envelope.
 - Retried rollback filesystem operations for the same bounded period as
   installation, restoring the previous install before staging cleanup so a
   cleanup failure cannot strand or conceal the recoverable installation.

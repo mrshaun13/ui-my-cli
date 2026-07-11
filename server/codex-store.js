@@ -222,11 +222,9 @@ function eventTimestamp(event, fallbackTimestamp) {
 function applySummaryEvent(summary, event, fallbackTimestamp = Date.now()) {
   if (!event) return;
   const observedAt = eventTimestamp(event, fallbackTimestamp);
-  for (const [turnId, lastObservedAt] of summary.activeTurns) {
-    if (observedAt - lastObservedAt > IN_FLIGHT_TURN_STALE_MS) {
+  for (const [turnId, startedAt] of summary.activeTurns) {
+    if (observedAt - startedAt > IN_FLIGHT_TURN_STALE_MS) {
       summary.activeTurns.delete(turnId);
-    } else {
-      summary.activeTurns.set(turnId, Math.max(lastObservedAt, observedAt));
     }
   }
   if (event.type === 'session_meta') {
@@ -288,7 +286,7 @@ function publicRolloutSummary(entry, now = Date.now()) {
     messages,
     subagentCount: entry.summary.subagentIds.size,
     inFlightTurnCount: [...entry.summary.activeTurns.values()]
-      .filter(lastObservedAt => now - lastObservedAt <= IN_FLIGHT_TURN_STALE_MS)
+      .filter(startedAt => now - startedAt <= IN_FLIGHT_TURN_STALE_MS)
       .length,
   };
 }
@@ -1209,7 +1207,9 @@ function stats(options = {}) {
     if (!rollout.tokenEvents?.length && tokens.totalTokens) {
       addTokenActivity(tokensByHour, tokenHeatmap, thread.updated_at || thread.created_at || 0, tokens);
     }
-    const prompt = storedUserPrompt(thread);
+    const prompt = storedUserPrompt(thread)
+      || safeRolloutUserMessages(rollout)[0]?.text
+      || null;
     if (prompt) {
       recentPrompts.push({
         sessionId: thread.id,

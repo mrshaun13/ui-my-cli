@@ -149,12 +149,24 @@ Check("macOS dashboard service uses structured process settings", () =>
 
 Check("private dashboard ports are bounded and ordered", () =>
 {
+    Equal(7575, DashboardServicePorts.Shared);
     Equal(7577, DashboardServicePorts.PrivateCandidates.First());
     Equal(7596, DashboardServicePorts.PrivateCandidates.Last());
     Equal(20, DashboardServicePorts.PrivateCandidates.Count);
     Equal(true, DashboardServicePorts.IsPrivateCandidate(7584));
     Equal(false, DashboardServicePorts.IsPrivateCandidate(7576));
     Equal(false, DashboardServicePorts.IsPrivateCandidate(7597));
+});
+
+Check("native updates require an owned private dashboard service", () =>
+{
+    NativeDashboardUpdatePolicy.RequireOwnedPrivateService(7577, ownsConnectedService: true);
+    var shared = ThrowsMessage<InvalidOperationException>(() =>
+        NativeDashboardUpdatePolicy.RequireOwnedPrivateService(7575, ownsConnectedService: false));
+    Equal(true, shared.Contains("Stop that shared service", StringComparison.Ordinal));
+    var unowned = ThrowsMessage<InvalidOperationException>(() =>
+        NativeDashboardUpdatePolicy.RequireOwnedPrivateService(7578, ownsConnectedService: false));
+    Equal(true, unowned.Contains("does not own", StringComparison.Ordinal));
 });
 
 Check("node resolver prefers an explicit executable then PATH", () =>
@@ -1351,6 +1363,20 @@ static void Throws<TException>(Action action) where TException : Exception
     catch (TException)
     {
         return;
+    }
+
+    throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
+}
+
+static string ThrowsMessage<TException>(Action action) where TException : Exception
+{
+    try
+    {
+        action();
+    }
+    catch (TException ex)
+    {
+        return ex.Message;
     }
 
     throw new InvalidOperationException($"Expected {typeof(TException).Name}.");

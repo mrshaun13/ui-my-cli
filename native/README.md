@@ -454,6 +454,9 @@ The updater never runs `git pull`, changes the user's checkout, or requires a
 developer toolchain. It updates only the desktop release. An update is a
 bounded graceful restart of the private dashboard service owned by the
 updating UI; the replacement app starts that service again after installation.
+If Codex Native is connected to the shared dashboard on port 7575, stop that
+shared service and retry; Codex Native will start an isolated private service
+it can authenticate and restart without terminating an unowned process.
 macOS signing and notarization are still required before treating a tagged
 package as a broadly distributable trusted application.
 
@@ -478,7 +481,7 @@ instance. After the desktop exits, the helper revalidates that exact instance
 still has zero active provider sessions and PTYs, authenticates the graceful shutdown request, and waits a
 bounded time for only that PID to exit. Codex readiness includes explicit
 in-flight turn markers, so a quiet long-running tool remains an update blocker.
-An unmatched marker expires only after 24 hours without rollout activity, which
+An unmatched marker expires 24 hours after that turn started, which
 prevents an interrupted Codex process from blocking updates permanently.
 It never scans or terminates unrelated
 terminal hosts, CLIs, IDEs, or native apps. The helper retries
