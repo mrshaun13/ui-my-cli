@@ -164,6 +164,12 @@ function tabReducer(state, action) {
       // Pending session got its real UUID — update tab ID, keep mountKey stable
       const { oldId, newId } = action
       if (!state.tabs.some(t => t.id === oldId)) return state
+      if (state.tabs.some(t => t.id === newId)) {
+        return {
+          tabs: state.tabs.filter(t => t.id !== oldId),
+          activeTabId: state.activeTabId === oldId ? newId : state.activeTabId,
+        }
+      }
       return {
         tabs: state.tabs.map(t => t.id === oldId ? { ...t, id: newId } : t),
         activeTabId: state.activeTabId === oldId ? newId : state.activeTabId,
@@ -373,7 +379,7 @@ export default function App() {
   const providerId = selectedProvider?.id || DEFAULT_PROVIDER_ID
   const providerLabel = selectedProvider?.label || providerId
   const providerCommand = selectedProvider?.command || providerId
-  const { sessions, connected, error, latestPrompt, rekeyMap, expiredPending, updateSessionTitle } = useStatusFeed(providerId)
+  const { sessions, connected, error, latestPrompt, rekeyMap, expiredPending, collisionNotice, updateSessionTitle } = useStatusFeed(providerId)
   const providerSessionsReady = sessions.length > 0 && sessions.every(s => !s.provider || s.provider === providerId)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
@@ -829,6 +835,9 @@ export default function App() {
       <main className="main-area">
         {error && (
           <div className="error-banner"><span>⚠</span> {error}</div>
+        )}
+        {collisionNotice && (
+          <div className="error-banner" role="status"><span>ℹ</span> {collisionNotice}</div>
         )}
 
         <TabBar

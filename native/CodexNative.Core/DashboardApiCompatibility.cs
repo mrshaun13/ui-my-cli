@@ -11,7 +11,8 @@ public sealed record DashboardApiProbeResult(
     DashboardApiProbeState State,
     int? ReportedVersion = null,
     int ActivePtys = 0,
-    string? InstanceId = null)
+    string? InstanceId = null,
+    bool ControlAuthenticated = false)
 {
     public bool IsCompatible => State == DashboardApiProbeState.Compatible;
 
@@ -24,7 +25,8 @@ public sealed record DashboardApiProbeResult(
         bool ok,
         int reportedVersion,
         int activePtys = 0,
-        string? instanceId = null) =>
+        string? instanceId = null,
+        bool controlAuthenticated = false) =>
         !ok
             ? new(DashboardApiProbeState.Unreachable)
             : new(
@@ -33,7 +35,8 @@ public sealed record DashboardApiProbeResult(
                     : DashboardApiProbeState.Incompatible,
                 reportedVersion,
                 Math.Max(0, activePtys),
-                instanceId);
+                instanceId,
+                controlAuthenticated);
 
     public static DashboardApiProbeResult Unreachable() =>
         new(DashboardApiProbeState.Unreachable);

@@ -392,7 +392,14 @@ function attachClient(providerId, sessionId, workingDir, ws, cols, rows, options
     // Look up by identity scan in case the entry was re-keyed
     for (const [, entry] of ptys) {
       if (!entry.clients.delete(ws)) continue;
-      if (entry.clients.size === 0) entry.lastClientDetachedAt = Date.now();
+      if (entry.clients.size === 0) {
+        entry.lastClientDetachedAt = Date.now();
+        if (terminateDetachedCollision(entry)) {
+          for (const [key, value] of ptys) {
+            if (value === entry) ptys.delete(key);
+          }
+        }
+      }
       break;
     }
   };
@@ -533,6 +540,35 @@ function rekeyPty(providerId, oldKey, newKey) {
   return true;
 }
 
+function resolvePtyRekeyCollision(providerId, pendingKey, realSessionId) {
+  const pendingEntry = ptys.get(ptyKey(providerId, pendingKey));
+  const canonicalEntry = ptys.get(ptyKey(providerId, realSessionId));
+  if (!markPtyRekeyCollision(pendingEntry, canonicalEntry, realSessionId)) return false;
+
+  if (terminateDetachedCollision(pendingEntry)) {
+    ptys.delete(ptyKey(providerId, pendingKey));
+  }
+  return true;
+}
+
+function markPtyRekeyCollision(pendingEntry, canonicalEntry, realSessionId) {
+  if (!pendingEntry || !canonicalEntry || pendingEntry === canonicalEntry) return false;
+  pendingEntry.collisionRealId = realSessionId;
+  const message = '\r\n\x1b[33mThis session is already attached in another terminal. Switching to that canonical terminal; this redundant terminal will close after detaching.\x1b[0m\r\n';
+  for (const client of pendingEntry.clients) {
+    if (client.readyState === 1) {
+      client.send(JSON.stringify({ type: 'output', data: message }));
+    }
+  }
+  return true;
+}
+
+function terminateDetachedCollision(entry) {
+  if (!entry?.collisionRealId || entry.clients.size > 0) return false;
+  try { entry.pty.kill(); } catch {}
+  return true;
+}
+
 /**
  * Startup self-test: spawns a minimal PTY to verify node-pty's native module
  * works on this platform.  Called once at server boot so a broken native addon
@@ -579,6 +615,9 @@ module.exports = {
   activePtySessions,
   spawnNewSession,
   rekeyPty,
+  resolvePtyRekeyCollision,
+  markPtyRekeyCollision,
+  terminateDetachedCollision,
   validatePty,
   interactivePtyEnv,
   ensurePtySpawnHelperIsExecutable,

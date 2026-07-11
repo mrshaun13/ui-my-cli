@@ -8,6 +8,8 @@ using System.Text;
 var failures = new List<string>();
 const string host = @"C:\Apps\CodexNative.TerminalHost.exe";
 const string dashboardInstanceId = "7e79f66b-b194-45cd-b640-95065d4fb183";
+const string dashboardControlCapability = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+const long dashboardServiceStartTime = 1_752_000_000_123;
 
 if (args is ["--verify-release-artifacts", var artifactDirectory, .. var runtimeIdentifiers])
 {
@@ -396,13 +398,19 @@ Check("updater request carries terminal bridges and owned dashboard identity", (
         "/apps/CodexNative",
         [456, 789, 456],
         900,
+        dashboardServiceStartTime,
         "http://127.0.0.1:7577/api/",
-        dashboardInstanceId);
-    var parsed = NativeInstallRequest.Parse(request.ToArguments());
+        dashboardInstanceId,
+        dashboardControlCapability);
+    var parsed = NativeInstallRequest.Parse(request.ToArguments(), dashboardControlCapability);
     SequenceEqual(new[] { 456, 789 }, parsed.RelatedProcessIds ?? []);
     Equal(900, parsed.DashboardServiceProcessId);
+    Equal(dashboardServiceStartTime, parsed.DashboardServiceStartTimeUnixMilliseconds);
     Equal("http://127.0.0.1:7577/api/", parsed.DashboardEndpoint);
     Equal(dashboardInstanceId, parsed.DashboardInstanceId);
+    Equal(dashboardControlCapability, parsed.DashboardControlCapability);
+    Equal(false, request.ToArguments().Contains(dashboardControlCapability));
+    Throws<ArgumentException>(() => NativeInstallRequest.Parse(request.ToArguments()));
     Throws<ArgumentException>(() => NativeInstallRequest.Parse(
     [
         "--parent-pid", "123", "--platform", "windows",
@@ -425,6 +433,21 @@ Check("updater request carries terminal bridges and owned dashboard identity", (
     ]));
 });
 
+Check("dashboard ownership requires PID, start time, instance, and capability", () =>
+{
+    var ownership = new DashboardServiceOwnership(
+        456,
+        dashboardServiceStartTime,
+        7577,
+        dashboardInstanceId,
+        dashboardControlCapability);
+    Equal(true, ownership.IsStructurallyValid());
+    Equal(false, (ownership with { ProcessStartTimeUnixMilliseconds = 0 }).IsStructurallyValid());
+    Equal(false, (ownership with { Port = 7575 }).IsStructurallyValid());
+    Equal(false, (ownership with { InstanceId = "wrong" }).IsStructurallyValid());
+    Equal(false, (ownership with { ControlCapability = new string('A', 63) }).IsStructurallyValid());
+});
+
 Check("updater accepts only the explicitly owned dashboard service process", () =>
 {
     Equal(true, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
@@ -432,31 +455,49 @@ Check("updater accepts only the explicitly owned dashboard service process", () 
         "/apps/CodexNative",
         456,
         456,
-        "/apps/CodexNative/CodexNative.TerminalHost.exe"));
+        "/apps/CodexNative/CodexNative.TerminalHost.exe",
+        dashboardServiceStartTime,
+        dashboardServiceStartTime));
     Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
         NativePlatform.Windows,
         "/apps/CodexNative",
         456,
         789,
-        "/apps/CodexNative/CodexNative.TerminalHost.exe"));
+        "/apps/CodexNative/CodexNative.TerminalHost.exe",
+        dashboardServiceStartTime,
+        dashboardServiceStartTime));
     Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
         NativePlatform.Windows,
         "/apps/CodexNative",
         456,
         456,
-        "/other/CodexNative.TerminalHost.exe"));
+        "/other/CodexNative.TerminalHost.exe",
+        dashboardServiceStartTime,
+        dashboardServiceStartTime));
     Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
         NativePlatform.Windows,
         "/apps/CodexNative",
         456,
         456,
-        "/apps/CodexNative/CodexNative.exe"));
+        "/apps/CodexNative/CodexNative.exe",
+        dashboardServiceStartTime,
+        dashboardServiceStartTime));
     Equal(true, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
         NativePlatform.MacOS,
         "/Applications/CodexNative.app",
         456,
         456,
-        "/opt/homebrew/bin/node"));
+        "/opt/homebrew/bin/node",
+        dashboardServiceStartTime,
+        dashboardServiceStartTime));
+    Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
+        NativePlatform.MacOS,
+        "/Applications/CodexNative.app",
+        456,
+        456,
+        "/opt/homebrew/bin/node",
+        dashboardServiceStartTime,
+        dashboardServiceStartTime + 1));
     Equal(true, NativeInstallProcessPolicy.IsMainApplication(
         NativePlatform.MacOS,
         "/Applications/CodexNative.app",
@@ -475,7 +516,8 @@ await CheckAsync("owned dashboard handoff revalidates before stopping", async ()
                 true,
                 DashboardApiCompatibility.RequiredVersion,
                 0,
-                dashboardInstanceId));
+                dashboardInstanceId,
+                true));
         },
         _ =>
         {
@@ -492,7 +534,8 @@ await CheckAsync("owned dashboard handoff revalidates before stopping", async ()
                 true,
                 DashboardApiCompatibility.RequiredVersion,
                 1,
-                dashboardInstanceId)),
+                dashboardInstanceId,
+                true)),
             _ =>
             {
                 stopped = true;
@@ -507,7 +550,23 @@ await CheckAsync("owned dashboard handoff revalidates before stopping", async ()
                 true,
                 DashboardApiCompatibility.RequiredVersion,
                 0,
-                "6ced4140-c8c6-4290-b467-2cc5613af732")),
+                "6ced4140-c8c6-4290-b467-2cc5613af732",
+                true)),
+            _ =>
+            {
+                stopped = true;
+                return Task.CompletedTask;
+            }));
+    Equal(false, stopped);
+
+    await ThrowsAsync<InvalidOperationException>(() =>
+        NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
+            dashboardInstanceId,
+            _ => Task.FromResult(DashboardApiProbeResult.FromResponse(
+                true,
+                DashboardApiCompatibility.RequiredVersion,
+                0,
+                dashboardInstanceId)),
             _ =>
             {
                 stopped = true;

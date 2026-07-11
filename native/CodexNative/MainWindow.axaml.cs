@@ -1379,7 +1379,10 @@ public sealed partial class MainWindow : Window
         SetStatus("Connecting to ui-my-cli data service…", StartingBrush);
         if (await _api.TryUseExistingServiceAsync(cancellationToken))
         {
-            SetStatus($"Dashboard connected on {_api.ConnectedPort} · persistent terminals enabled", RunningBrush);
+            var adopted = await TryReadoptDashboardServiceAsync(cancellationToken);
+            SetStatus(
+                $"Dashboard {(adopted ? "reconnected to owned service" : "connected")} on {_api.ConnectedPort} · persistent terminals enabled",
+                RunningBrush);
             return true;
         }
 
@@ -1409,7 +1412,10 @@ public sealed partial class MainWindow : Window
                 var existingProbe = await _api.ProbeCurrentServiceAsync(cancellationToken);
                 if (existingProbe.IsCompatible)
                 {
-                    SetStatus($"Dashboard reconnected on {port} · persistent terminals enabled", RunningBrush);
+                    var adopted = await TryReadoptDashboardServiceAsync(cancellationToken);
+                    SetStatus(
+                        $"Dashboard reconnected{(adopted ? " to owned service" : string.Empty)} on {port} · persistent terminals enabled",
+                        RunningBrush);
                     return true;
                 }
                 if (existingProbe.State == DashboardApiProbeState.Incompatible)
@@ -1433,13 +1439,15 @@ public sealed partial class MainWindow : Window
                             $"{existingProbe.DescribeMismatch(port)} The owned zero-PTY service could not be stopped safely.");
                     }
                 }
-                _serviceManager.EnsureStarted(
+                var ownership = _serviceManager.EnsureStarted(
                     _platform.Platform,
                     hostExecutable,
                     _settings.Distribution,
                     _settings.DashboardWorkingDirectory,
                     Environment.GetEnvironmentVariable("NODE_BIN"),
                     port);
+                _settings = _settings with { DashboardServiceOwnership = ownership };
+                await _settingsStore.SaveAsync(_settings, cancellationToken);
                 var exited = false;
                 for (var attempt = 0; attempt < 20; attempt++)
                 {
@@ -1495,6 +1503,25 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async Task<bool> TryReadoptDashboardServiceAsync(CancellationToken cancellationToken)
+    {
+        var ownership = _settings.DashboardServiceOwnership;
+        if (ownership is null || ownership.Port != _api.ConnectedPort) return false;
+        if (!_serviceManager.TryAdopt(
+                _platform.Platform,
+                AppContext.BaseDirectory,
+                ownership)) return false;
+        var probe = await _api.ProbeOwnedServiceAsync(ownership, cancellationToken);
+        if (!probe.IsCompatible
+            || !probe.ControlAuthenticated
+            || !string.Equals(probe.InstanceId, ownership.InstanceId, StringComparison.Ordinal))
+        {
+            _serviceManager.ReleaseOwnership();
+            return false;
+        }
+        return true;
+    }
+
     private async Task ReconcileDashboardRepositoryAsync()
     {
         if (_platform.Platform != NativePlatform.MacOS) return;
@@ -1531,11 +1558,11 @@ public sealed partial class MainWindow : Window
             if (!ReferenceEquals(_statusFeed, feed) || !IsCurrentProviderData(providerId, epoch)) return;
             ApplyPushedSessions(sessions);
         });
-        feed.SessionRekeyed += (temporaryKey, realId) =>
+        feed.SessionRekeyed += (temporaryKey, realId, collision) =>
             Dispatcher.UIThread.Post(() =>
             {
                 if (!ReferenceEquals(_statusFeed, feed) || !IsCurrentProviderData(providerId, epoch)) return;
-                ApplySessionRekey(temporaryKey, realId, providerId);
+                ApplySessionRekey(temporaryKey, realId, providerId, collision);
             });
         feed.PendingSessionExpired += temporaryKey =>
             Dispatcher.UIThread.Post(() =>
@@ -1611,12 +1638,34 @@ public sealed partial class MainWindow : Window
         return true;
     }
 
-    private void ApplySessionRekey(string temporaryKey, string realId, string? providerId = null)
+    private void ApplySessionRekey(
+        string temporaryKey,
+        string realId,
+        string? providerId = null,
+        bool collision = false)
     {
         providerId = string.IsNullOrWhiteSpace(providerId) ? _api.ProviderId : providerId;
         if (string.IsNullOrWhiteSpace(temporaryKey) || string.IsNullOrWhiteSpace(realId)
             || !_openTabs.TryGetValue(ProviderTabKey(providerId, temporaryKey), out var state)
             || state.Kind != TerminalSessionKind.Codex) return;
+        if (collision
+            && _openTabs.TryGetValue(ProviderTabKey(providerId, realId), out var canonicalState)
+            && !ReferenceEquals(state, canonicalState))
+        {
+            CancelTerminalReconnect(state, suppress: true);
+            EndTerminalStartupReveal(state);
+            state.Terminal.Kill();
+            state.Pane.Tabs.Items.Remove(state.Tab);
+            _openTabs.Remove(OpenTabRegistryKey(state));
+            UpdatePaneAdaptiveControls(state.Pane);
+            SelectPaneFallback(state.Pane);
+            canonicalState.Pane.Tabs.SelectedItem = canonicalState.Tab;
+            SetActivePane(canonicalState.Pane);
+            UpdatePaneEmptyStates();
+            SetStatus("Session was already open · switched to its canonical terminal", StartingBrush);
+            _ = SaveWorkspaceAsync();
+            return;
+        }
         var session = string.Equals(state.ProviderId, _api.ProviderId, StringComparison.Ordinal)
             ? _sessions.FirstOrDefault(candidate => candidate.Id == realId)
             : null;
@@ -1634,7 +1683,21 @@ public sealed partial class MainWindow : Window
         _openTabs[OpenTabRegistryKey(state)] = state;
         if (session is not null) _ = LoadSessionDetailsAsync(state, session);
         UpdatePaneAdaptiveControls(state.Pane);
-        SetStatus($"Session registered · {realId[..Math.Min(8, realId.Length)]}", RunningBrush);
+        if (collision)
+        {
+            CancelTerminalReconnect(state, suppress: true);
+            EndTerminalStartupReveal(state);
+            state.Terminal.Kill();
+            state.IsRunning = false;
+            state.IsLaunched = false;
+            state.SuppressReconnect = false;
+            _ = EnsureTerminalLaunchedAsync(state);
+            SetStatus("Session already had a canonical terminal · redundant pending terminal detached", StartingBrush);
+        }
+        else
+        {
+            SetStatus($"Session registered · {realId[..Math.Min(8, realId.Length)]}", RunningBrush);
+        }
         _ = SaveWorkspaceAsync();
     }
 
@@ -5838,18 +5901,22 @@ public sealed partial class MainWindow : Window
         CancellationToken cancellationToken)
     {
         if (!_serviceManager.OwnsServiceOnPort(_api.ConnectedPort)
-            || _serviceManager.OwnedProcessId is not { } serviceProcessId
-            || _serviceManager.OwnedInstanceId is not { } instanceId)
+            || _serviceManager.Ownership is not { } ownership)
             throw new InvalidOperationException(
                 "This UI does not own the connected private dashboard service. " +
-                "Stop that service, restart Codex Native, and retry the update.");
+                "Restart Codex Native to re-verify service ownership, then retry the update.");
 
-        var probe = await _api.ProbeCurrentServiceAsync(cancellationToken);
-        NativeDashboardUpdatePolicy.RequireDrainedOwnedInstance(instanceId, probe);
+        var probe = await _api.ProbeOwnedServiceAsync(ownership, cancellationToken);
+        if (!probe.ControlAuthenticated)
+            throw new InvalidOperationException(
+                "The dashboard service rejected its persisted control capability; no process was stopped.");
+        NativeDashboardUpdatePolicy.RequireDrainedOwnedInstance(ownership.InstanceId, probe);
         return new OwnedDashboardServiceHandoff(
-            serviceProcessId,
+            ownership.ProcessId,
+            ownership.ProcessStartTimeUnixMilliseconds,
             _api.ServiceBaseUri.AbsoluteUri,
-            instanceId);
+            ownership.InstanceId,
+            ownership.ControlCapability);
     }
 
     private static void DiscardPreparedUpdate(PreparedNativeUpdate? prepared)
@@ -6735,6 +6802,8 @@ public sealed partial class MainWindow : Window
         }
 
         _serviceStopRequested = true;
+        _settings = _settings with { DashboardServiceOwnership = null };
+        await _settingsStore.SaveAsync(_settings);
         if (_statusFeed is not null)
         {
             await _statusFeed.DisposeAsync();

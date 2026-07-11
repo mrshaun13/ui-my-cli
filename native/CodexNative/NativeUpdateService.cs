@@ -197,8 +197,10 @@ public sealed class NativeUpdateService : IDisposable
                 .Distinct()
                 .ToArray(),
             dashboardService.ProcessId,
+            dashboardService.ProcessStartTimeUnixMilliseconds,
             dashboardService.Endpoint,
-            dashboardService.InstanceId);
+            dashboardService.InstanceId,
+            dashboardService.ControlCapability);
         var startInfo = new ProcessStartInfo
         {
             FileName = update.InstallerExecutable,
@@ -206,6 +208,8 @@ public sealed class NativeUpdateService : IDisposable
             WorkingDirectory = update.StagingDirectory,
             CreateNoWindow = true,
         };
+        startInfo.Environment[DashboardServiceOwnership.ControlCapabilityEnvironmentVariable] =
+            dashboardService.ControlCapability;
         foreach (var argument in request.ToArguments()) startInfo.ArgumentList.Add(argument);
         return Process.Start(startInfo)
             ?? throw new InvalidOperationException("The operating system did not start the update installer.");

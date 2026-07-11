@@ -7,10 +7,14 @@ public sealed record NativeInstallRequest(
     string TargetDirectory,
     IReadOnlyList<int>? RelatedProcessIds = null,
     int? DashboardServiceProcessId = null,
+    long? DashboardServiceStartTimeUnixMilliseconds = null,
     string? DashboardEndpoint = null,
-    string? DashboardInstanceId = null)
+    string? DashboardInstanceId = null,
+    string? DashboardControlCapability = null)
 {
-    public static NativeInstallRequest Parse(IReadOnlyList<string> arguments)
+    public static NativeInstallRequest Parse(
+        IReadOnlyList<string> arguments,
+        string? dashboardControlCapability = null)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var index = 0; index < arguments.Count; index += 2)
@@ -23,9 +27,9 @@ public sealed record NativeInstallRequest(
         var expectedNames = new[]
         {
             "--parent-pid", "--platform", "--source", "--target", "--wait-pids",
-            "--dashboard-service-pid", "--dashboard-endpoint", "--dashboard-instance-id",
+            "--dashboard-service-pid", "--dashboard-service-start-time", "--dashboard-endpoint", "--dashboard-instance-id",
         };
-        if (values.Count is < 4 or > 8 || values.Keys.Any(name => !expectedNames.Contains(name, StringComparer.Ordinal)))
+        if (values.Count is < 4 or > 9 || values.Keys.Any(name => !expectedNames.Contains(name, StringComparer.Ordinal)))
             throw new ArgumentException("Updater received an unknown or incomplete argument set.", nameof(arguments));
 
         if (!int.TryParse(Required(values, "--parent-pid"), out var parentPid) || parentPid <= 0)
@@ -50,21 +54,31 @@ public sealed record NativeInstallRequest(
 
         var dashboardArgumentCount = new[]
         {
-            "--dashboard-service-pid", "--dashboard-endpoint", "--dashboard-instance-id",
+            "--dashboard-service-pid", "--dashboard-service-start-time", "--dashboard-endpoint", "--dashboard-instance-id",
         }.Count(values.ContainsKey);
-        if (dashboardArgumentCount is not 0 and not 3)
+        if (dashboardArgumentCount is not 0 and not 4)
             throw new ArgumentException("Updater dashboard handoff arguments must be supplied together.", nameof(arguments));
         int? dashboardServiceProcessId = null;
+        long? dashboardServiceStartTime = null;
         string? dashboardEndpoint = null;
         string? dashboardInstanceId = null;
-        if (dashboardArgumentCount == 3)
+        if (dashboardArgumentCount == 4)
         {
             if (!int.TryParse(Required(values, "--dashboard-service-pid"), out var servicePid)
                 || servicePid <= 0
                 || servicePid == parentPid
                 || relatedProcessIds?.Contains(servicePid) == true)
                 throw new ArgumentException("Updater dashboard service PID is invalid.", nameof(arguments));
+            if (!long.TryParse(
+                    Required(values, "--dashboard-service-start-time"),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var serviceStartTime)
+                || serviceStartTime <= 0)
+                throw new ArgumentException("Updater dashboard service start time is invalid.", nameof(arguments));
+            if (!DashboardServiceOwnership.IsValidControlCapability(dashboardControlCapability))
+                throw new ArgumentException("Updater dashboard control capability is invalid.", nameof(dashboardControlCapability));
             dashboardServiceProcessId = servicePid;
+            dashboardServiceStartTime = serviceStartTime;
             dashboardEndpoint = ValidateDashboardEndpoint(Required(values, "--dashboard-endpoint"));
             dashboardInstanceId = ValidateInstanceId(Required(values, "--dashboard-instance-id"));
         }
@@ -76,8 +90,10 @@ public sealed record NativeInstallRequest(
             target,
             relatedProcessIds,
             dashboardServiceProcessId,
+            dashboardServiceStartTime,
             dashboardEndpoint,
-            dashboardInstanceId);
+            dashboardInstanceId,
+            dashboardControlCapability);
     }
 
     public IReadOnlyList<string> ToArguments()
@@ -101,7 +117,8 @@ public sealed record NativeInstallRequest(
         }
         var dashboardFields = new object?[]
         {
-            DashboardServiceProcessId, DashboardEndpoint, DashboardInstanceId,
+            DashboardServiceProcessId, DashboardServiceStartTimeUnixMilliseconds,
+            DashboardEndpoint, DashboardInstanceId, DashboardControlCapability,
         };
         if (dashboardFields.Any(value => value is not null)
             && dashboardFields.Any(value => value is null))
@@ -110,8 +127,16 @@ public sealed record NativeInstallRequest(
         {
             if (servicePid <= 0 || servicePid == ParentProcessId || related?.Contains(servicePid) == true)
                 throw new InvalidOperationException("Updater dashboard service PID is invalid.");
+            if (!DashboardServiceOwnership.IsValidControlCapability(DashboardControlCapability))
+                throw new InvalidOperationException("Updater dashboard control capability is invalid.");
             arguments.Add("--dashboard-service-pid");
             arguments.Add(servicePid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (DashboardServiceStartTimeUnixMilliseconds is not { } serviceStartTime
+                || serviceStartTime <= 0)
+                throw new InvalidOperationException("Updater dashboard service start time is invalid.");
+            arguments.Add("--dashboard-service-start-time");
+            arguments.Add(serviceStartTime.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
             arguments.Add("--dashboard-endpoint");
             arguments.Add(ValidateDashboardEndpoint(DashboardEndpoint!));
             arguments.Add("--dashboard-instance-id");

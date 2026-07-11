@@ -25,9 +25,14 @@
   result reporting.
 - Made update process ownership fail closed: the native UI waits at most two
   minutes for dashboard-tracked work to drain, then hands off the exact owned
-  private-service PID, loopback endpoint, and instance identity. The helper
+  private-service PID, process start time, loopback endpoint, instance identity,
+  and per-service control capability. A restarted UI securely re-adopts its
+  persistent service from private settings, while the helper
   revalidates zero active PTYs immediately before graceful service shutdown and
   never scans or terminates unrelated terminal hosts, CLIs, IDEs, or apps.
+- Completed pending-session PTY collisions by keeping the existing real-session
+  terminal canonical, preserving an attached pending terminal until detach, and
+  notifying clients before closing only the redundant pending process.
 - Kept successful browser renames stable across stale status-feed frames while
   the provider's canonical title persistence catches up.
 - Added cached and coalesced GitHub release checks with ETag revalidation,

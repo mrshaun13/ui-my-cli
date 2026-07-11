@@ -15,7 +15,7 @@ public sealed class DashboardStatusFeed(Uri endpoint) : IAsyncDisposable
     private Task? _runTask;
 
     public event Action<IReadOnlyList<DashboardSession>>? SessionsReceived;
-    public event Action<string, string>? SessionRekeyed;
+    public event Action<string, string, bool>? SessionRekeyed;
     public event Action<string>? PendingSessionExpired;
     public event Action<bool>? ConnectionChanged;
 
@@ -92,7 +92,9 @@ public sealed class DashboardStatusFeed(Uri endpoint) : IAsyncDisposable
                 case "rekey":
                     SessionRekeyed?.Invoke(
                         root.GetProperty("tempKey").GetString() ?? string.Empty,
-                        root.GetProperty("realId").GetString() ?? string.Empty);
+                        root.GetProperty("realId").GetString() ?? string.Empty,
+                        root.TryGetProperty("collision", out var collision)
+                            && collision.ValueKind == JsonValueKind.True);
                     break;
                 case "pending-expired":
                     PendingSessionExpired?.Invoke(root.GetProperty("tempKey").GetString() ?? string.Empty);

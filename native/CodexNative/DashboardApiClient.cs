@@ -76,17 +76,35 @@ public sealed class DashboardApiClient : IDisposable
         CancellationToken cancellationToken = default) =>
         ProbeAsync(_service, TimeSpan.FromSeconds(2), cancellationToken);
 
+    public Task<DashboardApiProbeResult> ProbeOwnedServiceAsync(
+        DashboardServiceOwnership ownership,
+        CancellationToken cancellationToken = default)
+    {
+        if (!ownership.IsStructurallyValid() || ownership.Port != _service.Port)
+            return Task.FromResult(DashboardApiProbeResult.Unreachable());
+        return ProbeAsync(
+            _service,
+            TimeSpan.FromSeconds(2),
+            cancellationToken,
+            ownership.ControlCapability);
+    }
+
     private async Task<DashboardApiProbeResult> ProbeAsync(
         Uri service,
         TimeSpan timeoutDuration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? controlCapability = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(timeoutDuration);
         try
         {
-            using (var response = await _http.GetAsync(
-                       new Uri(service, "native/compatibility"),
+            using (var request = new HttpRequestMessage(
+                       HttpMethod.Get,
+                       new Uri(service, "native/compatibility")))
+            using (var response = await SendCompatibilityRequestAsync(
+                       request,
+                       controlCapability,
                        timeout.Token))
             {
                 if (response.IsSuccessStatusCode
@@ -105,7 +123,8 @@ public sealed class DashboardApiClient : IDisposable
                                 compatibility.Ok,
                                 compatibility.ApiVersion,
                                 compatibility.ActivePtys,
-                                compatibility.InstanceId);
+                                compatibility.InstanceId,
+                                compatibility.ControlAuthenticated);
                         }
                     }
                     catch (JsonException)
@@ -145,6 +164,22 @@ public sealed class DashboardApiClient : IDisposable
         {
             return DashboardApiProbeResult.Unreachable();
         }
+    }
+
+    private Task<HttpResponseMessage> SendCompatibilityRequestAsync(
+        HttpRequestMessage request,
+        string? controlCapability,
+        CancellationToken cancellationToken)
+    {
+        if (controlCapability is not null)
+        {
+            if (!DashboardServiceOwnership.IsValidControlCapability(controlCapability))
+                throw new ArgumentException("Dashboard control capability is invalid.", nameof(controlCapability));
+            request.Headers.TryAddWithoutValidation(
+                DashboardServiceOwnership.ControlCapabilityHeader,
+                controlCapability);
+        }
+        return _http.SendAsync(request, cancellationToken);
     }
 
     public Task<List<ProviderStatus>> GetProvidersAsync(CancellationToken cancellationToken = default) =>

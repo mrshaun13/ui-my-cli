@@ -18,7 +18,10 @@ internal static class Program
         var parentExited = false;
         try
         {
-            request = NativeInstallRequest.Parse(args);
+            request = NativeInstallRequest.Parse(
+                args,
+                Environment.GetEnvironmentVariable(
+                    DashboardServiceOwnership.ControlCapabilityEnvironmentVariable));
             UpdateLog.Write($"Preparing update from {request.SourcePayload} to {request.TargetDirectory}.");
             WaitForProcess(request.ParentProcessId, "native app", ProcessExitTimeout);
             parentExited = true;
@@ -94,13 +97,18 @@ internal static class Program
     private static void QuiesceOwnedDashboardService(NativeInstallRequest request)
     {
         if (request.DashboardServiceProcessId is not { } serviceProcessId
+            || request.DashboardServiceStartTimeUnixMilliseconds is not { } serviceStartTime
             || request.DashboardEndpoint is null
-            || request.DashboardInstanceId is null)
+            || request.DashboardInstanceId is null
+            || request.DashboardControlCapability is null)
             throw new InvalidOperationException(
                 "The update did not include a verified owned dashboard service handoff; retry from Codex Native.");
 
-        using var process = GetOwnedDashboardProcess(request, serviceProcessId);
+        using var process = GetOwnedDashboardProcess(request, serviceProcessId, serviceStartTime);
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        client.DefaultRequestHeaders.TryAddWithoutValidation(
+            DashboardServiceOwnership.ControlCapabilityHeader,
+            request.DashboardControlCapability);
         var endpoint = new Uri(request.DashboardEndpoint, UriKind.Absolute);
         NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
             request.DashboardInstanceId,
@@ -115,7 +123,8 @@ internal static class Program
                         compatibility.Ok,
                         compatibility.ApiVersion,
                         compatibility.ActivePtys,
-                        compatibility.InstanceId)
+                        compatibility.InstanceId,
+                        compatibility.ControlAuthenticated)
                     : DashboardApiProbeResult.Unreachable();
             },
             async cancellationToken =>
@@ -138,7 +147,10 @@ internal static class Program
                 "no process was terminated. Retry the update after the service exits.");
     }
 
-    private static Process GetOwnedDashboardProcess(NativeInstallRequest request, int serviceProcessId)
+    private static Process GetOwnedDashboardProcess(
+        NativeInstallRequest request,
+        int serviceProcessId,
+        long expectedStartTime)
     {
         Process process;
         try { process = Process.GetProcessById(serviceProcessId); }
@@ -161,7 +173,9 @@ internal static class Program
                     request.TargetDirectory,
                     serviceProcessId,
                     process.Id,
-                    executable))
+                    executable,
+                    expectedStartTime,
+                    new DateTimeOffset(process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds()))
                 throw new InvalidOperationException(
                     $"Dashboard service PID {serviceProcessId} is not the owned service for this installation; " +
                     "no process was stopped.");
@@ -179,7 +193,8 @@ internal static class Program
         int ApiVersion,
         string Service,
         string? InstanceId,
-        int ActivePtys);
+        int ActivePtys,
+        bool ControlAuthenticated);
 
     private static bool Install(NativeInstallRequest request)
     {

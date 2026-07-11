@@ -113,6 +113,7 @@ public sealed class DashboardCompatibilityStatus
     public string Service { get; set; } = string.Empty;
     public string? InstanceId { get; set; }
     public int ActivePtys { get; set; }
+    public bool ControlAuthenticated { get; set; }
 }
 
 public sealed class ProviderStatus

@@ -27,7 +27,7 @@ const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 
-const { attachClient, killPty, isPtyActive, isPtyControlPlane, pendingPtyState, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
+const { attachClient, killPty, isPtyActive, isPtyControlPlane, pendingPtyState, activePtySessions, spawnNewSession, rekeyPty, resolvePtyRekeyCollision, validatePty } = require('./pty-manager');
 const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./providers');
 const { isTrustedLaunchRequest, launchNativeDashboard, nativeLaunchCapability } = require('./native-launcher');
 const { CodexAppServer } = require('./codex-app-server');
@@ -38,6 +38,10 @@ const {
   pendingSessionExclusionIds,
 } = require('./pending-session-lifecycle');
 const { validateSessionTitle } = require('./session-display-text');
+const {
+  matchesNativeControlCapability,
+  validNativeControlCapability,
+} = require('./native-service-control');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
 // v5 passes the user-selected working root explicitly to remote Codex TUIs.
@@ -46,6 +50,11 @@ const PORT = parseInt(process.env.PORT || '7575', 10);
 const API_VERSION = 5;
 const SERVICE_INSTANCE_ID = process.env.UI_MY_CLI_NATIVE_INSTANCE_ID
   || `${process.pid}-${Date.now()}`;
+const SERVICE_CONTROL_CAPABILITY = validNativeControlCapability(
+  process.env.UI_MY_CLI_NATIVE_CONTROL_CAPABILITY)
+  ? process.env.UI_MY_CLI_NATIVE_CONTROL_CAPABILITY
+  : null;
+delete process.env.UI_MY_CLI_NATIVE_CONTROL_CAPABILITY;
 const IS_DEV = process.env.NODE_ENV !== 'production';
 const CLIENT_DIST = path.resolve(__dirname, '..', 'client', 'dist');
 
@@ -79,17 +88,26 @@ app.use(cors({
 // Keep this endpoint independent of provider discovery, databases, and CLI
 // version probes. Native startup uses a sub-second timeout and must be able to
 // distinguish an incompatible service from one that is not listening.
-app.get('/api/native/compatibility', (_req, res) => {
+function hasNativeControlCapability(req) {
+  const supplied = req.get('X-UI-My-CLI-Control');
+  return matchesNativeControlCapability(SERVICE_CONTROL_CAPABILITY, supplied);
+}
+
+app.get('/api/native/compatibility', (req, res) => {
   res.json({
     ok: true,
     apiVersion: API_VERSION,
     service: 'ui-my-cli-dashboard',
     instanceId: SERVICE_INSTANCE_ID,
     activePtys: activePtySessions().length,
+    controlAuthenticated: hasNativeControlCapability(req),
   });
 });
 
 app.post('/api/native/shutdown', (req, res) => {
+  if (!hasNativeControlCapability(req)) {
+    return res.status(403).json({ error: 'Dashboard service control authentication failed.' });
+  }
   if (req.body?.instanceId !== SERVICE_INSTANCE_ID) {
     return res.status(409).json({ error: 'Dashboard service instance mismatch.' });
   }
@@ -310,6 +328,13 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
           pendingToReal.set(pendingKey(provider.id, tempKey), realId);
           console.log(`[${provider.id}:create] re-keyed ${tempKey.slice(0, 20)}… → ${realId.slice(0, 8)}…`);
           broadcastRekey(provider.id, tempKey, realId);
+          broadcastSessions(provider.id);
+          return;
+        }
+        if (resolvePtyRekeyCollision(provider.id, tempKey, realId)) {
+          pendingToReal.set(pendingKey(provider.id, tempKey), realId);
+          console.warn(`[${provider.id}:create] retained canonical PTY for ${realId.slice(0, 8)}… and completed pending collision reconciliation`);
+          broadcastRekey(provider.id, tempKey, realId, true);
           broadcastSessions(provider.id);
           return;
         }
@@ -572,12 +597,12 @@ function broadcastSessions(providerId) {
  * to a real session ID. The client uses this to swap its selectedId so the
  * sidebar highlights the correct card and the Terminal remounts cleanly.
  *
- * Message shape: { type: 'rekey', tempKey: string, realId: string }
+ * Message shape: { type: 'rekey', tempKey: string, realId: string, collision: boolean }
  */
-function broadcastRekey(providerId, tempKey, realId) {
+function broadcastRekey(providerId, tempKey, realId, collision = false) {
   const clients = clientsFor(providerId);
   if (clients.size === 0) return;
-  const payload = JSON.stringify({ type: 'rekey', tempKey, realId });
+  const payload = JSON.stringify({ type: 'rekey', tempKey, realId, collision });
   for (const client of clients) {
     if (client.readyState === 1) client.send(payload);
   }

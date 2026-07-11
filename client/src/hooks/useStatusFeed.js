@@ -28,11 +28,13 @@ export function useStatusFeed(providerId) {
   const [rekeyMap, setRekeyMap] = useState({})
   // expiredPending: Set of temp keys whose PTY exited before session registration
   const [expiredPending, setExpiredPending] = useState(() => new Set())
+  const [collisionNotice, setCollisionNotice] = useState('')
   const wsRef = useRef(null)
   const backoffRef = useRef(INITIAL_BACKOFF)
   const retryRef = useRef(null)
   const feedTokenRef = useRef(0)
   const pendingTitleRenamesRef = useRef(new Map())
+  const collisionNoticeTimerRef = useRef(null)
 
   const connect = useCallback(() => {
     const token = feedTokenRef.current
@@ -92,6 +94,11 @@ export function useStatusFeed(providerId) {
         }
         else if (msg.type === 'rekey' && msg.tempKey && msg.realId) {
           setRekeyMap(prev => ({ ...prev, [msg.tempKey]: msg.realId }))
+          if (msg.collision) {
+            setCollisionNotice('Session already had a canonical terminal; switched to it and closed the redundant pending terminal.')
+            clearTimeout(collisionNoticeTimerRef.current)
+            collisionNoticeTimerRef.current = setTimeout(() => setCollisionNotice(''), 8000)
+          }
         }
         else if (msg.type === 'pending-expired' && msg.tempKey) {
           setExpiredPending(prev => new Set(prev).add(msg.tempKey))
@@ -124,11 +131,13 @@ export function useStatusFeed(providerId) {
     setError(null)
     setRekeyMap({})
     setExpiredPending(new Set())
+    setCollisionNotice('')
     pendingTitleRenamesRef.current.clear()
     connect()
     return () => {
       feedTokenRef.current += 1
       clearTimeout(retryRef.current)
+      clearTimeout(collisionNoticeTimerRef.current)
       wsRef.current?.close()
     }
   }, [connect])
@@ -143,5 +152,5 @@ export function useStatusFeed(providerId) {
     setLatestPrompt(prev => prev?.sessionId === sessionId ? { ...prev, title } : prev)
   }, [])
 
-  return { sessions, connected, error, latestPrompt, rekeyMap, expiredPending, updateSessionTitle }
+  return { sessions, connected, error, latestPrompt, rekeyMap, expiredPending, collisionNotice, updateSessionTitle }
 }

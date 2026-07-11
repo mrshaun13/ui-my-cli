@@ -2,8 +2,10 @@ namespace CodexNative.Core;
 
 public sealed record OwnedDashboardServiceHandoff(
     int ProcessId,
+    long ProcessStartTimeUnixMilliseconds,
     string Endpoint,
-    string InstanceId);
+    string InstanceId,
+    string ControlCapability);
 
 public static class NativeDashboardUpdatePolicy
 {
@@ -28,6 +30,9 @@ public static class NativeDashboardUpdatePolicy
         if (!string.Equals(probe.InstanceId, expectedInstanceId, StringComparison.Ordinal))
             throw new InvalidOperationException(
                 "The dashboard service instance changed during update handoff; no process was stopped.");
+        if (!probe.ControlAuthenticated)
+            throw new InvalidOperationException(
+                "The dashboard service rejected the update control capability; no process was stopped.");
         if (probe.ActivePtys > 0)
             throw new InvalidOperationException(
                 $"The dashboard service has {probe.ActivePtys} active terminal(s); close them and retry the update.");

@@ -7,9 +7,14 @@ public static class NativeInstallProcessPolicy
         string targetDirectory,
         int expectedProcessId,
         int actualProcessId,
-        string? processExecutable)
+        string? processExecutable,
+        long expectedStartTimeUnixMilliseconds,
+        long actualStartTimeUnixMilliseconds)
     {
-        if (expectedProcessId <= 0 || actualProcessId != expectedProcessId) return false;
+        if (expectedProcessId <= 0
+            || actualProcessId != expectedProcessId
+            || expectedStartTimeUnixMilliseconds <= 0
+            || actualStartTimeUnixMilliseconds != expectedStartTimeUnixMilliseconds) return false;
         return platform == NativePlatform.MacOS
             || IsOwnedTerminalHost(platform, targetDirectory, processExecutable);
     }

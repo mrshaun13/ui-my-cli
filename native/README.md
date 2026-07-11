@@ -468,9 +468,12 @@ artifacts.
 During installation, the dashboard waits at most two minutes for two clear
 checks across every provider: no active sessions reported from native, browser,
 direct CLI, or IDE activity, and no local-shell tabs. The updating UI must own
-the connected private service and supplies its PID, loopback endpoint, and
-instance identity. After the desktop exits, the helper revalidates that exact
-instance still has zero active PTYs, requests graceful shutdown, and waits a
+the connected private service and supplies its PID, process start time, loopback
+endpoint, instance identity, and an unguessable per-service control capability.
+That ownership record is retained in user-private native settings so a normally
+restarted UI can re-adopt only the same process and authenticated loopback
+instance. After the desktop exits, the helper revalidates that exact instance
+still has zero active PTYs, authenticates the graceful shutdown request, and waits a
 bounded time for only that PID to exit. It never scans or terminates unrelated
 terminal hosts, CLIs, IDEs, or native apps. The helper retries
 transient install-directory locks for a bounded period, verifies that the
