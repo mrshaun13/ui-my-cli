@@ -89,6 +89,58 @@ public sealed class DashboardApiClient : IDisposable
             ownership.ControlCapability);
     }
 
+    public async Task<DashboardApiProbeResult> ProbeOwnedUpdateReadinessAsync(
+        DashboardServiceOwnership ownership,
+        CancellationToken cancellationToken = default)
+    {
+        if (!ownership.IsStructurallyValid() || ownership.Port != _service.Port)
+            return DashboardApiProbeResult.Unreachable();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(2));
+        try
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                new Uri(_service, "native/update-readiness"));
+            using var response = await SendCompatibilityRequestAsync(
+                request,
+                ownership.ControlCapability,
+                timeout.Token);
+            if (!response.IsSuccessStatusCode
+                || response.Content.Headers.ContentType?.MediaType != "application/json")
+                return DashboardApiProbeResult.Unreachable();
+            var readiness = await response.Content.ReadFromJsonAsync<DashboardCompatibilityStatus>(
+                JsonOptions,
+                timeout.Token);
+            if (readiness?.Service != "ui-my-cli-dashboard")
+                return DashboardApiProbeResult.Unreachable();
+            return DashboardApiProbeResult.FromResponse(
+                readiness.Ok,
+                readiness.ApiVersion,
+                readiness.ActivePtys,
+                readiness.InstanceId,
+                readiness.ControlAuthenticated,
+                readiness.BlockingSessions,
+                readiness.ActivityCheckOk);
+        }
+        catch (HttpRequestException)
+        {
+            return DashboardApiProbeResult.Unreachable();
+        }
+        catch (JsonException)
+        {
+            return DashboardApiProbeResult.Unreachable();
+        }
+        catch (NotSupportedException)
+        {
+            return DashboardApiProbeResult.Unreachable();
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return DashboardApiProbeResult.Unreachable();
+        }
+    }
+
     private async Task<DashboardApiProbeResult> ProbeAsync(
         Uri service,
         TimeSpan timeoutDuration,

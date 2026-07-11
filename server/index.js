@@ -44,6 +44,7 @@ const {
   validNativeControlCapability,
 } = require('./native-service-control');
 const { nativeUpdateActivity } = require('./native-update-activity');
+const { NativeUpdateGate } = require('./native-update-gate');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
 // v6 adds authenticated, fail-closed update readiness across provider sessions.
@@ -94,7 +95,7 @@ onPtyRemoved(entry => {
 
 const app = express();
 const server = http.createServer(app);
-let updateShutdownPending = false;
+const nativeUpdateGate = new NativeUpdateGate();
 let shutdownDashboard = null;
 const codexAppServer = new CodexAppServer({
   executable: () => getProvider('codex').codexExecutable(),
@@ -165,23 +166,27 @@ app.post('/api/native/shutdown', (req, res) => {
   if (typeof shutdownDashboard !== 'function') {
     return res.status(503).json({ error: 'Dashboard service is not ready to stop.' });
   }
-  if (updateShutdownPending) {
+  if (nativeUpdateGate.shutdownPending) {
     return res.status(409).json({ error: 'Dashboard service shutdown is already pending.' });
   }
-  updateShutdownPending = true;
+  if (!nativeUpdateGate.tryBeginShutdown()) {
+    return res.status(409).json({
+      error: 'Dashboard service has an in-flight session mutation; wait for it to finish and retry the update.',
+    });
+  }
   try {
     const activePtys = activePtySessions().length;
     if (activePtys > 0) {
-      updateShutdownPending = false;
+      nativeUpdateGate.cancelShutdown();
       return res.status(409).json({ error: `Dashboard service has ${activePtys} active terminal(s).` });
     }
     const { blockingSessions } = nativeUpdateActivity(providers.values());
     if (blockingSessions > 0) {
-      updateShutdownPending = false;
+      nativeUpdateGate.cancelShutdown();
       return res.status(409).json({ error: `Dashboard service has ${blockingSessions} active provider session(s).` });
     }
   } catch (err) {
-    updateShutdownPending = false;
+    nativeUpdateGate.cancelShutdown();
     return res.status(503).json({ error: `Dashboard activity could not be verified: ${err.message}` });
   }
   res.status(202).json({ ok: true, instanceId: SERVICE_INSTANCE_ID });
@@ -316,7 +321,7 @@ app.get(['/api/:providerId/repos', '/api/repos'], providerRoute((provider, _req,
 }));
 
 app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerRoute(async (provider, req, res) => {
-  if (updateShutdownPending) {
+  if (nativeUpdateGate.shutdownPending) {
     return res.status(503).json({ error: 'Dashboard service is stopping for a native update.' });
   }
   const { workingDir } = req.body;
@@ -339,7 +344,7 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
         () => codexAppServer.ensureStarted(),
         err => console.warn(`[codex:control-plane] unavailable for new session; using direct terminal: ${err.message}`))
       : null;
-    if (updateShutdownPending) {
+    if (nativeUpdateGate.shutdownPending) {
       return res.status(503).json({ error: 'Dashboard service is stopping for a native update.' });
     }
     const pendingPty = spawnNewSession(provider.id, tempKey, workingDir, 80, 24, {
@@ -457,6 +462,10 @@ app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
   const workingDir = typeof req.body?.workingDir === 'string' ? req.body.workingDir.trim() : '';
   if (!text) return res.status(400).json({ error: 'text is required' });
   if (text.length > 100000) return res.status(413).json({ error: 'Adaptive prompt is too large' });
+  const completeMutation = nativeUpdateGate.tryBeginMutation();
+  if (!completeMutation) {
+    return res.status(503).json({ error: 'Dashboard service is stopping for a native update.' });
+  }
   try {
     if (sessionId.startsWith('pending-')) {
       if (!workingDir || !isExistingDirectory(workingDir)) {
@@ -490,6 +499,8 @@ app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
     console.error(`[codex:adaptive] submit ${sessionId.slice(0, 8)}… failed:`, err.message);
     const conflict = /active turn|already.*turn|in progress/i.test(err.message);
     res.status(conflict ? 409 : 500).json({ error: err.message });
+  } finally {
+    completeMutation();
   }
 });
 
@@ -750,7 +761,7 @@ wss.on('connection', async (ws, req) => {
   const termMatch = pathname.match(/^\/ws\/([^/]+)\/terminal\/([^/]+)$/);
   const legacyTermMatch = pathname.match(/^\/ws\/terminal\/([^/]+)$/);
   if (termMatch || legacyTermMatch) {
-    if (updateShutdownPending) {
+    if (nativeUpdateGate.shutdownPending) {
       ws.close(1013, 'Dashboard service is stopping for a native update');
       return;
     }
@@ -784,7 +795,7 @@ wss.on('connection', async (ws, req) => {
         () => codexAppServer.ensureStarted(),
         err => console.warn(`[codex:control-plane] unavailable; using direct terminal: ${err.message}`))
       : null;
-    if (updateShutdownPending) {
+    if (nativeUpdateGate.shutdownPending) {
       ws.close(1013, 'Dashboard service is stopping for a native update');
       return;
     }

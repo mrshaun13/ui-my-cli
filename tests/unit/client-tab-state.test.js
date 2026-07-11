@@ -47,3 +47,41 @@ test('normal browser rekey updates identity and transport without remounting', a
   assert.equal(state.tabs[0].mountKey, 'pending-1');
   assert.equal(state.activeTabId, 'real-1');
 });
+
+test('browser persistence restores collision tabs through canonical transports', async () => {
+  const { stableTabState } = await import('../../client/src/lib/tabState.js');
+  const persisted = stableTabState([
+    {
+      id: 'pending-1',
+      mode: 'preview',
+      mountKey: 'pending-1',
+      canonicalId: 'real-1',
+      transportId: 'pending-1',
+      collision: true,
+    },
+  ], 'pending-1');
+
+  assert.deepEqual(persisted, {
+    tabs: [{
+      id: 'real-1',
+      mode: 'preview',
+      mountKey: 'real-1',
+      canonicalId: 'real-1',
+      transportId: 'real-1',
+    }],
+    activeTabId: 'real-1',
+  });
+});
+
+test('browser persistence deduplicates collision and canonical tabs', async () => {
+  const { stableTabState } = await import('../../client/src/lib/tabState.js');
+  const persisted = stableTabState([
+    { id: 'pending-1', mode: 'terminal', canonicalId: 'real-1', collision: true },
+    { id: 'real-1', mode: 'preview', canonicalId: 'real-1', transportId: 'real-1' },
+  ], 'pending-1');
+
+  assert.equal(persisted.tabs.length, 1);
+  assert.equal(persisted.tabs[0].id, 'real-1');
+  assert.equal(persisted.tabs[0].mode, 'terminal');
+  assert.equal(persisted.activeTabId, 'real-1');
+});

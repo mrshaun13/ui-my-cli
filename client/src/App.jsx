@@ -12,7 +12,7 @@ import { DEFAULT_PROVIDER_ID, providerApiPath, providerStorageKey } from './lib/
 import { DASHBOARD_STYLES, applyDashboardStyle, loadDashboardStyle, saveDashboardStyle } from './lib/dashboardStyles.js'
 import { TEXT_SIZES, applyTextSize, loadTextSize, saveTextSize } from './lib/textSizes.js'
 import { renameSessionTitle } from './lib/sessionTitles.js'
-import { tabReducer, tabSessionId, tabTransportId } from './lib/tabState.js'
+import { stableTabState, tabReducer, tabSessionId, tabTransportId } from './lib/tabState.js'
 // ContextPieChart is rendered inside ControlBar (not imported here)
 
 /**
@@ -78,13 +78,16 @@ function loadStoredTabs(providerId) {
     const raw = localStorage.getItem(providerStorageKey(providerId, 'open-tabs'))
     if (!raw) return null
     const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed?.tabs)) return parsed
+    if (Array.isArray(parsed?.tabs)) return stableTabState(parsed.tabs, parsed.activeTabId)
   } catch { /* ignore */ }
   return null
 }
 function saveStoredTabs(providerId, tabs, activeTabId) {
   try {
-    localStorage.setItem(providerStorageKey(providerId, 'open-tabs'), JSON.stringify({ tabs, activeTabId }))
+    localStorage.setItem(
+      providerStorageKey(providerId, 'open-tabs'),
+      JSON.stringify(stableTabState(tabs, activeTabId)),
+    )
   } catch { /* ignore */ }
 }
 
@@ -445,7 +448,6 @@ export default function App() {
         mountKey: t.mountKey || t.id,
         canonicalId: t.canonicalId || t.id,
         transportId: t.transportId || t.id,
-        collision: Boolean(t.collision),
       }))
     if (validTabs.length === 0) return
     const activeId = validTabs.find(t => t.id === stored.activeTabId)

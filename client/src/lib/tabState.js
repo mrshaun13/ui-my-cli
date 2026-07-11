@@ -6,6 +6,31 @@ export function tabTransportId(tab) {
   return tab?.transportId || tab?.id || null
 }
 
+export function stableTabState(tabs, activeTabId) {
+  const stableTabs = new Map()
+  let stableActiveTabId = null
+  for (const tab of tabs) {
+    const stableId = tab?.collision ? tabSessionId(tab) : tab?.id
+    if (!stableId) continue
+    const stableTab = {
+      id: stableId,
+      mode: tab.mode || 'terminal',
+      mountKey: stableId,
+      canonicalId: stableId,
+      transportId: stableId,
+    }
+    if (!stableTabs.has(stableId) || tab.id === activeTabId) {
+      stableTabs.set(stableId, stableTab)
+    }
+    if (tab.id === activeTabId) stableActiveTabId = stableId
+  }
+  const normalizedTabs = [...stableTabs.values()]
+  if (!stableTabs.has(stableActiveTabId)) {
+    stableActiveTabId = normalizedTabs[0]?.id || null
+  }
+  return { tabs: normalizedTabs, activeTabId: stableActiveTabId }
+}
+
 export function tabReducer(state, action) {
   switch (action.type) {
     case 'open': {

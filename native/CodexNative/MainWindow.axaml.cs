@@ -5919,7 +5919,7 @@ public sealed partial class MainWindow : Window
                 "This UI does not own the connected private dashboard service. " +
                 "Restart Codex Native to re-verify service ownership, then retry the update.");
 
-        var probe = await _api.ProbeOwnedServiceAsync(ownership, cancellationToken);
+        var probe = await _api.ProbeOwnedUpdateReadinessAsync(ownership, cancellationToken);
         if (!probe.ControlAuthenticated)
             throw new InvalidOperationException(
                 "The dashboard service rejected its persisted control capability; no process was stopped.");
