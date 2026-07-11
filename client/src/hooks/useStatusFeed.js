@@ -10,6 +10,10 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { providerWsPath } from '../lib/providers.js'
+import {
+  reconcileSessionTitle,
+  SESSION_TITLE_RECONCILIATION_MS,
+} from '../lib/sessionTitles.js'
 
 const WS_BASE = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
 const INITIAL_BACKOFF = 500
@@ -28,6 +32,7 @@ export function useStatusFeed(providerId) {
   const backoffRef = useRef(INITIAL_BACKOFF)
   const retryRef = useRef(null)
   const feedTokenRef = useRef(0)
+  const pendingTitleRenamesRef = useRef(new Map())
 
   const connect = useCallback(() => {
     const token = feedTokenRef.current
@@ -54,7 +59,13 @@ export function useStatusFeed(providerId) {
             if (!prev.length) return msg.data
             const prevMap = new Map(prev.map(s => [s.id, s]))
             let changed = prev.length !== msg.data.length
-            const next = msg.data.map(s => {
+            const next = msg.data.map(incoming => {
+              const title = reconcileSessionTitle(
+                incoming.id,
+                incoming.title,
+                pendingTitleRenamesRef.current,
+              )
+              const s = title === incoming.title ? incoming : { ...incoming, title }
               const old = prevMap.get(s.id)
               if (old
                 && old.status === s.status
@@ -71,7 +82,14 @@ export function useStatusFeed(providerId) {
             return changed ? next : prev
           })
         }
-        else if (msg.type === 'latest-prompt') setLatestPrompt(msg.data)
+        else if (msg.type === 'latest-prompt') {
+          const title = reconcileSessionTitle(
+            msg.data?.sessionId,
+            msg.data?.title,
+            pendingTitleRenamesRef.current,
+          )
+          setLatestPrompt(title === msg.data?.title ? msg.data : { ...msg.data, title })
+        }
         else if (msg.type === 'rekey' && msg.tempKey && msg.realId) {
           setRekeyMap(prev => ({ ...prev, [msg.tempKey]: msg.realId }))
         }
@@ -106,6 +124,7 @@ export function useStatusFeed(providerId) {
     setError(null)
     setRekeyMap({})
     setExpiredPending(new Set())
+    pendingTitleRenamesRef.current.clear()
     connect()
     return () => {
       feedTokenRef.current += 1
@@ -115,6 +134,10 @@ export function useStatusFeed(providerId) {
   }, [connect])
 
   const updateSessionTitle = useCallback((sessionId, title) => {
+    pendingTitleRenamesRef.current.set(sessionId, {
+      title,
+      expiresAt: Date.now() + SESSION_TITLE_RECONCILIATION_MS,
+    })
     setSessions(prev => prev.map(session =>
       session.id === sessionId ? { ...session, title } : session))
     setLatestPrompt(prev => prev?.sessionId === sessionId ? { ...prev, title } : prev)

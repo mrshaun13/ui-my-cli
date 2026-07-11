@@ -21,7 +21,9 @@ internal static class Program
             UpdateLog.Write($"Preparing update from {request.SourcePayload} to {request.TargetDirectory}.");
             WaitForProcesses(request);
             parentExited = true;
-            QuiesceOwnedTerminalHosts(request);
+            EnsureNoUnrelatedInstallProcesses(request);
+            QuiesceRelatedTerminalHosts(request);
+            EnsureNoUnrelatedInstallProcesses(request);
             var hadPreviousInstall = Install(request);
             try
             {
@@ -93,8 +95,10 @@ internal static class Program
         }
     }
 
-    private static void QuiesceOwnedTerminalHosts(NativeInstallRequest request)
+    private static void EnsureNoUnrelatedInstallProcesses(NativeInstallRequest request)
     {
+        var relatedProcessIds = (request.RelatedProcessIds ?? []).ToHashSet();
+        var blockers = new List<string>();
         foreach (var process in Process.GetProcesses())
         {
             using (process)
@@ -106,24 +110,76 @@ internal static class Program
                 {
                     continue;
                 }
-                if (!NativeInstallProcessPolicy.IsOwnedTerminalHost(
+                if (!NativeInstallProcessPolicy.IsBlockingInstallProcess(
                         request.Platform,
                         request.TargetDirectory,
+                        request.ParentProcessId,
+                        relatedProcessIds,
+                        process.Id,
                         executable)) continue;
 
-                UpdateLog.Write($"Waiting for owned terminal host PID {process.Id} to release the installation.");
+                var kind = NativeInstallProcessPolicy.IsMainApplication(
+                    request.Platform,
+                    request.TargetDirectory,
+                    executable)
+                    ? "Codex Native app"
+                    : "terminal host";
+                blockers.Add($"{kind} PID {process.Id}");
+            }
+        }
+
+        if (blockers.Count > 0)
+            throw new InvalidOperationException(
+                $"Close the other {string.Join(" and ", blockers)} before retrying the update; " +
+                "no unrelated process was stopped.");
+    }
+
+    private static void QuiesceRelatedTerminalHosts(NativeInstallRequest request)
+    {
+        var relatedProcessIds = (request.RelatedProcessIds ?? []).ToHashSet();
+        foreach (var processId in relatedProcessIds)
+        {
+            Process? process = null;
+            try
+            {
+                process = Process.GetProcessById(processId);
+                string? executable;
+                try { executable = process.MainModule?.FileName; }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+                {
+                    throw new InvalidOperationException(
+                        $"Could not verify terminal host PID {processId}; no process was stopped.", ex);
+                }
+                if (!NativeInstallProcessPolicy.CanTerminateRelatedTerminalHost(
+                        request.Platform,
+                        request.TargetDirectory,
+                        processId,
+                        relatedProcessIds,
+                        executable))
+                    throw new InvalidOperationException(
+                        $"Related PID {processId} is not a terminal host from this Codex Native installation; " +
+                        "no process was stopped.");
+
+                UpdateLog.Write($"Waiting for related terminal host PID {process.Id} to release the installation.");
                 try
                 {
                     if (process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds)) continue;
-                    UpdateLog.Write($"Stopping stale owned terminal host PID {process.Id} before installation.");
+                    UpdateLog.Write($"Stopping verified related terminal host PID {process.Id} before installation.");
                     process.Kill(entireProcessTree: true);
                     if (!process.WaitForExit((int)TimeSpan.FromSeconds(10).TotalMilliseconds))
-                        throw new TimeoutException($"Owned terminal host PID {process.Id} did not stop.");
+                        throw new TimeoutException($"Related terminal host PID {process.Id} did not stop.");
                 }
                 catch (InvalidOperationException)
                 {
-                    // It exited between inspection and the wait/kill operation.
+                    if (!process.HasExited) throw;
                 }
+            }
+            catch (ArgumentException)
+            {
+            }
+            finally
+            {
+                process?.Dispose();
             }
         }
     }

@@ -395,19 +395,65 @@ Check("updater request remains backward compatible and carries terminal host PID
     ]));
 });
 
-Check("updater may stop only terminal hosts from the exact install directory", () =>
+Check("updater may stop only explicitly related terminal hosts from the exact install directory", () =>
 {
-    Equal(true, NativeInstallProcessPolicy.IsOwnedTerminalHost(
+    IReadOnlySet<int> related = new HashSet<int> { 456 };
+    Equal(true, NativeInstallProcessPolicy.CanTerminateRelatedTerminalHost(
         NativePlatform.Windows,
         "/apps/CodexNative",
+        456,
+        related,
         "/apps/CodexNative/CodexNative.TerminalHost.exe"));
-    Equal(false, NativeInstallProcessPolicy.IsOwnedTerminalHost(
+    Equal(false, NativeInstallProcessPolicy.CanTerminateRelatedTerminalHost(
         NativePlatform.Windows,
         "/apps/CodexNative",
+        789,
+        related,
+        "/apps/CodexNative/CodexNative.TerminalHost.exe"));
+    Equal(false, NativeInstallProcessPolicy.CanTerminateRelatedTerminalHost(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        456,
+        related,
         "/other/CodexNative.TerminalHost.exe"));
-    Equal(false, NativeInstallProcessPolicy.IsOwnedTerminalHost(
+    Equal(false, NativeInstallProcessPolicy.CanTerminateRelatedTerminalHost(
         NativePlatform.Windows,
         "/apps/CodexNative",
+        456,
+        related,
+        "/apps/CodexNative/CodexNative.exe"));
+});
+
+Check("updater blocks other native apps and terminal hosts without blocking its handoff", () =>
+{
+    IReadOnlySet<int> related = new HashSet<int> { 456 };
+    Equal(false, NativeInstallProcessPolicy.IsBlockingInstallProcess(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        123,
+        related,
+        123,
+        "/apps/CodexNative/CodexNative.exe"));
+    Equal(false, NativeInstallProcessPolicy.IsBlockingInstallProcess(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        123,
+        related,
+        456,
+        "/apps/CodexNative/CodexNative.TerminalHost.exe"));
+    Equal(true, NativeInstallProcessPolicy.IsBlockingInstallProcess(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        123,
+        related,
+        789,
+        "/apps/CodexNative/CodexNative.TerminalHost.exe"));
+    Equal(true, NativeInstallProcessPolicy.IsBlockingInstallProcess(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        123,
+        related,
+        321,
         "/apps/CodexNative/CodexNative.exe"));
     Equal(true, NativeInstallProcessPolicy.IsMainApplication(
         NativePlatform.MacOS,

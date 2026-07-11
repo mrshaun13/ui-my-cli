@@ -2,6 +2,29 @@ namespace CodexNative.Core;
 
 public static class NativeInstallProcessPolicy
 {
+    public static bool CanTerminateRelatedTerminalHost(
+        NativePlatform platform,
+        string targetDirectory,
+        int processId,
+        IReadOnlySet<int> relatedProcessIds,
+        string? processExecutable) =>
+        relatedProcessIds.Contains(processId)
+        && IsOwnedTerminalHost(platform, targetDirectory, processExecutable);
+
+    public static bool IsBlockingInstallProcess(
+        NativePlatform platform,
+        string targetDirectory,
+        int parentProcessId,
+        IReadOnlySet<int> relatedProcessIds,
+        int processId,
+        string? processExecutable)
+    {
+        if (processId == parentProcessId) return false;
+        if (IsMainApplication(platform, targetDirectory, processExecutable)) return true;
+        return IsOwnedTerminalHost(platform, targetDirectory, processExecutable)
+            && !relatedProcessIds.Contains(processId);
+    }
+
     public static bool IsOwnedTerminalHost(
         NativePlatform platform,
         string targetDirectory,

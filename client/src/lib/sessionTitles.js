@@ -1,4 +1,5 @@
 export const MAXIMUM_SESSION_TITLE = 160
+export const SESSION_TITLE_RECONCILIATION_MS = 12_000
 const CONTROL_CHARACTER_RE = /\p{Cc}/u
 
 export function validateSessionTitle(value) {
@@ -34,4 +35,14 @@ export async function renameSessionTitle(endpoint, value, fetchImpl = fetch) {
     throw new Error(result.error || 'Failed to rename session')
   }
   return validateSessionTitle(result.title)
+}
+
+export function reconcileSessionTitle(sessionId, incomingTitle, pendingRenames, now = Date.now()) {
+  const pending = pendingRenames.get(sessionId)
+  if (!pending) return incomingTitle
+  if (now >= pending.expiresAt) {
+    pendingRenames.delete(sessionId)
+    return incomingTitle
+  }
+  return pending.title
 }

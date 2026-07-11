@@ -58,3 +58,29 @@ test('browser renames surface authoritative server errors', async () => {
     /Rename was rejected/,
   );
 });
+
+test('successful browser renames resist stale feed titles during reconciliation', async () => {
+  const {
+    reconcileSessionTitle,
+    SESSION_TITLE_RECONCILIATION_MS,
+  } = await import('../../client/src/lib/sessionTitles.js');
+  const now = Date.parse('2026-07-10T12:00:00Z');
+  const pending = new Map([
+    ['session-1', { title: 'Canonical title', expiresAt: now + SESSION_TITLE_RECONCILIATION_MS }],
+  ]);
+
+  assert.equal(reconcileSessionTitle('session-1', 'Stale title', pending, now + 100), 'Canonical title');
+  assert.equal(reconcileSessionTitle('session-1', 'Canonical title', pending, now + 200), 'Canonical title');
+  assert.equal(reconcileSessionTitle('session-1', 'Stale latest prompt', pending, now + 300), 'Canonical title');
+  assert.equal(pending.has('session-1'), true);
+});
+
+test('browser rename reconciliation expires and accepts newer feed titles', async () => {
+  const { reconcileSessionTitle } = await import('../../client/src/lib/sessionTitles.js');
+  const pending = new Map([
+    ['session-1', { title: 'Canonical title', expiresAt: 200 }],
+  ]);
+
+  assert.equal(reconcileSessionTitle('session-1', 'Another client title', pending, 200), 'Another client title');
+  assert.equal(pending.has('session-1'), false);
+});

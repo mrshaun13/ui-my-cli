@@ -23,6 +23,11 @@
 - Added one-time update-result reporting and updater-owned failure dialogs so
   a rolled-back handoff remains visible even when the restored app predates
   result reporting.
+- Made update process ownership fail closed: dashboard-reported active sessions
+  block handoff, other native app/terminal-host processes are left untouched,
+  and forced cleanup is limited to verified PIDs supplied by the updating UI.
+- Kept successful browser renames stable across stale status-feed frames while
+  the provider's canonical title persistence catches up.
 - Added cached and coalesced GitHub release checks with ETag revalidation,
   friendly 403/429 reset times, and optional authentication only through the
   explicitly supplied `CODEX_NATIVE_GITHUB_TOKEN` environment variable.

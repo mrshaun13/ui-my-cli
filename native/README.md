@@ -263,9 +263,12 @@ Additional release/runtime capabilities preserved from v1.1.2:
   coalesced, cached for up to 30 minutes, and revalidated with GitHub ETags;
   a manual **Check updates** action forces a fresh request. Updates are
   bounded, SHA-256 verified, staged outside the installation, and installed
-  only after two consecutive checks find no active provider sessions or
-  local-shell tabs. The external helper also waits for UI-owned terminal hosts,
-  retries transient install-directory locks, verifies the installed version and
+  only after two consecutive checks find no active provider sessions from any
+  dashboard-tracked client or local-shell tabs. The external helper also waits
+  for terminal-host PIDs supplied by the updating UI, verifies each PID belongs to
+  the current installation before forced cleanup, and blocks without stopping
+  anything when another native app or terminal host is present. It retries
+  transient install-directory locks, verifies the installed version and
   restarted process, keeps the previous payload until startup validation
   completes, restores and relaunches it on failure, and reports the outcome
   once at the next launch.
@@ -459,10 +462,14 @@ the native update client sends that token as a GitHub Bearer token only when it
 is explicitly supplied. Do not add it to project files, settings, or release
 artifacts.
 
-During installation, the helper waits for the desktop process and UI-owned
-terminal hosts, and only stops terminal-host executables located in the current
-Codex Native installation. It retries transient install-directory locks for a
-bounded period, verifies that the payload version matches the updater, and
+During installation, the dashboard requires two clear checks across every
+provider: no active sessions reported from native, browser, direct CLI, or IDE
+activity, and no local-shell tabs. The helper then waits for the desktop process
+and only stops explicitly supplied terminal-host PIDs after verifying that each
+executable belongs to the current installation. Any other native app or
+terminal host blocks the update and is left untouched. The helper retries
+transient install-directory locks for a bounded period, verifies that the
+payload version matches the updater, and
 checks that the replacement process remains running. The previous payload stays
 available until that startup check succeeds. If replacement or restart fails,
 the helper restores and relaunches the previous install, writes the failure
