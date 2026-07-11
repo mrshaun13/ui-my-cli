@@ -78,12 +78,12 @@ UI-owned and end when their tab or the app closes.
 - Automatic terminal-bridge reconnect with bounded backoff and a manual
   "Retry now" action when a terminal view disconnects unexpectedly.
 - Terminal selection copy and a **Copy all** control for the full terminal
-  scrollback. On Windows use `Ctrl+Shift+C` to copy a selection and
-  `Ctrl+Shift+A` to copy all; on macOS use `Cmd+C` and `Cmd+A`. `Ctrl+C`
-  remains available to the terminal application as an interrupt, and text
-  paste continues to use `Ctrl+V` / `Cmd+V`. Windows also supports
-  `Ctrl+Insert` to copy a selection and `Shift+Insert` to paste; hold `Shift`
-  while dragging to select when the terminal application tracks the mouse.
+  scrollback. Plain drag selects text; hold `Alt` while dragging to send raw
+  mouse input to the terminal application. On Windows/Linux, `Ctrl+C` copies
+  an active selection and `Ctrl+Shift+A` copies all; on macOS, `Cmd+C` copies
+  an active selection and `Cmd+A` copies all, while `Ctrl+C` remains SIGINT.
+  Text paste continues to use `Ctrl+V` / `Cmd+V`. Windows also supports
+  `Ctrl+Insert` to copy a selection and `Shift+Insert` to paste.
 - New-session chooser with selected-provider agent and platform-shell modes plus
   searchable known projects and paths. Shell tabs open a direct login shell in
   the selected project and close the shell when the tab or application closes.
