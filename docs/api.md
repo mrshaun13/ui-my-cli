@@ -8,6 +8,7 @@ with an appropriate HTTP status code.
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/api/native/compatibility` | Fast native startup probe — returns API version, service instance identity, and active PTY count without database or provider CLI checks. |
+| `POST` | `/api/native/shutdown` | Gracefully stop the exact private dashboard service for a native update only when its instance identity matches and it has zero active PTYs. |
 | `GET` | `/api/status` | Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds |
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
 | `GET` | `/api/native/launch/status` | Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching. |
@@ -28,7 +29,7 @@ with an appropriate HTTP status code.
 | `GET` | `/api/sessions/search` | Compatibility alias for default provider search |
 | `GET` | `/api/:providerId/repos` | List all unique repos (working directories) from one provider's past sessions |
 | `GET` | `/api/repos` | Compatibility alias for default provider repos |
-| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string, controlPlane?: boolean, adaptive?: boolean }`); returns `{ tempKey, controlPlane }`, where `controlPlane` reports the transport actually selected. The status feed later sends `rekey` after ownership-safe persistence or `pending-expired` when an unregistered terminal exits or stays detached. |
+| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string, controlPlane?: boolean, adaptive?: boolean }`); returns `{ tempKey, controlPlane }`, where `controlPlane` reports the transport actually selected. The status feed later sends `rekey` after ownership-safe persistence or `pending-expired` when an unregistered terminal exits. |
 | `POST` | `/api/sessions/create` | Compatibility alias for default provider session creation |
 | `GET` | `/api/:providerId/sessions/:id/preview` | Provider-scoped rich read-only session detail — chat history, stats, top tools |
 | `GET` | `/api/sessions/:id/preview` | Rich read-only session detail — chat history, stats, top tools |

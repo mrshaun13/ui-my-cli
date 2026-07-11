@@ -2,6 +2,8 @@ namespace CodexNative.Core;
 
 public static class NativeUpdatePolicy
 {
+    public static TimeSpan DrainTimeout { get; } = TimeSpan.FromMinutes(2);
+
     public static int CountBlockingSessions(IEnumerable<(string Status, bool IsHeadless)> sessions) =>
         sessions.Count(session => session.Status.Equals("active", StringComparison.OrdinalIgnoreCase));
 

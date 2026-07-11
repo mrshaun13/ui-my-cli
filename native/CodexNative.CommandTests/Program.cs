@@ -7,6 +7,7 @@ using System.Text;
 
 var failures = new List<string>();
 const string host = @"C:\Apps\CodexNative.TerminalHost.exe";
+const string dashboardInstanceId = "7e79f66b-b194-45cd-b640-95065d4fb183";
 
 if (args is ["--verify-release-artifacts", var artifactDirectory, .. var runtimeIdentifiers])
 {
@@ -124,12 +125,14 @@ Check("macOS dashboard service uses structured process settings", () =>
         host,
         "Ubuntu",
         "/Users/tester/ui-my-cli",
-        "/opt/homebrew/bin/node");
+        "/opt/homebrew/bin/node",
+        instanceId: dashboardInstanceId);
     Equal("/opt/homebrew/bin/node", spec.Process);
     Equal("/Users/tester/ui-my-cli", spec.WorkingDirectory);
     SequenceEqual(["server/index.js"], spec.Arguments);
     Equal("production", spec.Environment!["NODE_ENV"]);
     Equal("7577", spec.Environment["PORT"]);
+    Equal(dashboardInstanceId, spec.Environment["UI_MY_CLI_NATIVE_INSTANCE_ID"]);
 
     var alternate = NativeLaunchBuilder.DashboardService(
         NativePlatform.MacOS,
@@ -137,7 +140,8 @@ Check("macOS dashboard service uses structured process settings", () =>
         "Ubuntu",
         "/Users/tester/ui-my-cli",
         "/opt/homebrew/bin/node",
-        7584);
+        7584,
+        dashboardInstanceId);
     Equal("7584", alternate.Environment!["PORT"]);
 });
 
@@ -297,6 +301,7 @@ Check("release downloads are restricted to GitHub HTTPS hosts", () =>
 
 Check("update drain blocks all active Codex work and local shells", () =>
 {
+    Equal(TimeSpan.FromMinutes(2), NativeUpdatePolicy.DrainTimeout);
     var sessions = new[]
     {
         (Status: "active", IsHeadless: false),
@@ -370,7 +375,7 @@ Check("updater request preserves paths as structured arguments", () =>
             "/Applications/CodexNative.app/Contents/MacOS"));
 });
 
-Check("updater request remains backward compatible and carries terminal host PIDs", () =>
+Check("updater request carries terminal bridges and owned dashboard identity", () =>
 {
     var oldRequest = NativeInstallRequest.Parse(
     [
@@ -384,81 +389,126 @@ Check("updater request remains backward compatible and carries terminal host PID
         NativePlatform.Windows,
         "/updates/payload",
         "/apps/CodexNative",
-        [456, 789, 456]);
+        [456, 789, 456],
+        900,
+        "http://127.0.0.1:7577/api/",
+        dashboardInstanceId);
     var parsed = NativeInstallRequest.Parse(request.ToArguments());
     SequenceEqual(new[] { 456, 789 }, parsed.RelatedProcessIds ?? []);
+    Equal(900, parsed.DashboardServiceProcessId);
+    Equal("http://127.0.0.1:7577/api/", parsed.DashboardEndpoint);
+    Equal(dashboardInstanceId, parsed.DashboardInstanceId);
     Throws<ArgumentException>(() => NativeInstallRequest.Parse(
     [
         "--parent-pid", "123", "--platform", "windows",
         "--source", "/updates/payload", "--target", "/apps/CodexNative",
         "--wait-pids", "123",
     ]));
+    Throws<ArgumentException>(() => NativeInstallRequest.Parse(
+    [
+        "--parent-pid", "123", "--platform", "windows",
+        "--source", "/updates/payload", "--target", "/apps/CodexNative",
+        "--dashboard-service-pid", "900",
+    ]));
+    Throws<ArgumentException>(() => NativeInstallRequest.Parse(
+    [
+        "--parent-pid", "123", "--platform", "windows",
+        "--source", "/updates/payload", "--target", "/apps/CodexNative",
+        "--dashboard-service-pid", "900",
+        "--dashboard-endpoint", "https://example.com/api/",
+        "--dashboard-instance-id", dashboardInstanceId,
+    ]));
 });
 
-Check("updater may stop only explicitly related terminal hosts from the exact install directory", () =>
+Check("updater accepts only the explicitly owned dashboard service process", () =>
 {
-    IReadOnlySet<int> related = new HashSet<int> { 456 };
-    Equal(true, NativeInstallProcessPolicy.CanTerminateRelatedTerminalHost(
+    Equal(true, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
         NativePlatform.Windows,
         "/apps/CodexNative",
         456,
-        related,
+        456,
         "/apps/CodexNative/CodexNative.TerminalHost.exe"));
-    Equal(false, NativeInstallProcessPolicy.CanTerminateRelatedTerminalHost(
+    Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
         NativePlatform.Windows,
         "/apps/CodexNative",
+        456,
         789,
-        related,
         "/apps/CodexNative/CodexNative.TerminalHost.exe"));
-    Equal(false, NativeInstallProcessPolicy.CanTerminateRelatedTerminalHost(
+    Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
         NativePlatform.Windows,
         "/apps/CodexNative",
         456,
-        related,
+        456,
         "/other/CodexNative.TerminalHost.exe"));
-    Equal(false, NativeInstallProcessPolicy.CanTerminateRelatedTerminalHost(
+    Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
         NativePlatform.Windows,
         "/apps/CodexNative",
         456,
-        related,
-        "/apps/CodexNative/CodexNative.exe"));
-});
-
-Check("updater blocks other native apps and terminal hosts without blocking its handoff", () =>
-{
-    IReadOnlySet<int> related = new HashSet<int> { 456 };
-    Equal(false, NativeInstallProcessPolicy.IsBlockingInstallProcess(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        123,
-        related,
-        123,
-        "/apps/CodexNative/CodexNative.exe"));
-    Equal(false, NativeInstallProcessPolicy.IsBlockingInstallProcess(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        123,
-        related,
         456,
-        "/apps/CodexNative/CodexNative.TerminalHost.exe"));
-    Equal(true, NativeInstallProcessPolicy.IsBlockingInstallProcess(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        123,
-        related,
-        789,
-        "/apps/CodexNative/CodexNative.TerminalHost.exe"));
-    Equal(true, NativeInstallProcessPolicy.IsBlockingInstallProcess(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        123,
-        related,
-        321,
         "/apps/CodexNative/CodexNative.exe"));
+    Equal(true, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
+        NativePlatform.MacOS,
+        "/Applications/CodexNative.app",
+        456,
+        456,
+        "/opt/homebrew/bin/node"));
     Equal(true, NativeInstallProcessPolicy.IsMainApplication(
         NativePlatform.MacOS,
         "/Applications/CodexNative.app",
         "/Applications/CodexNative.app/Contents/MacOS/CodexNative"));
+});
+
+await CheckAsync("owned dashboard handoff revalidates before stopping", async () =>
+{
+    var calls = new List<string>();
+    await NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
+        dashboardInstanceId,
+        _ =>
+        {
+            calls.Add("probe");
+            return Task.FromResult(DashboardApiProbeResult.FromResponse(
+                true,
+                DashboardApiCompatibility.RequiredVersion,
+                0,
+                dashboardInstanceId));
+        },
+        _ =>
+        {
+            calls.Add("stop");
+            return Task.CompletedTask;
+        });
+    SequenceEqual(new[] { "probe", "stop" }, calls);
+
+    var stopped = false;
+    await ThrowsAsync<InvalidOperationException>(() =>
+        NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
+            dashboardInstanceId,
+            _ => Task.FromResult(DashboardApiProbeResult.FromResponse(
+                true,
+                DashboardApiCompatibility.RequiredVersion,
+                1,
+                dashboardInstanceId)),
+            _ =>
+            {
+                stopped = true;
+                return Task.CompletedTask;
+            }));
+    Equal(false, stopped);
+
+    await ThrowsAsync<InvalidOperationException>(() =>
+        NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
+            dashboardInstanceId,
+            _ => Task.FromResult(DashboardApiProbeResult.FromResponse(
+                true,
+                DashboardApiCompatibility.RequiredVersion,
+                0,
+                "6ced4140-c8c6-4290-b467-2cc5613af732")),
+            _ =>
+            {
+                stopped = true;
+                return Task.CompletedTask;
+            }));
+    Equal(false, stopped);
 });
 
 Check("updater result is bounded, persisted, and consumed once", () =>
@@ -768,7 +818,8 @@ Check("distribution and path validation reject command injection", () =>
 
 Check("dashboard service is launched inside its validated WSL directory", () =>
 {
-    var hostSpec = NativeLaunchBuilder.DashboardService(host, "Ubuntu", "/home/tester/ui-my-cli", 7584);
+    var hostSpec = NativeLaunchBuilder.DashboardService(
+        host, "Ubuntu", "/home/tester/ui-my-cli", 7584, dashboardInstanceId);
     var request = NativeLaunchBuilder.ParseHostArguments(hostSpec.Arguments);
     Equal(7584, request.Port);
     var wsl = NativeLaunchBuilder.BuildWslSpec(request, @"C:\Windows\System32");
@@ -776,7 +827,7 @@ Check("dashboard service is launched inside its validated WSL directory", () =>
         [
             "--distribution", "Ubuntu", "--cd", "/home/tester/ui-my-cli",
             "--exec", "/bin/bash", "-lc",
-            "export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT=7584; exec node server/index.js",
+            $"export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT=7584 UI_MY_CLI_NATIVE_INSTANCE_ID={dashboardInstanceId}; exec node server/index.js",
         ],
         wsl.Arguments);
     Throws<ArgumentException>(() =>

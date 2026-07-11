@@ -164,7 +164,6 @@ function collect() {
   const statsSrc    = read('server/stats.js');
   const ptyMgrSrc   = read('server/pty-manager.js');
   const codexControlPlaneSrc = read('server/codex-control-plane.js');
-  const pendingSessionTrackerSrc = read('server/pending-session-tracker.js');
   const dbPathSrc   = read('server/db-path.js');
   const codexPathSrc = read('server/codex-paths.js');
   const codexStoreSrc = read('server/codex-store.js');
@@ -186,7 +185,6 @@ function collect() {
     { name: 'server/stats.js',      src: statsSrc    },
     { name: 'server/pty-manager.js',src: ptyMgrSrc   },
     { name: 'server/codex-control-plane.js', src: codexControlPlaneSrc },
-    { name: 'server/pending-session-tracker.js', src: pendingSessionTrackerSrc },
     { name: 'server/db-path.js',    src: dbPathSrc   },
     { name: 'server/codex-paths.js', src: codexPathSrc },
     { name: 'server/codex-store.js', src: codexStoreSrc },
@@ -296,7 +294,7 @@ function collect() {
   fileDescs['native/CodexNative/NativeSettings.cs'] =
     'Persisted native preferences including selected provider, pane layouts, and per-tab provider identity.';
   fileDescs['server/pending-session-lifecycle.js'] =
-    'Pending-session lifecycle policy for safe re-keying, connected-terminal retention, expiry, and bounded fallback correlation.';
+    'Pending-session lifecycle policy for safe re-keying, live-PTY retention through client detachment, exit expiry, and ownership-safe fallback correlation.';
   fileDescs['server/session-display-text.js'] =
     'Shared bounded session-title formatting and filtering of injected Codex context from user-prompt metadata.';
 
@@ -782,8 +780,9 @@ The server maintains two WebSocket namespaces:
    Adaptive preference. New-session requests use a temporary
    PTY key until the provider safely correlates its first persisted record;
    Codex uses the injected originator marker and Devin accepts only one
-   uniquely identifiable candidate created after the PTY starts. A live attached pending terminal remains available
-   until it registers, exits, or stays detached beyond the grace period.
+   uniquely identifiable candidate created after the PTY starts. A live pending
+   terminal remains available through client detachment until it registers,
+   exits, or is explicitly canceled.
 
 2. **Status feed** (\`/ws/:providerId/status\`) — Server-push only. Sends the full session
    list every 3 seconds plus pending-session rekey/expiry and latest-prompt
@@ -843,7 +842,7 @@ ${scriptList}
 | \`server/codex-store.js\` | Core Codex session data model, status detection, archive logic |
 | \`server/providers/devin/store.js\` | Legacy Devin session data model, status detection, archive logic |
 | \`server/index.js\` | All REST endpoints, WebSocket protocol, broadcast logic |
-| \`server/pending-session-lifecycle.js\` | Pending-session re-key, retention, and expiry policy |
+| \`server/pending-session-lifecycle.js\` | Pending-session re-key, live-PTY retention, and exit policy |
 | \`client/src/hooks/useStatusFeed.js\` | How the client receives live session updates |
 | \`client/src/components/Terminal.jsx\` | xterm.js + PTY WebSocket bridge |
 | \`server/pty-manager.js\` | node-pty lifecycle, scrollback buffer, WSL env handling, Unix spawn-helper executable repair |

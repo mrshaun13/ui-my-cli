@@ -8,6 +8,7 @@
  *   POST /api/sessions/:id/kill-pty — kill the active PTY (not the session)
  *   GET  /api/status                — server health + active PTY count
  *   GET  /api/native/compatibility  — fast native API compatibility probe
+ *   POST /api/native/shutdown       — guarded zero-PTY native update handoff
  *
  * WebSocket:
  *   ws://localhost:PORT/ws/terminal/:id   — attach to PTY for session
@@ -51,6 +52,8 @@ const pendingToReal = new Map();
 
 const app = express();
 const server = http.createServer(app);
+let updateShutdownPending = false;
+let shutdownDashboard = null;
 const codexAppServer = new CodexAppServer({
   executable: () => getProvider('codex').codexExecutable(),
 });
@@ -80,6 +83,22 @@ app.get('/api/native/compatibility', (_req, res) => {
     instanceId: SERVICE_INSTANCE_ID,
     activePtys: activePtySessions().length,
   });
+});
+
+app.post('/api/native/shutdown', (req, res) => {
+  if (req.body?.instanceId !== SERVICE_INSTANCE_ID) {
+    return res.status(409).json({ error: 'Dashboard service instance mismatch.' });
+  }
+  if (typeof shutdownDashboard !== 'function') {
+    return res.status(503).json({ error: 'Dashboard service is not ready to stop.' });
+  }
+  const activePtys = activePtySessions().length;
+  if (activePtys > 0) {
+    return res.status(409).json({ error: `Dashboard service has ${activePtys} active terminal(s).` });
+  }
+  updateShutdownPending = true;
+  res.status(202).json({ ok: true, instanceId: SERVICE_INSTANCE_ID });
+  setImmediate(() => shutdownDashboard('native update'));
 });
 
 app.get('/api/status', (_req, res) => {
@@ -210,6 +229,9 @@ app.get(['/api/:providerId/repos', '/api/repos'], providerRoute((provider, _req,
 }));
 
 app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerRoute(async (provider, req, res) => {
+  if (updateShutdownPending) {
+    return res.status(503).json({ error: 'Dashboard service is stopping for a native update.' });
+  }
   const { workingDir } = req.body;
   if (!workingDir || typeof workingDir !== 'string') {
     return res.status(400).json({ error: 'workingDir is required' });
@@ -230,6 +252,9 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
         () => codexAppServer.ensureStarted(),
         err => console.warn(`[codex:control-plane] unavailable for new session; using direct terminal: ${err.message}`))
       : null;
+    if (updateShutdownPending) {
+      return res.status(503).json({ error: 'Dashboard service is stopping for a native update.' });
+    }
     const pendingPty = spawnNewSession(provider.id, tempKey, workingDir, 80, 24, {
       remoteEndpoint,
       correlationId,
@@ -617,6 +642,10 @@ wss.on('connection', async (ws, req) => {
   const termMatch = pathname.match(/^\/ws\/([^/]+)\/terminal\/([^/]+)$/);
   const legacyTermMatch = pathname.match(/^\/ws\/terminal\/([^/]+)$/);
   if (termMatch || legacyTermMatch) {
+    if (updateShutdownPending) {
+      ws.close(1013, 'Dashboard service is stopping for a native update');
+      return;
+    }
     const providerId = termMatch ? decodeURIComponent(termMatch[1]) : DEFAULT_PROVIDER_ID;
     let provider;
     try {
@@ -721,7 +750,7 @@ server.listen(PORT, '127.0.0.1', () => {
 
   // ── Graceful shutdown ─────────────────────────────────────────────────────
   let shuttingDown = false;
-  function shutdown(signal) {
+  shutdownDashboard = signal => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n[shutdown] ${signal} received — cleaning up…`);
@@ -761,10 +790,10 @@ server.listen(PORT, '127.0.0.1', () => {
       console.warn('[shutdown] forced exit after timeout');
       process.exit(1);
     }, 5000).unref();
-  }
+  };
 
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT',  () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdownDashboard?.('SIGTERM'));
+  process.on('SIGINT',  () => shutdownDashboard?.('SIGINT'));
 });
 
 server.on('error', err => {

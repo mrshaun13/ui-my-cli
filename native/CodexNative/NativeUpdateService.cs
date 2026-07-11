@@ -181,7 +181,8 @@ public sealed class NativeUpdateService : IDisposable
     public Process LaunchInstaller(
         PreparedNativeUpdate update,
         NativePlatformProfile platform,
-        IEnumerable<int>? relatedProcessIds = null)
+        IEnumerable<int>? relatedProcessIds,
+        OwnedDashboardServiceHandoff dashboardService)
     {
         var target = NativeInstallLayout.FindCurrentInstallDirectory(
             platform.Platform,
@@ -194,7 +195,10 @@ public sealed class NativeUpdateService : IDisposable
             relatedProcessIds?
                 .Where(processId => processId > 0 && processId != Environment.ProcessId)
                 .Distinct()
-                .ToArray());
+                .ToArray(),
+            dashboardService.ProcessId,
+            dashboardService.Endpoint,
+            dashboardService.InstanceId);
         var startInfo = new ProcessStartInfo
         {
             FileName = update.InstallerExecutable,

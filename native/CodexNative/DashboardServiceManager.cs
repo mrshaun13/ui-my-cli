@@ -7,8 +7,11 @@ public sealed class DashboardServiceManager : IDisposable
 {
     private Process? _process;
     private int? _ownedPort;
+    private string? _ownedInstanceId;
 
     public int? OwnedPort => OwnsRunningService ? _ownedPort : null;
+    public int? OwnedProcessId => OwnsRunningService ? _process?.Id : null;
+    public string? OwnedInstanceId => OwnsRunningService ? _ownedInstanceId : null;
 
     public bool OwnsServiceOnPort(int port) =>
         OwnsRunningService && _ownedPort == port;
@@ -50,13 +53,15 @@ public sealed class DashboardServiceManager : IDisposable
             return;
         }
 
+        var instanceId = Guid.NewGuid().ToString("D");
         var spec = NativeLaunchBuilder.DashboardService(
             platform,
             hostExecutable,
             distribution,
             dashboardDirectory,
             nodeExecutable,
-            port);
+            port,
+            instanceId);
         var startInfo = new ProcessStartInfo
         {
             // LaunchServices can tear down children that remain attached to a
@@ -127,6 +132,7 @@ public sealed class DashboardServiceManager : IDisposable
         }
         _process = process;
         _ownedPort = port;
+        _ownedInstanceId = instanceId;
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         NativeLog.Write($"Dashboard service host started with PID {process.Id}.");
@@ -177,6 +183,7 @@ public sealed class DashboardServiceManager : IDisposable
         {
             _process = null;
             _ownedPort = null;
+            _ownedInstanceId = null;
         }
         process.Dispose();
     }

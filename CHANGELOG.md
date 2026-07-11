@@ -23,18 +23,20 @@
 - Added one-time update-result reporting and updater-owned failure dialogs so
   a rolled-back handoff remains visible even when the restored app predates
   result reporting.
-- Made update process ownership fail closed: dashboard-reported active sessions
-  block handoff, other native app/terminal-host processes are left untouched,
-  and forced cleanup is limited to verified PIDs supplied by the updating UI.
+- Made update process ownership fail closed: the native UI waits at most two
+  minutes for dashboard-tracked work to drain, then hands off the exact owned
+  private-service PID, loopback endpoint, and instance identity. The helper
+  revalidates zero active PTYs immediately before graceful service shutdown and
+  never scans or terminates unrelated terminal hosts, CLIs, IDEs, or apps.
 - Kept successful browser renames stable across stale status-feed frames while
   the provider's canonical title persistence catches up.
 - Added cached and coalesced GitHub release checks with ETag revalidation,
   friendly 403/429 reset times, and optional authentication only through the
   explicitly supplied `CODEX_NATIVE_GITHUB_TOKEN` environment variable.
 - Fixed new-session prompt loss in both browser and native clients. A pending
-  session can remain unregistered while its PTY is attached, with exact Codex
-  origin correlation and a bounded fallback preventing unrelated same-folder
-  sessions from being claimed.
+  session remains live through UI detach/restart until its PTY exits or is
+  explicitly canceled, with exact Codex origin correlation and an ownership-
+  safe fallback preventing unrelated same-folder sessions from being claimed.
 - Added cross-platform copy/select-all shortcuts and a visible **Copy all**
   action for terminal scrollback.
 - Bounded new-session titles and prompt previews at API and native layout

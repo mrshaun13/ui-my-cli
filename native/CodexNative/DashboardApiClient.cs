@@ -22,6 +22,7 @@ public sealed class DashboardApiClient : IDisposable
     };
 
     public int ConnectedPort => _service.Port;
+    public Uri ServiceBaseUri => _service;
     public string ProviderId => _providerId;
     public Uri StatusWebSocketUri => new(
         $"ws://127.0.0.1:{_service.Port}/ws/{Uri.EscapeDataString(_providerId)}/status");

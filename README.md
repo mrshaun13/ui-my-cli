@@ -20,7 +20,7 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - **Durable blank terminals and live context** — newly opened Codex tabs remain available until their first prompt persists the thread, while open native inspectors follow model, reasoning-effort, and context changes from manual `/model` selection or Adaptive routing
 - **Project-root-safe native sessions** — each new Codex TUI receives the directory selected in the native chooser as an explicit working root, including when it connects through the shared app-server control plane
 - **Local native voice-to-text** — each native terminal has a microphone control that captures through a dedicated cross-platform audio helper, trims speech with Silero VAD, transcribes locally with Whisper base.en, and inserts the result into either terminal input or the initiating pane's Adaptive composer without auto-submitting
-- **Verified native updates** — cached and ETag-revalidated stable GitHub Release checks verify exact package size and SHA-256, wait for dashboard-tracked active provider sessions and local shells to drain, then install through an external rollback-capable helper that stops only explicitly supplied and verified terminal-host PIDs, blocks on other native processes, and validates and restarts the new version
+- **Verified native updates** — cached and ETag-revalidated stable GitHub Release checks verify exact package size and SHA-256, wait up to two minutes for dashboard-tracked active provider sessions and local shells to drain, then hand the exact private-service PID, loopback endpoint, and instance identity to an external rollback-capable helper that revalidates zero active PTYs before graceful service shutdown, leaves every unrelated process untouched, and validates and restarts the new version
 - **Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider
 - **Archive / restore** — hide sessions from the list without deleting them; restore from the collapsible drawer at the bottom of the sidebar
 - **Analytics dashboard** — activity heatmap, project combo chart (duration + turns + sessions), 24-hour through all-time token and estimated-credit rollups by model, project, and session, tool call breakdown, model distribution, and Codex stats cohort switching, shown when no session is selected
@@ -195,7 +195,6 @@ server/
   server/stats.js              Codex compatibility stats facade for legacy imports.
   server/pty-manager.js        PTY Manager — spawns and manages node-pty processes bridged to WebSocket clients, with Unix spawn-helper executable repair.
   server/codex-control-plane.js Codex control-plane request compatibility and best-effort startup helpers.
-  server/pending-session-tracker.js Tracks an unpersisted session until it registers or its terminal exits.
   server/db-path.js            Compatibility exports for legacy db-path imports.
   server/codex-paths.js        Resolves local Codex state paths.
   server/codex-store.js        Codex session adapter.
@@ -207,7 +206,7 @@ server/
   server/providers/codex/executable.js Resolves Codex for desktop processes that do not inherit a login-shell PATH.
   server/providers/devin/index.js Devin provider adapter wiring legacy Devin CLI state into the dashboard contract.
   server/providers/devin/paths.js Resolves Devin-related database paths across platforms.
-  server/pending-session-lifecycle.js Pending-session lifecycle policy for safe re-keying, connected-terminal retention, expiry, and bounded fallback correlation.
+  server/pending-session-lifecycle.js Pending-session lifecycle policy for safe re-keying, live-PTY retention through client detachment, exit expiry, and ownership-safe fallback correlation.
   server/session-display-text.js Shared bounded session-title formatting and filtering of injected Codex context from user-prompt metadata.
 
 client/src/

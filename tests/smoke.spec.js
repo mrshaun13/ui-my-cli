@@ -35,6 +35,14 @@ test.describe('Dashboard smoke tests', () => {
     expect(body).not.toHaveProperty('providers');
   });
 
+  test('native update shutdown rejects the wrong service instance', async ({ request }) => {
+    const res = await request.post('/api/native/shutdown', {
+      data: { instanceId: '00000000-0000-0000-0000-000000000000' },
+    });
+    expect(res.status()).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: 'Dashboard service instance mismatch.' });
+  });
+
   test('sessions API returns an array', async ({ request }) => {
     const res = await request.get('/api/sessions');
     expect(res.ok()).toBeTruthy();

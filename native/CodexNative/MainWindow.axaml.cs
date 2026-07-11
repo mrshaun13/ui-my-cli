@@ -5701,12 +5701,17 @@ public sealed partial class MainWindow : Window
                 cancellationToken);
             await WaitForUpdateDrainAsync(cancellationToken);
             await SaveWorkspaceAsync();
+            var dashboardService = await GetOwnedDashboardUpdateHandoffAsync(cancellationToken);
             var terminalHostProcessIds = _openTabs.Values
                 .Where(state => state.IsRunning && state.Terminal.Pid > 0)
                 .Select(state => state.Terminal.Pid)
                 .Distinct()
                 .ToArray();
-            _updateService.LaunchInstaller(prepared, _platform, terminalHostProcessIds).Dispose();
+            _updateService.LaunchInstaller(
+                prepared,
+                _platform,
+                terminalHostProcessIds,
+                dashboardService).Dispose();
             SetStatus($"Installing Codex Native {release.Version}; restarting…", RunningBrush);
             _shutdownConfirmed = true;
             Close();
@@ -5759,55 +5764,92 @@ public sealed partial class MainWindow : Window
 
     private async Task WaitForUpdateDrainAsync(CancellationToken cancellationToken)
     {
+        using var drainTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        drainTimeout.CancelAfter(NativeUpdatePolicy.DrainTimeout);
+        var drainToken = drainTimeout.Token;
         var consecutiveClearChecks = 0;
         var providerIds = UpdateDrainProviderIds();
-        while (consecutiveClearChecks < 2)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var blockingSessions = 0;
-            foreach (var providerId in providerIds)
+            while (consecutiveClearChecks < 2)
             {
-                var sessions = await NativeUpdateDataServiceRecovery.RunAsync(
-                    token => _api.GetSessionsAsync(token, providerId: providerId),
-                    async token =>
-                    {
-                        NativeLog.Write(
-                            $"Dashboard service on port {_api.ConnectedPort} stopped during update drain; attempting recovery.");
-                        SetStatus("Update downloaded · reconnecting to verify active sessions…", StartingBrush);
-                        return await EnsureDashboardServiceAsync(token);
-                    },
-                    cancellationToken);
-                blockingSessions += NativeUpdatePolicy.CountBlockingSessions(
-                    sessions.Select(session => (session.Status, session.IsHeadless)));
-            }
-
-            var localShells = _openTabs.Values.Count(state =>
-                state.Kind == TerminalSessionKind.LocalShell && state.IsRunning);
-            if (blockingSessions == 0 && localShells == 0)
-            {
-                consecutiveClearChecks++;
-                if (consecutiveClearChecks < 2)
+                drainToken.ThrowIfCancellationRequested();
+                var blockingSessions = 0;
+                foreach (var providerId in providerIds)
                 {
-                    SetStatus("Sessions are drained · confirming update handoff…", StartingBrush);
-                    await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+                    var sessions = await NativeUpdateDataServiceRecovery.RunAsync(
+                        token => _api.GetSessionsAsync(token, providerId: providerId),
+                        async token =>
+                        {
+                            NativeLog.Write(
+                                $"Dashboard service on port {_api.ConnectedPort} stopped during update drain; attempting recovery.");
+                            SetStatus("Update downloaded · reconnecting to verify active sessions…", StartingBrush);
+                            return await EnsureDashboardServiceAsync(token);
+                        },
+                        drainToken);
+                    blockingSessions += NativeUpdatePolicy.CountBlockingSessions(
+                        sessions.Select(session => (session.Status, session.IsHeadless)));
                 }
-                continue;
-            }
+                var serviceProbe = await _api.ProbeCurrentServiceAsync(drainToken);
+                if (!serviceProbe.IsCompatible)
+                    throw new InvalidOperationException(
+                        "The dashboard service could not be verified during update drain. " +
+                        "No process was stopped; reconnect and retry the update.");
+                var activePtys = serviceProbe.ActivePtys;
 
-            consecutiveClearChecks = 0;
-            var details = new List<string>();
-            if (blockingSessions > 0)
-            {
-                var sessionLabel = providerIds.Count == 1
-                    ? ProviderLabel(providerIds[0])
-                    : "provider";
-                details.Add($"{blockingSessions} active {sessionLabel} session(s)");
+                var localShells = _openTabs.Values.Count(state =>
+                    state.Kind == TerminalSessionKind.LocalShell && state.IsRunning);
+                if (blockingSessions == 0 && activePtys == 0 && localShells == 0)
+                {
+                    consecutiveClearChecks++;
+                    if (consecutiveClearChecks < 2)
+                    {
+                        SetStatus("Sessions are drained · confirming update handoff…", StartingBrush);
+                        await Task.Delay(TimeSpan.FromSeconds(2), drainToken);
+                    }
+                    continue;
+                }
+
+                consecutiveClearChecks = 0;
+                var details = new List<string>();
+                if (blockingSessions > 0)
+                {
+                    var sessionLabel = providerIds.Count == 1
+                        ? ProviderLabel(providerIds[0])
+                        : "provider";
+                    details.Add($"{blockingSessions} active {sessionLabel} session(s)");
+                }
+                if (activePtys > 0) details.Add($"{activePtys} active dashboard terminal(s)");
+                if (localShells > 0) details.Add($"{localShells} local shell tab(s) to close");
+                UpdateButton.Content = "Cancel update";
+                SetStatus($"Update ready · waiting for {string.Join(" and ", details)}", StartingBrush);
+                await Task.Delay(TimeSpan.FromSeconds(3), drainToken);
             }
-            if (localShells > 0) details.Add($"{localShells} local shell tab(s) to close");
-            UpdateButton.Content = "Cancel update";
-            SetStatus($"Update ready · waiting for {string.Join(" and ", details)}", StartingBrush);
-            await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "Active dashboard sessions or local shells did not drain within two minutes. " +
+                "They were left running; close them and retry the update.");
+        }
+    }
+
+    private async Task<OwnedDashboardServiceHandoff> GetOwnedDashboardUpdateHandoffAsync(
+        CancellationToken cancellationToken)
+    {
+        if (!_serviceManager.OwnsServiceOnPort(_api.ConnectedPort)
+            || _serviceManager.OwnedProcessId is not { } serviceProcessId
+            || _serviceManager.OwnedInstanceId is not { } instanceId)
+            throw new InvalidOperationException(
+                "This UI does not own the connected private dashboard service. " +
+                "Stop that service, restart Codex Native, and retry the update.");
+
+        var probe = await _api.ProbeCurrentServiceAsync(cancellationToken);
+        NativeDashboardUpdatePolicy.RequireDrainedOwnedInstance(instanceId, probe);
+        return new OwnedDashboardServiceHandoff(
+            serviceProcessId,
+            _api.ServiceBaseUri.AbsoluteUri,
+            instanceId);
     }
 
     private static void DiscardPreparedUpdate(PreparedNativeUpdate? prepared)

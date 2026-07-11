@@ -5,7 +5,10 @@ public sealed record NativeInstallRequest(
     NativePlatform Platform,
     string SourcePayload,
     string TargetDirectory,
-    IReadOnlyList<int>? RelatedProcessIds = null)
+    IReadOnlyList<int>? RelatedProcessIds = null,
+    int? DashboardServiceProcessId = null,
+    string? DashboardEndpoint = null,
+    string? DashboardInstanceId = null)
 {
     public static NativeInstallRequest Parse(IReadOnlyList<string> arguments)
     {
@@ -17,8 +20,12 @@ public sealed record NativeInstallRequest(
             if (!values.TryAdd(arguments[index], arguments[index + 1]))
                 throw new ArgumentException($"Duplicate updater argument: {arguments[index]}", nameof(arguments));
         }
-        var expectedNames = new[] { "--parent-pid", "--platform", "--source", "--target", "--wait-pids" };
-        if (values.Count is < 4 or > 5 || values.Keys.Any(name => !expectedNames.Contains(name, StringComparer.Ordinal)))
+        var expectedNames = new[]
+        {
+            "--parent-pid", "--platform", "--source", "--target", "--wait-pids",
+            "--dashboard-service-pid", "--dashboard-endpoint", "--dashboard-instance-id",
+        };
+        if (values.Count is < 4 or > 8 || values.Keys.Any(name => !expectedNames.Contains(name, StringComparer.Ordinal)))
             throw new ArgumentException("Updater received an unknown or incomplete argument set.", nameof(arguments));
 
         if (!int.TryParse(Required(values, "--parent-pid"), out var parentPid) || parentPid <= 0)
@@ -41,7 +48,36 @@ public sealed record NativeInstallRequest(
             ? ParseProcessIds(waitPids, parentPid)
             : null;
 
-        return new NativeInstallRequest(parentPid, platform, source, target, relatedProcessIds);
+        var dashboardArgumentCount = new[]
+        {
+            "--dashboard-service-pid", "--dashboard-endpoint", "--dashboard-instance-id",
+        }.Count(values.ContainsKey);
+        if (dashboardArgumentCount is not 0 and not 3)
+            throw new ArgumentException("Updater dashboard handoff arguments must be supplied together.", nameof(arguments));
+        int? dashboardServiceProcessId = null;
+        string? dashboardEndpoint = null;
+        string? dashboardInstanceId = null;
+        if (dashboardArgumentCount == 3)
+        {
+            if (!int.TryParse(Required(values, "--dashboard-service-pid"), out var servicePid)
+                || servicePid <= 0
+                || servicePid == parentPid
+                || relatedProcessIds?.Contains(servicePid) == true)
+                throw new ArgumentException("Updater dashboard service PID is invalid.", nameof(arguments));
+            dashboardServiceProcessId = servicePid;
+            dashboardEndpoint = ValidateDashboardEndpoint(Required(values, "--dashboard-endpoint"));
+            dashboardInstanceId = ValidateInstanceId(Required(values, "--dashboard-instance-id"));
+        }
+
+        return new NativeInstallRequest(
+            parentPid,
+            platform,
+            source,
+            target,
+            relatedProcessIds,
+            dashboardServiceProcessId,
+            dashboardEndpoint,
+            dashboardInstanceId);
     }
 
     public IReadOnlyList<string> ToArguments()
@@ -62,6 +98,24 @@ public sealed record NativeInstallRequest(
         {
             arguments.Add("--wait-pids");
             arguments.Add(string.Join(',', related));
+        }
+        var dashboardFields = new object?[]
+        {
+            DashboardServiceProcessId, DashboardEndpoint, DashboardInstanceId,
+        };
+        if (dashboardFields.Any(value => value is not null)
+            && dashboardFields.Any(value => value is null))
+            throw new InvalidOperationException("Updater dashboard handoff values must be supplied together.");
+        if (DashboardServiceProcessId is { } servicePid)
+        {
+            if (servicePid <= 0 || servicePid == ParentProcessId || related?.Contains(servicePid) == true)
+                throw new InvalidOperationException("Updater dashboard service PID is invalid.");
+            arguments.Add("--dashboard-service-pid");
+            arguments.Add(servicePid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            arguments.Add("--dashboard-endpoint");
+            arguments.Add(ValidateDashboardEndpoint(DashboardEndpoint!));
+            arguments.Add("--dashboard-instance-id");
+            arguments.Add(ValidateInstanceId(DashboardInstanceId!));
         }
         return arguments;
     }
@@ -94,6 +148,25 @@ public sealed record NativeInstallRequest(
             throw new ArgumentException($"Updater {label} path must be absolute and contain no control characters.");
         return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
+
+    private static string ValidateDashboardEndpoint(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var endpoint)
+            || endpoint.Scheme != Uri.UriSchemeHttp
+            || endpoint.Host is not ("127.0.0.1" or "localhost")
+            || !string.IsNullOrEmpty(endpoint.UserInfo)
+            || !string.IsNullOrEmpty(endpoint.Query)
+            || !string.IsNullOrEmpty(endpoint.Fragment)
+            || !DashboardServicePorts.IsPrivateCandidate(endpoint.Port)
+            || endpoint.AbsolutePath.TrimEnd('/') != "/api")
+            throw new ArgumentException("Updater dashboard endpoint must be a private HTTP loopback /api URL.");
+        return new UriBuilder(endpoint) { Path = "/api/" }.Uri.AbsoluteUri;
+    }
+
+    private static string ValidateInstanceId(string value) =>
+        Guid.TryParseExact(value, "D", out var parsed)
+            ? parsed.ToString("D")
+            : throw new ArgumentException("Updater dashboard instance ID is invalid.");
 
     private static StringComparison PathComparison => OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase

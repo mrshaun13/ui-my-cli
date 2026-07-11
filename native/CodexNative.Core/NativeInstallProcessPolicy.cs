@@ -2,27 +2,16 @@ namespace CodexNative.Core;
 
 public static class NativeInstallProcessPolicy
 {
-    public static bool CanTerminateRelatedTerminalHost(
+    public static bool IsVerifiedOwnedDashboardService(
         NativePlatform platform,
         string targetDirectory,
-        int processId,
-        IReadOnlySet<int> relatedProcessIds,
-        string? processExecutable) =>
-        relatedProcessIds.Contains(processId)
-        && IsOwnedTerminalHost(platform, targetDirectory, processExecutable);
-
-    public static bool IsBlockingInstallProcess(
-        NativePlatform platform,
-        string targetDirectory,
-        int parentProcessId,
-        IReadOnlySet<int> relatedProcessIds,
-        int processId,
+        int expectedProcessId,
+        int actualProcessId,
         string? processExecutable)
     {
-        if (processId == parentProcessId) return false;
-        if (IsMainApplication(platform, targetDirectory, processExecutable)) return true;
-        return IsOwnedTerminalHost(platform, targetDirectory, processExecutable)
-            && !relatedProcessIds.Contains(processId);
+        if (expectedProcessId <= 0 || actualProcessId != expectedProcessId) return false;
+        return platform == NativePlatform.MacOS
+            || IsOwnedTerminalHost(platform, targetDirectory, processExecutable);
     }
 
     public static bool IsOwnedTerminalHost(
@@ -59,4 +48,5 @@ public static class NativeInstallProcessPolicy
             : StringComparison.Ordinal;
         return Path.GetFullPath(expected).Equals(Path.GetFullPath(processExecutable), comparison);
     }
+
 }

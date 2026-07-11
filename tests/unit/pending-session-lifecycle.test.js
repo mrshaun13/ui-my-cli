@@ -15,11 +15,10 @@ test('pending metadata polling rekeys a discovered session', () => {
   assert.equal(pendingSessionDisposition('session-123', null), 'rekey');
 });
 
-test('pending metadata expires exited and abandoned PTYs', () => {
+test('pending metadata expires only after its PTY exits', () => {
   assert.equal(pendingSessionDisposition(null, null), 'expire');
   const detached = { active: true, clientCount: 0, startedAt: 1000, detachedAt: 2000 };
-  assert.equal(pendingSessionDisposition(null, detached, 61_999, 60_000), 'continue');
-  assert.equal(pendingSessionDisposition(null, detached, 62_000, 60_000), 'expire');
+  assert.equal(pendingSessionDisposition(null, detached), 'continue');
 });
 
 test('fallback ownership accepts a uniquely discovered session even after a slow startup', () => {

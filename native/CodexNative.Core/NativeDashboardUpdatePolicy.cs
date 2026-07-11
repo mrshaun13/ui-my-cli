@@ -1,0 +1,35 @@
+namespace CodexNative.Core;
+
+public sealed record OwnedDashboardServiceHandoff(
+    int ProcessId,
+    string Endpoint,
+    string InstanceId);
+
+public static class NativeDashboardUpdatePolicy
+{
+    public static async Task RevalidateThenStopAsync(
+        string expectedInstanceId,
+        Func<CancellationToken, Task<DashboardApiProbeResult>> revalidate,
+        Func<CancellationToken, Task> stop,
+        CancellationToken cancellationToken = default)
+    {
+        var probe = await revalidate(cancellationToken);
+        RequireDrainedOwnedInstance(expectedInstanceId, probe);
+        await stop(cancellationToken);
+    }
+
+    public static void RequireDrainedOwnedInstance(
+        string expectedInstanceId,
+        DashboardApiProbeResult probe)
+    {
+        if (!probe.IsCompatible)
+            throw new InvalidOperationException(
+                "The owned dashboard service could not be revalidated; no process was stopped.");
+        if (!string.Equals(probe.InstanceId, expectedInstanceId, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "The dashboard service instance changed during update handoff; no process was stopped.");
+        if (probe.ActivePtys > 0)
+            throw new InvalidOperationException(
+                $"The dashboard service has {probe.ActivePtys} active terminal(s); close them and retry the update.");
+    }
+}

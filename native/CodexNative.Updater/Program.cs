@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using CodexNative.Core;
@@ -19,11 +20,10 @@ internal static class Program
         {
             request = NativeInstallRequest.Parse(args);
             UpdateLog.Write($"Preparing update from {request.SourcePayload} to {request.TargetDirectory}.");
-            WaitForProcesses(request);
+            WaitForProcess(request.ParentProcessId, "native app", ProcessExitTimeout);
             parentExited = true;
-            EnsureNoUnrelatedInstallProcesses(request);
-            QuiesceRelatedTerminalHosts(request);
-            EnsureNoUnrelatedInstallProcesses(request);
+            WaitForRelatedProcesses(request);
+            QuiesceOwnedDashboardService(request);
             var hadPreviousInstall = Install(request);
             try
             {
@@ -66,28 +66,24 @@ internal static class Program
         }
     }
 
-    private static void WaitForProcesses(NativeInstallRequest request)
+    private static void WaitForRelatedProcesses(NativeInstallRequest request)
     {
-        WaitForProcess(request.ParentProcessId, "native app", ProcessExitTimeout, failOnTimeout: true);
         foreach (var processId in request.RelatedProcessIds ?? [])
-            WaitForProcess(processId, "terminal host", TimeSpan.FromSeconds(5), failOnTimeout: false);
+            WaitForProcess(processId, "terminal bridge", TimeSpan.FromSeconds(15));
     }
 
     private static void WaitForProcess(
         int processId,
         string description,
-        TimeSpan timeout,
-        bool failOnTimeout)
+        TimeSpan timeout)
     {
         try
         {
             using var process = Process.GetProcessById(processId);
             if (process.WaitForExit((int)timeout.TotalMilliseconds)) return;
-            if (failOnTimeout)
-                throw new TimeoutException(
-                    $"The {description} process {processId} did not exit within {timeout.TotalSeconds:0} seconds.");
-            UpdateLog.Write(
-                $"The {description} process {processId} is still running; validating ownership before forced cleanup.");
+            throw new TimeoutException(
+                $"The {description} process {processId} did not exit within {timeout.TotalSeconds:0} seconds; " +
+                "no process was stopped. Close it and retry the update.");
         }
         catch (ArgumentException)
         {
@@ -95,94 +91,95 @@ internal static class Program
         }
     }
 
-    private static void EnsureNoUnrelatedInstallProcesses(NativeInstallRequest request)
+    private static void QuiesceOwnedDashboardService(NativeInstallRequest request)
     {
-        var relatedProcessIds = (request.RelatedProcessIds ?? []).ToHashSet();
-        var blockers = new List<string>();
-        foreach (var process in Process.GetProcesses())
-        {
-            using (process)
-            {
-                if (process.Id == Environment.ProcessId) continue;
-                string? executable;
-                try { executable = process.MainModule?.FileName; }
-                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
-                {
-                    continue;
-                }
-                if (!NativeInstallProcessPolicy.IsBlockingInstallProcess(
-                        request.Platform,
-                        request.TargetDirectory,
-                        request.ParentProcessId,
-                        relatedProcessIds,
-                        process.Id,
-                        executable)) continue;
+        if (request.DashboardServiceProcessId is not { } serviceProcessId
+            || request.DashboardEndpoint is null
+            || request.DashboardInstanceId is null)
+            throw new InvalidOperationException(
+                "The update did not include a verified owned dashboard service handoff; retry from Codex Native.");
 
-                var kind = NativeInstallProcessPolicy.IsMainApplication(
+        using var process = GetOwnedDashboardProcess(request, serviceProcessId);
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        var endpoint = new Uri(request.DashboardEndpoint, UriKind.Absolute);
+        NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
+            request.DashboardInstanceId,
+            async cancellationToken =>
+            {
+                var compatibility = await client.GetFromJsonAsync<DashboardCompatibilityResponse>(
+                    new Uri(endpoint, "native/compatibility"), cancellationToken)
+                    ?? throw new InvalidOperationException(
+                        "The owned dashboard service returned an empty compatibility response; no process was stopped.");
+                return compatibility.Service == "ui-my-cli-dashboard"
+                    ? DashboardApiProbeResult.FromResponse(
+                        compatibility.Ok,
+                        compatibility.ApiVersion,
+                        compatibility.ActivePtys,
+                        compatibility.InstanceId)
+                    : DashboardApiProbeResult.Unreachable();
+            },
+            async cancellationToken =>
+            {
+                using var response = await client.PostAsJsonAsync(
+                    new Uri(endpoint, "native/shutdown"),
+                    new { instanceId = request.DashboardInstanceId },
+                    cancellationToken);
+                if (response.IsSuccessStatusCode) return;
+                var detail = await response.Content.ReadAsStringAsync(cancellationToken);
+                throw new InvalidOperationException(
+                    $"The owned dashboard service refused the update shutdown ({(int)response.StatusCode}): {detail}");
+            }).GetAwaiter().GetResult();
+        client.Dispose();
+
+        UpdateLog.Write($"Waiting for owned dashboard service PID {serviceProcessId} to stop gracefully.");
+        if (!process.WaitForExit((int)TimeSpan.FromSeconds(15).TotalMilliseconds))
+            throw new TimeoutException(
+                $"The owned dashboard service PID {serviceProcessId} did not stop within 15 seconds; " +
+                "no process was terminated. Retry the update after the service exits.");
+    }
+
+    private static Process GetOwnedDashboardProcess(NativeInstallRequest request, int serviceProcessId)
+    {
+        Process process;
+        try { process = Process.GetProcessById(serviceProcessId); }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidOperationException(
+                $"The owned dashboard service PID {serviceProcessId} exited before update handoff; retry the update.", ex);
+        }
+        try
+        {
+            string? executable;
+            try { executable = process.MainModule?.FileName; }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                throw new InvalidOperationException(
+                    $"Could not verify owned dashboard service PID {serviceProcessId}; no process was stopped.", ex);
+            }
+            if (!NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
                     request.Platform,
                     request.TargetDirectory,
-                    executable)
-                    ? "Codex Native app"
-                    : "terminal host";
-                blockers.Add($"{kind} PID {process.Id}");
-            }
+                    serviceProcessId,
+                    process.Id,
+                    executable))
+                throw new InvalidOperationException(
+                    $"Dashboard service PID {serviceProcessId} is not the owned service for this installation; " +
+                    "no process was stopped.");
+            return process;
         }
-
-        if (blockers.Count > 0)
-            throw new InvalidOperationException(
-                $"Close the other {string.Join(" and ", blockers)} before retrying the update; " +
-                "no unrelated process was stopped.");
-    }
-
-    private static void QuiesceRelatedTerminalHosts(NativeInstallRequest request)
-    {
-        var relatedProcessIds = (request.RelatedProcessIds ?? []).ToHashSet();
-        foreach (var processId in relatedProcessIds)
+        catch
         {
-            Process? process = null;
-            try
-            {
-                process = Process.GetProcessById(processId);
-                string? executable;
-                try { executable = process.MainModule?.FileName; }
-                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
-                {
-                    throw new InvalidOperationException(
-                        $"Could not verify terminal host PID {processId}; no process was stopped.", ex);
-                }
-                if (!NativeInstallProcessPolicy.CanTerminateRelatedTerminalHost(
-                        request.Platform,
-                        request.TargetDirectory,
-                        processId,
-                        relatedProcessIds,
-                        executable))
-                    throw new InvalidOperationException(
-                        $"Related PID {processId} is not a terminal host from this Codex Native installation; " +
-                        "no process was stopped.");
-
-                UpdateLog.Write($"Waiting for related terminal host PID {process.Id} to release the installation.");
-                try
-                {
-                    if (process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds)) continue;
-                    UpdateLog.Write($"Stopping verified related terminal host PID {process.Id} before installation.");
-                    process.Kill(entireProcessTree: true);
-                    if (!process.WaitForExit((int)TimeSpan.FromSeconds(10).TotalMilliseconds))
-                        throw new TimeoutException($"Related terminal host PID {process.Id} did not stop.");
-                }
-                catch (InvalidOperationException)
-                {
-                    if (!process.HasExited) throw;
-                }
-            }
-            catch (ArgumentException)
-            {
-            }
-            finally
-            {
-                process?.Dispose();
-            }
+            process.Dispose();
+            throw;
         }
     }
+
+    private sealed record DashboardCompatibilityResponse(
+        bool Ok,
+        int ApiVersion,
+        string Service,
+        string? InstanceId,
+        int ActivePtys);
 
     private static bool Install(NativeInstallRequest request)
     {
@@ -274,7 +271,7 @@ internal static class Program
 
     private static bool IsMainApplicationRunning(NativeInstallRequest request)
     {
-        foreach (var candidate in Process.GetProcesses())
+        foreach (var candidate in Process.GetProcessesByName("CodexNative"))
         {
             using (candidate)
             {
