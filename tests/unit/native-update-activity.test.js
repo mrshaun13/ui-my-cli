@@ -75,6 +75,20 @@ test('native update activity blocks archived provider sessions with active under
   assert.equal(result.blockingSessions, 1);
 });
 
+test('native update activity blocks archived transcript sessions by underlying status', () => {
+  const result = nativeUpdateActivity([
+    {
+      id: 'codex',
+      listSessions: () => [],
+      listArchivedSessions: () => [
+        { id: 'tp:active-run', status: 'archived', activityStatus: 'active' },
+      ],
+      isSessionInFlight: () => false,
+    },
+  ]);
+  assert.equal(result.blockingSessions, 1);
+});
+
 test('native update activity fails closed on provider read errors', () => {
   assert.throws(() => nativeUpdateActivity([
     { id: 'codex', listSessions: () => { throw new Error('state unavailable'); } },

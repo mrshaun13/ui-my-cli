@@ -604,6 +604,7 @@ function listArchivedSessions() {
         FROM message_nodes
         WHERE session_id IN (${placeholders})
       ) WHERE rn <= 10
+      ORDER BY session_id, rn
     `).all(...archivedIds);
     for (const row of tailRows) {
       if (!tailBySession.has(row.session_id)) tailBySession.set(row.session_id, []);

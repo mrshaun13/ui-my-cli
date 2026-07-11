@@ -47,12 +47,19 @@ internal static class Program
                 allowFailureRestart = false;
                 throw;
             }
-            catch
+            catch (Exception updateFailure)
             {
                 installLock ??= NativeInstallLock.Acquire(
                     request.TargetDirectory,
                     ProcessExitTimeout);
-                RestorePreviousInstall(request.TargetDirectory, hadPreviousInstall);
+                try
+                {
+                    RestorePreviousInstall(request.TargetDirectory, hadPreviousInstall);
+                }
+                catch (Exception recoveryFailure)
+                {
+                    throw NativeUpdatePolicy.RollbackFailure(updateFailure, recoveryFailure);
+                }
                 throw;
             }
             try
@@ -315,9 +322,7 @@ internal static class Program
                 UpdateLog.Write($"Could not remove incomplete staging after install failure: {recoveryFailure.Message}");
             }
             if (restoreFailure is not null)
-                throw new AggregateException(
-                    "The update installation failed and the previous installation could not be restored automatically.",
-                    [installFailure, restoreFailure]);
+                throw NativeUpdatePolicy.RollbackFailure(installFailure, restoreFailure);
             throw;
         }
     }

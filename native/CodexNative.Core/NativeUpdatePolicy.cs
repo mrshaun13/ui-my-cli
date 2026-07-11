@@ -18,4 +18,12 @@ public static class NativeUpdatePolicy
             throw new InvalidOperationException(
                 "The previous installation backup is missing; the failed installation was left in place.");
     }
+
+    public static AggregateException RollbackFailure(
+        Exception updateFailure,
+        Exception recoveryFailure) =>
+        new(
+            "The update failed and the previous installation could not be restored automatically.",
+            updateFailure,
+            recoveryFailure);
 }

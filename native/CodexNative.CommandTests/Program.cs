@@ -99,6 +99,17 @@ Check("rollback requires the previous installation backup before replacement", (
     Equal(true, missing.Contains("failed installation was left in place", StringComparison.Ordinal));
 });
 
+Check("rollback failures retain update and recovery diagnostics", () =>
+{
+    var updateFailure = new InvalidDataException("installed payload failed validation");
+    var recoveryFailure = new IOException("backup remained at .previous");
+    var combined = NativeUpdatePolicy.RollbackFailure(updateFailure, recoveryFailure);
+    Equal(2, combined.InnerExceptions.Count);
+    Equal(updateFailure, combined.InnerExceptions[0]);
+    Equal(recoveryFailure, combined.InnerExceptions[1]);
+    Equal(true, combined.Message.Contains("could not be restored automatically", StringComparison.Ordinal));
+});
+
 Check("terminal selection geometry maps and clamps pointer positions", () =>
 {
     Equal(new TerminalCell(0, 0), TerminalSelectionGeometry.CellAt(0, 0, 1200, 600, 120, 30));
