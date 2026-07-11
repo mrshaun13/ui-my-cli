@@ -481,8 +481,9 @@ instance. After the desktop exits, the helper revalidates that exact instance
 still has zero active provider sessions and PTYs, authenticates the graceful shutdown request, and waits a
 bounded time for only that PID to exit. Codex readiness includes explicit
 in-flight turn markers, so a quiet long-running tool remains an update blocker.
-An unmatched marker expires 24 hours after that turn started, which
-prevents an interrupted Codex process from blocking updates permanently.
+Devin readiness likewise tracks unresolved tool calls. Abandoned Codex turn
+markers and Devin tool calls expire after 24 hours of inactivity, which
+prevents an interrupted provider process from blocking updates permanently.
 It never scans or terminates unrelated
 terminal hosts, CLIs, IDEs, or native apps. The helper retries
 transient install-directory locks for a bounded period, holds a target-specific

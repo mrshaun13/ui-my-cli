@@ -27,6 +27,7 @@ const { isFallbackPendingSessionCandidate } = require('../../pending-session-lif
 
 let readDb;
 let writeDb;
+const IN_FLIGHT_TOOL_STALE_SEC = 24 * 60 * 60;
 
 /**
  * Returns a readonly connection to sessions.db.
@@ -168,13 +169,19 @@ function hasPendingToolCalls(nodes) {
   return pendingToolCallIds.size > 0 || pendingAnonymousToolCalls > 0;
 }
 
+function hasFreshPendingToolCalls(nodes, lastActivityAt, nowSec = Math.floor(Date.now() / 1000)) {
+  if (!hasPendingToolCalls(nodes)) return false;
+  if (!Number.isFinite(lastActivityAt)) return true;
+  return nowSec - lastActivityAt <= IN_FLIGHT_TOOL_STALE_SEC;
+}
+
 function deriveStatus(nodes, lastActivityAt) {
   if (!nodes || nodes.length === 0) return 'idle';
 
   const nowSec = Math.floor(Date.now() / 1000);
   const idleSec = nowSec - lastActivityAt;
 
-  if (hasPendingToolCalls(nodes)) return 'active';
+  if (hasFreshPendingToolCalls(nodes, lastActivityAt, nowSec)) return 'active';
 
   // Hard idle cutoff: 10 minutes of silence = nothing is happening
   if (idleSec > 600) return 'idle';
@@ -219,7 +226,10 @@ function deriveStatus(nodes, lastActivityAt) {
 }
 
 function isSessionInFlight(id) {
-  const rows = getReadDb().prepare(`
+  const db = getReadDb();
+  const session = db.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get(id);
+  if (!session) return false;
+  const rows = db.prepare(`
     SELECT chat_message
     FROM message_nodes
     WHERE session_id = ?
@@ -239,7 +249,10 @@ function isSessionInFlight(id) {
     if (message?.role === 'user') break;
   }
   currentTurn.reverse();
-  return hasPendingToolCalls(_dedupeMessageNodes(currentTurn));
+  return hasFreshPendingToolCalls(
+    _dedupeMessageNodes(currentTurn),
+    session.last_activity_at
+  );
 }
 
 /**

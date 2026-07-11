@@ -38,6 +38,10 @@ test('Devin status uses deterministic tails and preserves unresolved tool activi
     INSERT INTO sessions (id, working_directory, model, created_at, last_activity_at, title)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run('session-3', '/repo', 'devin', now - 1800, now - 1200, 'Completed tool');
+  db.prepare(`
+    INSERT INTO sessions (id, working_directory, model, created_at, last_activity_at, title)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run('session-4', '/repo', 'devin', now - 172800, now - 90000, 'Abandoned tool');
   const insertMessage = db.prepare(`
     INSERT INTO message_nodes (row_id, session_id, chat_message)
     VALUES (?, ?, ?)
@@ -60,6 +64,11 @@ test('Devin status uses deterministic tails and preserves unresolved tool activi
     tool_call_id: 'completed-tool',
     content: 'done',
   }));
+  insertMessage.run(7, 'session-4', JSON.stringify({
+    role: 'assistant',
+    content: null,
+    tool_calls: [{ id: 'abandoned-tool', function: { name: 'abandoned_tool' } }],
+  }));
   db.close();
   process.env.DEVIN_DB_PATH = sessionsPath;
   process.env.DEVIN_DASHBOARD_DB_PATH = dashboardPath;
@@ -71,11 +80,13 @@ test('Devin status uses deterministic tails and preserves unresolved tool activi
     assert.equal(session.status, 'archived');
     assert.equal(session.activityStatus, 'finished');
     const visible = store.listSessions();
-    assert.equal(visible.length, 2);
+    assert.equal(visible.length, 3);
     assert.equal(visible.find(candidate => candidate.id === 'session-2')?.status, 'active');
     assert.equal(visible.find(candidate => candidate.id === 'session-3')?.status, 'idle');
+    assert.equal(visible.find(candidate => candidate.id === 'session-4')?.status, 'idle');
     assert.equal(store.isSessionInFlight('session-2'), true);
     assert.equal(store.isSessionInFlight('session-3'), false);
+    assert.equal(store.isSessionInFlight('session-4'), false);
   } finally {
     delete process.env.DEVIN_DB_PATH;
     delete process.env.DEVIN_DASHBOARD_DB_PATH;
