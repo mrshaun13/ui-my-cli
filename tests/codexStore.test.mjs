@@ -130,6 +130,7 @@ test('native Codex rename validation resolves a title without writing Codex stat
     assert.equal(rolloutSession.lastUserPrompt, 'safe rollout prompt')
     assert.equal(latestPrompt().title, 'safe rollout prompt')
     assert.equal(latestPrompt().prompt, 'safe rollout prompt')
+    assert.equal(stats({ statsMode: 'codex' }).recentPrompts[0].title, 'safe rollout prompt')
     assert.equal(stats({ statsMode: 'codex' }).recentPrompts[0].prompt, 'safe rollout prompt')
 
     assert.equal(isSessionInFlight(threadId), false)

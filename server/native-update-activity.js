@@ -37,7 +37,18 @@ function nativeUpdateActivity(providers) {
       if (typeof inFlight !== 'boolean') {
         throw new TypeError(`Provider ${provider.id} returned an invalid in-flight session state.`);
       }
-      if (status === 'active' || inFlight) blockingSessions++;
+      let activityStatus = status;
+      if (status === 'archived') {
+        if (typeof session?.activityStatus === 'string') {
+          activityStatus = session.activityStatus.toLowerCase();
+          if (!validStatuses.has(activityStatus) || activityStatus === 'archived') {
+            throw new TypeError(`Provider ${provider.id} returned an invalid archived activity status.`);
+          }
+        } else if (typeof provider.isSessionInFlight !== 'function') {
+          throw new TypeError(`Provider ${provider.id} returned an invalid archived activity status.`);
+        }
+      }
+      if (activityStatus === 'active' || inFlight) blockingSessions++;
     }
   }
   return { blockingSessions };

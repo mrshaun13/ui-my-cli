@@ -325,10 +325,13 @@ internal static class Program
     private static void RestorePreviousInstall(string target, bool hadPreviousInstall)
     {
         var backup = $"{target}.previous";
+        NativeUpdatePolicy.RequireRollbackBackup(
+            hadPreviousInstall,
+            Directory.Exists(backup));
         RetryFileOperation(
             () => TryDeleteDirectory(target),
             "remove the failed installation during rollback");
-        if (hadPreviousInstall && Directory.Exists(backup))
+        if (hadPreviousInstall)
             RetryFileOperation(
                 () => Directory.Move(backup, target),
                 "restore the previous installation during rollback");

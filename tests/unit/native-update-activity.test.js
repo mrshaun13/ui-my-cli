@@ -61,6 +61,20 @@ test('native update activity includes archived sessions once', () => {
   assert.equal(result.blockingSessions, 2);
 });
 
+test('native update activity blocks archived provider sessions with active underlying status', () => {
+  const result = nativeUpdateActivity([
+    {
+      id: 'devin',
+      listSessions: () => [],
+      listArchivedSessions: () => [
+        { id: 'active-archived', status: 'archived', activityStatus: 'active' },
+        { id: 'idle-archived', status: 'archived', activityStatus: 'idle' },
+      ],
+    },
+  ]);
+  assert.equal(result.blockingSessions, 1);
+});
+
 test('native update activity fails closed on provider read errors', () => {
   assert.throws(() => nativeUpdateActivity([
     { id: 'codex', listSessions: () => { throw new Error('state unavailable'); } },
@@ -80,4 +94,7 @@ test('native update activity fails closed on provider read errors', () => {
   assert.throws(() => nativeUpdateActivity([
     { id: 'codex', listSessions: () => [{ id: 'bad', status: 'finished' }], isSessionInFlight: () => null },
   ]), /invalid in-flight session state/);
+  assert.throws(() => nativeUpdateActivity([
+    { id: 'devin', listSessions: () => [], listArchivedSessions: () => [{ id: 'hidden', status: 'archived' }] },
+  ]), /invalid archived activity status/);
 });

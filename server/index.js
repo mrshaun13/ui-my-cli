@@ -573,6 +573,7 @@ app.get(['/api/:providerId/sessions/:id', '/api/sessions/:id'], providerRoute((p
 }));
 
 app.post(['/api/:providerId/sessions/:id/rename', '/api/sessions/:id/rename'], providerRoute(async (provider, req, res) => {
+  let completeMutation = null;
   try {
     const { title } = req.body || {};
     if (typeof title !== 'string' && title !== null) {
@@ -586,12 +587,18 @@ app.post(['/api/:providerId/sessions/:id/rename', '/api/sessions/:id/rename'], p
         return res.status(400).json({ error: err.message });
       }
     }
+    completeMutation = nativeUpdateGate.tryBeginMutation();
+    if (!completeMutation) {
+      return res.status(503).json({ error: 'Dashboard service is stopping for a native update.' });
+    }
     const result = await provider.renameSession(req.params.id, canonicalTitle, { codexAppServer });
     // Push updated session list immediately to all status feed clients
     broadcastSessions(provider.id);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  } finally {
+    completeMutation?.();
   }
 }));
 

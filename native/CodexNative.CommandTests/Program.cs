@@ -90,6 +90,15 @@ Check("pending session rename resists stale status titles only during its guard 
     Equal("Another client title", SessionRenameGuard.ResolveTitle("Another client title", pending, now.AddSeconds(12)));
 });
 
+Check("rollback requires the previous installation backup before replacement", () =>
+{
+    NativeUpdatePolicy.RequireRollbackBackup(hadPreviousInstall: true, backupExists: true);
+    NativeUpdatePolicy.RequireRollbackBackup(hadPreviousInstall: false, backupExists: false);
+    var missing = ThrowsMessage<InvalidOperationException>(() =>
+        NativeUpdatePolicy.RequireRollbackBackup(hadPreviousInstall: true, backupExists: false));
+    Equal(true, missing.Contains("failed installation was left in place", StringComparison.Ordinal));
+});
+
 Check("terminal selection geometry maps and clamps pointer positions", () =>
 {
     Equal(new TerminalCell(0, 0), TerminalSelectionGeometry.CellAt(0, 0, 1200, 600, 120, 30));

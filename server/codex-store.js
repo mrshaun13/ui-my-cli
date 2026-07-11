@@ -1213,7 +1213,7 @@ function stats(options = {}) {
     if (prompt) {
       recentPrompts.push({
         sessionId: thread.id,
-        title: canonicalThreadTitle(thread),
+        title: canonicalThreadTitle(thread, prompt),
         project: projectName(thread.cwd),
         prompt,
         timestamp: thread.updated_at,

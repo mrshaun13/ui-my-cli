@@ -593,6 +593,28 @@ function listArchivedSessions() {
     ORDER BY last_activity_at DESC
   `).all(JSON.stringify([...hidden]));
 
+  const archivedIds = sessions.map(session => session.id);
+  const tailBySession = new Map();
+  if (archivedIds.length > 0) {
+    const placeholders = archivedIds.map(() => '?').join(',');
+    const tailRows = db.prepare(`
+      SELECT session_id, chat_message FROM (
+        SELECT session_id, chat_message,
+          ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY row_id DESC) AS rn
+        FROM message_nodes
+        WHERE session_id IN (${placeholders})
+      ) WHERE rn <= 10
+    `).all(...archivedIds);
+    for (const row of tailRows) {
+      if (!tailBySession.has(row.session_id)) tailBySession.set(row.session_id, []);
+      tailBySession.get(row.session_id).push(row);
+    }
+    for (const [id, rows] of tailBySession) {
+      rows.reverse();
+      tailBySession.set(id, _dedupeMessageNodes(rows).slice(-5));
+    }
+  }
+
   return sessions.map(session => {
     const firstUserPrompt = extractFirstUserPrompt(db, session.id);
     return {
@@ -602,6 +624,7 @@ function listArchivedSessions() {
       project: projectName(session.working_directory),
       model: session.model,
       status: 'archived',
+      activityStatus: deriveStatus(tailBySession.get(session.id) || [], session.last_activity_at),
       snippet: null,
       firstUserPrompt,
       lastActivityAt: session.last_activity_at,

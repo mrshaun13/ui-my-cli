@@ -11,4 +11,11 @@ public static class NativeUpdatePolicy
         IEnumerable<(string Status, bool IsHeadless)> sessions,
         bool hasRunningLocalShell) =>
         !hasRunningLocalShell && CountBlockingSessions(sessions) == 0;
+
+    public static void RequireRollbackBackup(bool hadPreviousInstall, bool backupExists)
+    {
+        if (hadPreviousInstall && !backupExists)
+            throw new InvalidOperationException(
+                "The previous installation backup is missing; the failed installation was left in place.");
+    }
 }
