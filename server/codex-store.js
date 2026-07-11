@@ -903,7 +903,9 @@ function resolveNativeRenameTitle(id, title) {
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) throw new Error('Codex session not found');
   const nextTitle = title === null
-    ? (storedPromptOrPreview(thread) || storedTitle(thread) || thread.id.slice(0, 8))
+    ? sessionCanonicalTitle(
+      storedPromptOrPreview(thread) || storedTitle(thread) || thread.id.slice(0, 8),
+      thread.id.slice(0, 8))
     : normalizeNativeTitle(title);
   return { id, title: nextTitle };
 }

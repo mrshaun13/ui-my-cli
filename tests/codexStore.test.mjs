@@ -69,6 +69,17 @@ test('native Codex rename validation resolves a title without writing Codex stat
     assert.equal(resolveNativeRenameTitle(threadId, null).title, 'safe fallback')
     assert.equal(latestPrompt().prompt, 'safe fallback')
 
+    const invalidResetMetadata = new Database(statePath)
+    invalidResetMetadata.prepare(`
+      UPDATE threads
+      SET title = '', first_user_message = ?, preview = ?
+      WHERE id = ?
+    `).run('<environment_context>injected dashboard metadata</environment_context>', `line one\n${'x'.repeat(200)}`, threadId)
+    invalidResetMetadata.close()
+    const resetTitle = resolveNativeRenameTitle(threadId, null).title
+    assert.equal(Array.from(resetTitle).length, 160)
+    assert.equal(resetTitle.includes('\n'), false)
+
     const writableMetadata = new Database(statePath)
     writableMetadata.prepare(`
       UPDATE threads

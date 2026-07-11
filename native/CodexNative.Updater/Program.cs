@@ -26,7 +26,9 @@ internal static class Program
             WaitForProcess(request.ParentProcessId, "native app", ProcessExitTimeout);
             parentExited = true;
             WaitForRelatedProcesses(request);
+            EnsureNoOtherInstallProcesses(request, request.DashboardServiceProcessId);
             QuiesceOwnedDashboardService(request);
+            EnsureNoOtherInstallProcesses(request);
             var hadPreviousInstall = Install(request);
             try
             {
@@ -73,6 +75,49 @@ internal static class Program
     {
         foreach (var processId in request.RelatedProcessIds ?? [])
             WaitForProcess(processId, "terminal bridge", TimeSpan.FromSeconds(15));
+    }
+
+    private static void EnsureNoOtherInstallProcesses(
+        NativeInstallRequest request,
+        int? ownedDashboardServiceProcessId = null)
+    {
+        var blockers = new List<string>();
+        var seen = new HashSet<int>();
+        foreach (var processName in new[]
+                 {
+                     "CodexNative",
+                     "CodexNative.TerminalHost",
+                     "CodexNative.Term",
+                     "CodexNative.Ter",
+                 })
+        {
+            foreach (var process in Process.GetProcessesByName(processName))
+            {
+                using (process)
+                {
+                    if (!seen.Add(process.Id)) continue;
+                    string? executable;
+                    try { executable = process.MainModule?.FileName; }
+                    catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+                    {
+                        continue;
+                    }
+                    if (NativeInstallProcessPolicy.IsUpdateBlocker(
+                            request.Platform,
+                            request.TargetDirectory,
+                            process.Id,
+                            executable,
+                            ownedDashboardServiceProcessId))
+                    {
+                        blockers.Add($"{process.ProcessName} (PID {process.Id})");
+                    }
+                }
+            }
+        }
+        if (blockers.Count > 0)
+            throw new InvalidOperationException(
+                $"Close the other Codex Native instance or terminal bridge and retry the update: {string.Join(", ", blockers)}. " +
+                "No unrelated process was stopped.");
     }
 
     private static void WaitForProcess(
@@ -243,6 +288,7 @@ internal static class Program
     private static void Restart(NativeInstallRequest request)
     {
         ProcessStartInfo startInfo;
+        DateTimeOffset? restartRequestedAt = null;
         if (request.Platform == NativePlatform.Windows)
         {
             startInfo = new ProcessStartInfo
@@ -254,6 +300,7 @@ internal static class Program
         }
         else
         {
+            restartRequestedAt = DateTimeOffset.UtcNow;
             startInfo = new ProcessStartInfo
             {
                 FileName = "/usr/bin/open",
@@ -278,13 +325,15 @@ internal static class Program
         var deadline = Stopwatch.StartNew();
         while (deadline.Elapsed < TimeSpan.FromSeconds(10))
         {
-            if (IsMainApplicationRunning(request)) return;
+            if (IsMainApplicationRunning(request, restartRequestedAt!.Value)) return;
             Thread.Sleep(TimeSpan.FromMilliseconds(250));
         }
         throw new InvalidOperationException("macOS accepted the open request, but Codex Native did not remain running.");
     }
 
-    private static bool IsMainApplicationRunning(NativeInstallRequest request)
+    private static bool IsMainApplicationRunning(
+        NativeInstallRequest request,
+        DateTimeOffset startedAfter)
     {
         foreach (var candidate in Process.GetProcessesByName("CodexNative"))
         {
@@ -299,10 +348,20 @@ internal static class Program
                 if (NativeInstallProcessPolicy.IsMainApplication(
                         request.Platform,
                         request.TargetDirectory,
-                        executable)) return true;
+                        executable)
+                    && ProcessStartedAt(candidate) >= startedAfter) return true;
             }
         }
         return false;
+
+        static DateTimeOffset ProcessStartedAt(Process process)
+        {
+            try { return new DateTimeOffset(process.StartTime.ToUniversalTime()); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                return DateTimeOffset.MinValue;
+            }
+        }
     }
 
     private static void VerifyInstalledVersion(NativeInstallRequest request)

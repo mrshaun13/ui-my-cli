@@ -95,7 +95,7 @@ export function useStatusFeed(providerId) {
         else if (msg.type === 'rekey' && msg.tempKey && msg.realId) {
           setRekeyMap(prev => ({ ...prev, [msg.tempKey]: msg.realId }))
           if (msg.collision) {
-            setCollisionNotice('Session already had a canonical terminal; switched to it and closed the redundant pending terminal.')
+            setCollisionNotice('Session already had a canonical terminal; redundant terminal cleanup occurs only after its client detaches.')
             clearTimeout(collisionNoticeTimerRef.current)
             collisionNoticeTimerRef.current = setTimeout(() => setCollisionNotice(''), 8000)
           }

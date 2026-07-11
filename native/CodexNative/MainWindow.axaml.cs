@@ -1648,57 +1648,44 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(temporaryKey) || string.IsNullOrWhiteSpace(realId)
             || !_openTabs.TryGetValue(ProviderTabKey(providerId, temporaryKey), out var state)
             || state.Kind != TerminalSessionKind.Codex) return;
-        if (collision
-            && _openTabs.TryGetValue(ProviderTabKey(providerId, realId), out var canonicalState)
-            && !ReferenceEquals(state, canonicalState))
-        {
-            CancelTerminalReconnect(state, suppress: true);
-            EndTerminalStartupReveal(state);
-            state.Terminal.Kill();
-            state.Pane.Tabs.Items.Remove(state.Tab);
-            _openTabs.Remove(OpenTabRegistryKey(state));
-            UpdatePaneAdaptiveControls(state.Pane);
-            SelectPaneFallback(state.Pane);
-            canonicalState.Pane.Tabs.SelectedItem = canonicalState.Tab;
-            SetActivePane(canonicalState.Pane);
-            UpdatePaneEmptyStates();
-            SetStatus("Session was already open · switched to its canonical terminal", StartingBrush);
-            _ = SaveWorkspaceAsync();
-            return;
-        }
         var session = string.Equals(state.ProviderId, _api.ProviderId, StringComparison.Ordinal)
             ? _sessions.FirstOrDefault(candidate => candidate.Id == realId)
             : null;
-        _openTabs.Remove(OpenTabRegistryKey(state));
-        state.Key = realId;
-        state.Session = session;
-        state.RawTitle = session?.DisplayTitle ?? state.RawTitle;
-        state.TitleBlock.Text = session is null
-            ? SessionTitleDisplay.Compact(state.RawTitle)
-            : session.CompactDisplayTitle;
-        AutomationProperties.SetName(state.Tab, state.TitleBlock.Text ?? ProviderNoun(state.ProviderId));
-        state.RenameBox.Text = session?.DisplayTitle ?? state.RenameBox.Text;
-        state.ArchiveButton.IsVisible = session is not null;
-        state.SummaryButton.IsVisible = session is not null;
-        _openTabs[OpenTabRegistryKey(state)] = state;
-        if (session is not null) _ = LoadSessionDetailsAsync(state, session);
-        UpdatePaneAdaptiveControls(state.Pane);
         if (collision)
         {
             CancelTerminalReconnect(state, suppress: true);
             EndTerminalStartupReveal(state);
-            state.Terminal.Kill();
-            state.IsRunning = false;
-            state.IsLaunched = false;
-            state.SuppressReconnect = false;
-            _ = EnsureTerminalLaunchedAsync(state);
-            SetStatus("Session already had a canonical terminal · redundant pending terminal detached", StartingBrush);
+            state.CollisionSessionId = realId;
+            if (session is not null) BindRegisteredSession(state, session);
+            UpdatePaneAdaptiveControls(state.Pane);
+            SetStatus(
+                _openTabs.TryGetValue(ProviderTabKey(providerId, realId), out var canonicalState)
+                    && !ReferenceEquals(state, canonicalState)
+                    ? "Session registered · canonical terminal also open · pending terminal retained until closed"
+                    : "Session registered · canonical terminal exists elsewhere · pending terminal retained until closed",
+                StartingBrush);
+            _ = SaveWorkspaceAsync();
+            return;
         }
-        else
-        {
-            SetStatus($"Session registered · {realId[..Math.Min(8, realId.Length)]}", RunningBrush);
-        }
+        _openTabs.Remove(OpenTabRegistryKey(state));
+        state.Key = realId;
+        if (session is not null) BindRegisteredSession(state, session);
+        _openTabs[OpenTabRegistryKey(state)] = state;
+        UpdatePaneAdaptiveControls(state.Pane);
+        SetStatus($"Session registered · {realId[..Math.Min(8, realId.Length)]}", RunningBrush);
         _ = SaveWorkspaceAsync();
+    }
+
+    private void BindRegisteredSession(SessionTabState state, DashboardSession session)
+    {
+        state.Session = session;
+        state.RawTitle = session.DisplayTitle;
+        state.TitleBlock.Text = session.CompactDisplayTitle;
+        AutomationProperties.SetName(state.Tab, session.CompactDisplayTitle);
+        state.RenameBox.Text = session.DisplayTitle;
+        state.ArchiveButton.IsVisible = true;
+        state.SummaryButton.IsVisible = true;
+        _ = LoadSessionDetailsAsync(state, session);
     }
 
     private void RemoveExpiredPendingSession(string temporaryKey, string? providerId = null)
@@ -1914,6 +1901,16 @@ public sealed partial class MainWindow : Window
     private void ReconcilePendingSessions()
     {
         var changed = false;
+        foreach (var state in _openTabs.Values
+                     .Where(state => state.CollisionSessionId is not null && state.Session is null)
+                     .ToList())
+        {
+            var registered = _sessions.FirstOrDefault(session => session.Id == state.CollisionSessionId);
+            if (registered is null) continue;
+            BindRegisteredSession(state, registered);
+            UpdatePaneAdaptiveControls(state.Pane);
+            changed = true;
+        }
         foreach (var state in _openTabs.Values
                      .Where(state => state.Kind == TerminalSessionKind.Codex
                          && state.ProviderId == _api.ProviderId
@@ -4573,6 +4570,11 @@ public sealed partial class MainWindow : Window
             await StopAndRemoveTabAsync(state, selectFallback);
             return;
         }
+        if (state.CollisionSessionId is not null)
+        {
+            await StopAndRemoveTabAsync(state, selectFallback);
+            return;
+        }
         await CancelSpeechCaptureAsync(state);
         CancelTerminalReconnect(state, suppress: true);
         EndTerminalStartupReveal(state);
@@ -5010,6 +5012,17 @@ public sealed partial class MainWindow : Window
             if (_shutdownConfirmed || state.SuppressReconnect || !state.IsAttached)
             {
                 state.StatusGlyph.Foreground = args.ExitCode == 0 ? StartingBrush : ErrorBrush;
+                if (state.CollisionSessionId is not null && state.IsAttached)
+                {
+                    state.Pane.Tabs.Items.Remove(state.Tab);
+                    state.IsAttached = false;
+                    _openTabs.Remove(OpenTabRegistryKey(state));
+                    UpdatePaneAdaptiveControls(state.Pane);
+                    SelectPaneFallback(state.Pane);
+                    UpdatePaneEmptyStates();
+                    SetStatus("Redundant pending terminal exited · canonical session retained", StartingBrush);
+                    _ = SaveWorkspaceAsync();
+                }
                 return;
             }
             BeginTerminalReconnect(state, args.ExitCode);
@@ -7174,5 +7187,6 @@ public sealed partial class MainWindow : Window
         public int SessionDetailsGeneration { get; set; }
         public bool TerminalStartupAllowsQuietReveal { get; set; }
         public bool ArchiveConfirmationPending { get; set; }
+        public string? CollisionSessionId { get; set; }
     }
 }

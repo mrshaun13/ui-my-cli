@@ -502,6 +502,30 @@ Check("updater accepts only the explicitly owned dashboard service process", () 
         NativePlatform.MacOS,
         "/Applications/CodexNative.app",
         "/Applications/CodexNative.app/Contents/MacOS/CodexNative"));
+    Equal(true, NativeInstallProcessPolicy.IsUpdateBlocker(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        789,
+        "/apps/CodexNative/CodexNative.exe",
+        456));
+    Equal(true, NativeInstallProcessPolicy.IsUpdateBlocker(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        789,
+        "/apps/CodexNative/CodexNative.TerminalHost.exe",
+        456));
+    Equal(false, NativeInstallProcessPolicy.IsUpdateBlocker(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        456,
+        "/apps/CodexNative/CodexNative.TerminalHost.exe",
+        456));
+    Equal(false, NativeInstallProcessPolicy.IsUpdateBlocker(
+        NativePlatform.Windows,
+        "/apps/CodexNative",
+        789,
+        "/other/CodexNative.TerminalHost.exe",
+        456));
 });
 
 await CheckAsync("owned dashboard handoff revalidates before stopping", async () =>

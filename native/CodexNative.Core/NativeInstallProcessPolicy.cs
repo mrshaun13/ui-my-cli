@@ -54,4 +54,16 @@ public static class NativeInstallProcessPolicy
         return Path.GetFullPath(expected).Equals(Path.GetFullPath(processExecutable), comparison);
     }
 
+    public static bool IsUpdateBlocker(
+        NativePlatform platform,
+        string targetDirectory,
+        int candidateProcessId,
+        string? processExecutable,
+        int? ownedDashboardServiceProcessId = null)
+    {
+        if (candidateProcessId <= 0 || candidateProcessId == ownedDashboardServiceProcessId) return false;
+        return IsMainApplication(platform, targetDirectory, processExecutable)
+            || IsOwnedTerminalHost(platform, targetDirectory, processExecutable);
+    }
+
 }
