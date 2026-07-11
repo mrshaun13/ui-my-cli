@@ -209,6 +209,7 @@ function emptyRolloutSummary(pathname) {
     lastUser: null,
     lastAssistant: null,
     subagentIds: new Set(),
+    activeTurnIds: new Set(),
   };
 }
 
@@ -236,6 +237,13 @@ function applySummaryEvent(summary, event) {
     && event.payload?.kind === 'started'
     && event.payload?.agent_thread_id) {
     summary.subagentIds.add(event.payload.agent_thread_id);
+  }
+  if (event.type === 'event_msg' && event.payload?.turn_id) {
+    if (event.payload.type === 'task_started') {
+      summary.activeTurnIds.add(event.payload.turn_id);
+    } else if (event.payload.type === 'task_complete' || event.payload.type === 'turn_aborted') {
+      summary.activeTurnIds.delete(event.payload.turn_id);
+    }
   }
 
   const msg = event.type === 'response_item'
@@ -266,6 +274,7 @@ function publicRolloutSummary(entry) {
     currentReasoningEffort: entry.summary.currentReasoningEffort,
     messages,
     subagentCount: entry.summary.subagentIds.size,
+    inFlightTurnCount: entry.summary.activeTurnIds.size,
   };
 }
 
@@ -574,6 +583,11 @@ function getSession(id) {
   if (transcriptHeadless.isTranscriptHeadlessId(id)) return transcriptHeadless.getSession(id);
   const thread = getThread(id, { includeArchived: false, includeSystem: false });
   return thread ? normalizeThread(thread) : null;
+}
+
+function isSessionInFlight(id) {
+  const thread = getThread(id, { includeArchived: false, includeSystem: false });
+  return thread ? readRolloutSummary(thread).inFlightTurnCount > 0 : false;
 }
 
 function topTools(rollout, limit = 6) {
@@ -1435,6 +1449,7 @@ module.exports = {
   listSessions,
   listArchivedSessions,
   getSession,
+  isSessionInFlight,
   getSessionPreview,
   getSessionConversation,
   getSessionContextBreakdown,

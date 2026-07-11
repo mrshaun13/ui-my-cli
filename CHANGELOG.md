@@ -37,7 +37,10 @@
 - Preserved collided browser terminals with separate canonical metadata and
   transport identities, and bounded temporary-to-canonical compatibility maps.
 - Closed native update races with authenticated all-provider activity
-  revalidation and an install-scoped lock honored by competing native starts.
+  revalidation, explicit Codex in-flight turn detection, and an install-scoped
+  lock honored by competing native starts.
+- Retried rollback filesystem operations for the same bounded period as
+  installation so transient file locks cannot strand a partial restore.
 - Kept successful browser renames stable across stale status-feed frames while
   the provider's canonical title persistence catches up.
 - Added cached and coalesced GitHub release checks with ETag revalidation,

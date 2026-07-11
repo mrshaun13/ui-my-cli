@@ -290,9 +290,13 @@ internal static class Program
         }
         catch
         {
-            TryDeleteDirectory(installStaging);
+            RetryFileOperation(
+                () => TryDeleteDirectory(installStaging),
+                "remove the incomplete staged installation");
             if (targetMoved && !Directory.Exists(target) && Directory.Exists(backup))
-                Directory.Move(backup, target);
+                RetryFileOperation(
+                    () => Directory.Move(backup, target),
+                    "restore the previous installation after install failure");
             throw;
         }
     }
@@ -300,8 +304,13 @@ internal static class Program
     private static void RestorePreviousInstall(string target, bool hadPreviousInstall)
     {
         var backup = $"{target}.previous";
-        TryDeleteDirectory(target);
-        if (hadPreviousInstall && Directory.Exists(backup)) Directory.Move(backup, target);
+        RetryFileOperation(
+            () => TryDeleteDirectory(target),
+            "remove the failed installation during rollback");
+        if (hadPreviousInstall && Directory.Exists(backup))
+            RetryFileOperation(
+                () => Directory.Move(backup, target),
+                "restore the previous installation during rollback");
     }
 
     private static void Restart(NativeInstallRequest request, ref NativeInstallLock? installLock)

@@ -22,6 +22,22 @@ test('native update activity skips unavailable providers', () => {
   assert.equal(result.blockingSessions, 1);
 });
 
+test('native update activity blocks a quiet session with an in-flight provider turn', () => {
+  const checked = [];
+  const result = nativeUpdateActivity([
+    {
+      id: 'codex',
+      listSessions: () => [{ id: 'quiet-turn', status: 'finished' }],
+      isSessionInFlight: id => {
+        checked.push(id);
+        return true;
+      },
+    },
+  ]);
+  assert.deepEqual(checked, ['quiet-turn']);
+  assert.equal(result.blockingSessions, 1);
+});
+
 test('native update activity fails closed on provider read errors', () => {
   assert.throws(() => nativeUpdateActivity([
     { id: 'codex', listSessions: () => { throw new Error('state unavailable'); } },
@@ -35,4 +51,7 @@ test('native update activity fails closed on provider read errors', () => {
   assert.throws(() => nativeUpdateActivity([
     { id: 'codex', availability: () => { throw new Error('availability failed'); }, listSessions: () => [] },
   ]), /availability failed/);
+  assert.throws(() => nativeUpdateActivity([
+    { id: 'codex', listSessions: () => [{ id: 'bad', status: 'finished' }], isSessionInFlight: () => null },
+  ]), /invalid in-flight session state/);
 });

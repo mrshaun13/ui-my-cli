@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
@@ -41,7 +41,7 @@ test('native Codex rename validation resolves a title without writing Codex stat
   process.env.UI_MY_CLI_DB_PATH = path.join(dir, 'dashboard.sqlite')
 
   try {
-    const { findNewSessionInDir, getSession, latestPrompt, resolveNativeRenameTitle } = await import('../server/codex-store.js')
+    const { findNewSessionInDir, getSession, isSessionInFlight, latestPrompt, resolveNativeRenameTitle } = await import('../server/codex-store.js')
     assert.deepEqual(resolveNativeRenameTitle(threadId, 'Fix keyboard shortcuts and rename functionality'), {
       id: threadId,
       title: 'Fix keyboard shortcuts and rename functionality',
@@ -129,6 +129,29 @@ test('native Codex rename validation resolves a title without writing Codex stat
     assert.equal(rolloutSession.lastUserPrompt, 'safe rollout prompt')
     assert.equal(latestPrompt().title, 'safe rollout prompt')
     assert.equal(latestPrompt().prompt, 'safe rollout prompt')
+
+    assert.equal(isSessionInFlight(threadId), false)
+    appendFileSync(syntheticRollout, JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'long-running-turn' },
+    }) + '\n')
+    assert.equal(isSessionInFlight(threadId), true)
+    appendFileSync(syntheticRollout, JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'long-running-turn' },
+    }) + '\n')
+    assert.equal(isSessionInFlight(threadId), false)
+
+    appendFileSync(syntheticRollout, JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'aborted-turn' },
+    }) + '\n')
+    assert.equal(isSessionInFlight(threadId), true)
+    appendFileSync(syntheticRollout, JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'turn_aborted', turn_id: 'aborted-turn' },
+    }) + '\n')
+    assert.equal(isSessionInFlight(threadId), false)
 
     const expectedRollout = path.join(dir, 'expected.jsonl')
     const unrelatedRollout = path.join(dir, 'unrelated.jsonl')

@@ -8,7 +8,7 @@ with an appropriate HTTP status code.
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/api/native/compatibility` | Fast native startup probe — returns API version, service instance identity, and active PTY count without database or provider CLI checks. |
-| `GET` | `/api/native/update-readiness` | Authenticated native update gate — returns the exact service identity plus fail-closed active PTY and provider-session counts. |
+| `GET` | `/api/native/update-readiness` | Authenticated native update gate — returns the exact service identity plus fail-closed active PTY and provider-session counts, including explicitly in-flight Codex turns. |
 | `POST` | `/api/native/shutdown` | Gracefully stop the exact private dashboard service only after blocking new attachments and revalidating its control capability, identity, active PTYs, and provider sessions. |
 | `GET` | `/api/status` | Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds |
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |

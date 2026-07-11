@@ -19,7 +19,13 @@ function nativeUpdateActivity(providers) {
       if (!validStatuses.has(status)) {
         throw new TypeError(`Provider ${provider.id} returned an invalid session status.`);
       }
-      if (status === 'active') blockingSessions++;
+      const inFlight = typeof provider.isSessionInFlight === 'function'
+        ? provider.isSessionInFlight(session.id)
+        : false;
+      if (typeof inFlight !== 'boolean') {
+        throw new TypeError(`Provider ${provider.id} returned an invalid in-flight session state.`);
+      }
+      if (status === 'active' || inFlight) blockingSessions++;
     }
   }
   return { blockingSessions };
