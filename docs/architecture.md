@@ -92,7 +92,7 @@ macOS native app  →  Avalonia terminal control  →  validated project path  �
 | `native/CodexNative.Core/TerminalClipboardShortcut.cs` | Maps platform-safe terminal copy, copy-all, and paste shortcuts without taking ordinary shell control keys. |
 | `native/CodexNative/NativeUpdateService.cs` | Coalesced cached native release checks, verified staging, and external updater launch orchestration. |
 | `native/CodexNative.Updater/Program.cs` | Out-of-process retrying installation, version/startup validation, rollback, result reporting, and native-app restart helper. |
-| `native/CodexNative/DashboardStatusFeed.cs` | Reconnecting provider-scoped status-feed client for push-driven native session, rekey, and pending-terminal expiry events. |
+| `native/CodexNative/DashboardStatusFeed.cs` | Reconnecting provider-scoped status-feed client for push-driven native session, rekey, and pending-terminal process-exit events. |
 | `native/CodexNative/AnalyticsControls.cs` | Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition. |
 | `native/CodexNative/SessionPreviewControl.cs` | Rich native session summary with provider-scoped conversation history, context composition, model changes, and Codex subagent timelines. |
 | `native/CodexNative/DashboardModels.cs` | Typed multi-provider dashboard, bounded session-display, context, analytics, conversation, rate-limit, provider-catalog, and subagent payload models. |

@@ -287,6 +287,11 @@ Check("session display text cannot expand sidebar rows or tab headers", () =>
     Equal(SessionDisplayText.MaximumTitleLength, emojiTitle.Length);
 });
 
+Check("legacy session display titles replace every control character", () =>
+{
+    Equal("safe title", SessionDisplayText.CanonicalTitleOrDisplay("safe\0\u001b\u0085title"));
+});
+
 Check("release downloads are restricted to GitHub HTTPS hosts", () =>
 {
     Equal(true, GitHubReleaseClient.IsTrustedDownloadUri(

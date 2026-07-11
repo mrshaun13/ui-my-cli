@@ -284,7 +284,7 @@ function collect() {
   fileDescs['native/CodexNative.Updater/Program.cs'] =
     'Out-of-process retrying installation, version/startup validation, rollback, result reporting, and native-app restart helper.';
   fileDescs['native/CodexNative/DashboardStatusFeed.cs'] =
-    'Reconnecting provider-scoped status-feed client for push-driven native session, rekey, and pending-terminal expiry events.';
+    'Reconnecting provider-scoped status-feed client for push-driven native session, rekey, and pending-terminal process-exit events.';
   fileDescs['native/CodexNative/AnalyticsControls.cs'] =
     'Animated, hoverable native charts for token activity, heatmaps, project trends, segmented token bars, and context composition.';
   fileDescs['native/CodexNative/SessionPreviewControl.cs'] =
@@ -653,7 +653,7 @@ ${mdTable(
     ['`sessions`',      '`{ type: "sessions", data: Session[] }`',                              'Every 3 seconds + immediately on connect + after mutations'],
     ['`latest-prompt`', '`{ type: "latest-prompt", data: { content, timestamp, isShell } }`',   'DB write events + immediately on connect'],
     ['`rekey`',         '`{ type: "rekey", tempKey: string, realId: string }`',                  'A temporary new-session PTY is safely correlated to its persisted provider session'],
-    ['`pending-expired`', '`{ type: "pending-expired", tempKey: string }`',                      'A temporary PTY exits or remains detached before session registration'],
+    ['`pending-expired`', '`{ type: "pending-expired", tempKey: string }`',                      'A temporary PTY process exits before session registration'],
   ]
 )}
 

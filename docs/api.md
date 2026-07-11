@@ -97,7 +97,7 @@ Compatibility alias: `/ws/status` uses the default provider.
 | `sessions` | `{ type: "sessions", data: Session[] }` | Every 3 seconds + immediately on connect + after mutations |
 | `latest-prompt` | `{ type: "latest-prompt", data: { content, timestamp, isShell } }` | DB write events + immediately on connect |
 | `rekey` | `{ type: "rekey", tempKey: string, realId: string }` | A temporary new-session PTY is safely correlated to its persisted provider session |
-| `pending-expired` | `{ type: "pending-expired", tempKey: string }` | A temporary PTY exits or remains detached before session registration |
+| `pending-expired` | `{ type: "pending-expired", tempKey: string }` | A temporary PTY process exits before session registration |
 
 ## Environment Variables
 

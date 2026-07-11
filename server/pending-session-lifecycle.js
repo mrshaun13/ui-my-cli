@@ -9,6 +9,11 @@
  */
 
 const FALLBACK_CORRELATION_EARLY_TOLERANCE_MS = 2_000;
+const PENDING_RECONCILIATION_FAST_WINDOW_MS = 60_000;
+const PENDING_RECONCILIATION_FAST_INTERVAL_MS = 2_000;
+const PENDING_RECONCILIATION_MEDIUM_WINDOW_MS = 5 * 60_000;
+const PENDING_RECONCILIATION_MEDIUM_INTERVAL_MS = 10_000;
+const PENDING_RECONCILIATION_SLOW_INTERVAL_MS = 30_000;
 
 function pendingSessionDisposition(realSessionId, ptyState) {
   if (typeof realSessionId === 'string' && realSessionId.length > 0) return 'rekey';
@@ -22,8 +27,34 @@ function isFallbackPendingSessionCandidate(createdAt, startedAt) {
     && createdAt >= startedAt - FALLBACK_CORRELATION_EARLY_TOLERANCE_MS;
 }
 
+function pendingReconciliationDelay(elapsedMs) {
+  if (elapsedMs < PENDING_RECONCILIATION_FAST_WINDOW_MS) {
+    return PENDING_RECONCILIATION_FAST_INTERVAL_MS;
+  }
+  if (elapsedMs < PENDING_RECONCILIATION_MEDIUM_WINDOW_MS) {
+    return PENDING_RECONCILIATION_MEDIUM_INTERVAL_MS;
+  }
+  return PENDING_RECONCILIATION_SLOW_INTERVAL_MS;
+}
+
+function pendingSessionExclusionIds(baselineIds, pendingToReal, providerId) {
+  const excluded = new Set(baselineIds);
+  const providerPrefix = `${providerId}:`;
+  for (const [key, claimedId] of pendingToReal) {
+    if (key.startsWith(providerPrefix)) excluded.add(claimedId);
+  }
+  return excluded;
+}
+
 module.exports = {
   FALLBACK_CORRELATION_EARLY_TOLERANCE_MS,
+  PENDING_RECONCILIATION_FAST_INTERVAL_MS,
+  PENDING_RECONCILIATION_FAST_WINDOW_MS,
+  PENDING_RECONCILIATION_MEDIUM_INTERVAL_MS,
+  PENDING_RECONCILIATION_MEDIUM_WINDOW_MS,
+  PENDING_RECONCILIATION_SLOW_INTERVAL_MS,
   isFallbackPendingSessionCandidate,
+  pendingReconciliationDelay,
+  pendingSessionExclusionIds,
   pendingSessionDisposition,
 };

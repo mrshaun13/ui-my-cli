@@ -32,7 +32,11 @@ const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./provi
 const { isTrustedLaunchRequest, launchNativeDashboard, nativeLaunchCapability } = require('./native-launcher');
 const { CodexAppServer } = require('./codex-app-server');
 const { wantsCodexControlPlane, tryStartCodexControlPlane } = require('./codex-control-plane');
-const { pendingSessionDisposition } = require('./pending-session-lifecycle');
+const {
+  pendingReconciliationDelay,
+  pendingSessionDisposition,
+  pendingSessionExclusionIds,
+} = require('./pending-session-lifecycle');
 const { validateSessionTitle } = require('./session-display-text');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
@@ -272,47 +276,61 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
     // poll in the background to re-key the PTY entry once the real session ID
     // appears. This prevents a duplicate PTY from being spawned if the user
     // clicks the sidebar card for the new session.
-    const POLL_INTERVAL = 2000;
+    const pollingStartedAt = Date.now();
     let polls = 0;
+    let bgPoll = null;
 
-    const bgPoll = setInterval(() => {
+    const pollForPersistedSession = () => {
       polls++;
       let realId = null;
       try {
-        realId = provider.findNewSessionInDir(workingDir, before, ownership);
+        const excludeIds = pendingSessionExclusionIds(before, pendingToReal, provider.id);
+        realId = provider.findNewSessionInDir(workingDir, excludeIds, ownership);
       } catch (err) {
         console.warn(`[${provider.id}:create] re-key poll ${polls} failed: ${err.message}`);
         const disposition = pendingSessionDisposition(
           null,
           pendingPtyState(provider.id, tempKey));
         if (disposition === 'expire') {
-          clearInterval(bgPoll);
           killPty(provider.id, tempKey);
           broadcastPendingExpired(provider.id, tempKey);
+          return;
         }
+        bgPoll = setTimeout(
+          pollForPersistedSession,
+          pendingReconciliationDelay(Date.now() - pollingStartedAt));
+        bgPoll.unref?.();
         return;
       }
       const disposition = pendingSessionDisposition(
         realId,
         pendingPtyState(provider.id, tempKey));
       if (disposition === 'rekey') {
-        clearInterval(bgPoll);
-        pendingToReal.set(pendingKey(provider.id, tempKey), realId);
         if (rekeyPty(provider.id, tempKey, realId)) {
+          pendingToReal.set(pendingKey(provider.id, tempKey), realId);
           console.log(`[${provider.id}:create] re-keyed ${tempKey.slice(0, 20)}… → ${realId.slice(0, 8)}…`);
+          broadcastRekey(provider.id, tempKey, realId);
+          broadcastSessions(provider.id);
+          return;
         }
-        broadcastRekey(provider.id, tempKey, realId);
-        broadcastSessions(provider.id);
+        console.warn(`[${provider.id}:create] refused re-key collision for ${realId.slice(0, 8)}…`);
       } else if (disposition === 'expire') {
-        clearInterval(bgPoll);
         killPty(provider.id, tempKey);
         console.log(`[${provider.id}:create] pending PTY ${tempKey.slice(0, 20)}… expired before registration`);
         broadcastPendingExpired(provider.id, tempKey);
-      } else if (polls % 90 === 0) {
+        return;
+      } else if (polls % 30 === 0) {
         console.log(
           `[${provider.id}:create] ${tempKey.slice(0, 20)}… is still live and awaiting its first persisted prompt`);
       }
-    }, POLL_INTERVAL);
+      bgPoll = setTimeout(
+        pollForPersistedSession,
+        pendingReconciliationDelay(Date.now() - pollingStartedAt));
+      bgPoll.unref?.();
+    };
+
+    bgPoll = setTimeout(pollForPersistedSession, pendingReconciliationDelay(0));
+    bgPoll.unref?.();
 
     res.json({ tempKey, controlPlane: Boolean(remoteEndpoint) });
   } catch (err) {
@@ -566,8 +584,8 @@ function broadcastRekey(providerId, tempKey, realId) {
 }
 
 /**
- * Notify all status-feed clients that a pending PTY exited or remained detached
- * before registration. The client uses this to dismiss the temporary tab.
+ * Notify all status-feed clients that a pending PTY exited before registration.
+ * The client uses this to dismiss the temporary tab.
  *
  * Message shape: { type: 'pending-expired', tempKey: string }
  */
@@ -676,6 +694,10 @@ wss.on('connection', async (ws, req) => {
         () => codexAppServer.ensureStarted(),
         err => console.warn(`[codex:control-plane] unavailable; using direct terminal: ${err.message}`))
       : null;
+    if (updateShutdownPending) {
+      ws.close(1013, 'Dashboard service is stopping for a native update');
+      return;
+    }
     console.log(`[${provider.id}:pty] attaching to ${isPending ? 'pending' : 'session'} ${sessionId.slice(0, 20)}… (${cols}x${rows}${remoteEndpoint ? ', control-plane' : ''})`);
     attachClient(provider.id, sessionId, workingDir, ws, cols, rows, { remoteEndpoint });
     return;

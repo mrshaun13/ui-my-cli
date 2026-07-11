@@ -24,7 +24,8 @@ public static class SessionDisplayText
     private static string SingleLine(string? value, string fallback, int maximumLength)
     {
         var source = string.IsNullOrWhiteSpace(value) ? fallback : value;
-        var normalized = string.Join(' ', source
+        var controlSafe = string.Concat(source.Select(character => char.IsControl(character) ? ' ' : character));
+        var normalized = string.Join(' ', controlSafe
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         var characters = normalized.EnumerateRunes().ToArray();
         if (characters.Length <= maximumLength) return normalized;

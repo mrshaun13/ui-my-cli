@@ -91,8 +91,8 @@ UI-owned and end when their tab or the app closes.
   their TUI is connected through the shared app-server control plane.
 - Automatic, ownership-safe reconciliation of new terminals with their saved
   provider session ID; attached temporary terminals stay available until that
-  provider session is persisted, exits, or remains detached beyond its grace
-  period.
+  provider session is persisted, the terminal process exits, or the user
+  explicitly cancels it, including across UI detach and restart.
 - Per-terminal Adaptive model routing for Codex. When enabled, a native prompt
   composer uses local task-shape rules first, calls a small ephemeral classifier
   only for low-confidence requests, validates the decision against Codex's live

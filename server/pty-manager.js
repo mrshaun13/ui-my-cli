@@ -526,6 +526,7 @@ function rekeyPty(providerId, oldKey, newKey) {
   const newPtyKey = ptyKey(providerId, newKey);
   const entry = ptys.get(oldPtyKey);
   if (!entry) return false;
+  if (ptys.has(newPtyKey)) return false;
   ptys.delete(oldPtyKey);
   entry.sessionId = newKey;
   ptys.set(newPtyKey, entry);

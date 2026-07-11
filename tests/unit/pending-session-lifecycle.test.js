@@ -2,6 +2,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   isFallbackPendingSessionCandidate,
+  pendingReconciliationDelay,
+  pendingSessionExclusionIds,
   pendingSessionDisposition,
 } = require('../../server/pending-session-lifecycle');
 
@@ -25,4 +27,25 @@ test('fallback ownership accepts a uniquely discovered session even after a slow
   assert.equal(isFallbackPendingSessionCandidate(10_500, 10_000), true);
   assert.equal(isFallbackPendingSessionCandidate(15_001, 10_000), true);
   assert.equal(isFallbackPendingSessionCandidate(7_999, 10_000), false);
+});
+
+test('pending reconciliation backs off while retaining the live PTY', () => {
+  assert.equal(pendingReconciliationDelay(0), 2_000);
+  assert.equal(pendingReconciliationDelay(59_999), 2_000);
+  assert.equal(pendingReconciliationDelay(60_000), 10_000);
+  assert.equal(pendingReconciliationDelay(299_999), 10_000);
+  assert.equal(pendingReconciliationDelay(300_000), 30_000);
+  assert.equal(pendingReconciliationDelay(86_400_000), 30_000);
+});
+
+test('pending reconciliation excludes provider session IDs already claimed by another PTY', () => {
+  const exclusions = pendingSessionExclusionIds(
+    new Set(['existing']),
+    new Map([
+      ['devin:pending-first', 'claimed-devin'],
+      ['codex:pending-second', 'claimed-codex'],
+    ]),
+    'devin');
+
+  assert.deepEqual([...exclusions], ['existing', 'claimed-devin']);
 });
