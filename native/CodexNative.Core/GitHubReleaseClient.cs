@@ -77,8 +77,7 @@ public sealed class GitHubReleaseClient : IDisposable
         using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseApi);
         if (!string.IsNullOrWhiteSpace(entityTag))
         {
-            if (entityTag.Length > 256 || entityTag.Any(char.IsControl)
-                || !EntityTagHeaderValue.TryParse(entityTag, out var parsedTag))
+            if (SanitizeEntityTag(entityTag) is not { } parsedTag)
                 throw new ArgumentException("Cached GitHub entity tag is invalid.", nameof(entityTag));
             request.Headers.IfNoneMatch.Add(parsedTag);
         }
@@ -187,6 +186,13 @@ public sealed class GitHubReleaseClient : IDisposable
         && uri.Scheme == Uri.UriSchemeHttps
         && uri.IsDefaultPort
         && TrustedDownloadHosts.Contains(uri.Host);
+
+    public static EntityTagHeaderValue? SanitizeEntityTag(string? entityTag)
+    {
+        if (string.IsNullOrWhiteSpace(entityTag)) return null;
+        if (entityTag.Length > 256 || entityTag.Any(char.IsControl)) return null;
+        return EntityTagHeaderValue.TryParse(entityTag, out var parsedTag) ? parsedTag : null;
+    }
 
     private static void ValidateRuntimeIdentifier(string runtimeIdentifier)
     {

@@ -22,8 +22,8 @@ test('pending metadata expires exited and abandoned PTYs', () => {
   assert.equal(pendingSessionDisposition(null, detached, 62_000, 60_000), 'expire');
 });
 
-test('fallback ownership accepts only sessions created with the spawned process', () => {
+test('fallback ownership accepts a uniquely discovered session even after a slow startup', () => {
   assert.equal(isFallbackPendingSessionCandidate(10_500, 10_000), true);
-  assert.equal(isFallbackPendingSessionCandidate(15_001, 10_000), false);
+  assert.equal(isFallbackPendingSessionCandidate(15_001, 10_000), true);
   assert.equal(isFallbackPendingSessionCandidate(7_999, 10_000), false);
 });

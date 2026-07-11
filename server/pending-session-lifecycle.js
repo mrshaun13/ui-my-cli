@@ -3,12 +3,13 @@
 /**
  * Determines whether a temporary new-session PTY keeps waiting, re-keys to a
  * persisted provider session, or expires after the terminal exits or remains
- * detached. Also bounds fallback correlation where a provider lacks an exact
- * session-origin marker.
+ * detached. Providers without an exact session-origin marker use a unique
+ * same-directory candidate created after the spawned PTY, without a brittle
+ * upper time window that can strand a slow-starting session forever.
  */
 
 const DEFAULT_DETACHED_GRACE_MS = 60_000;
-const FALLBACK_CORRELATION_WINDOW_MS = 5_000;
+const FALLBACK_CORRELATION_EARLY_TOLERANCE_MS = 2_000;
 
 function pendingSessionDisposition(
   realSessionId,
@@ -28,12 +29,12 @@ function pendingSessionDisposition(
 function isFallbackPendingSessionCandidate(createdAt, startedAt) {
   return Number.isFinite(createdAt)
     && Number.isFinite(startedAt)
-    && createdAt >= startedAt - 2_000
-    && createdAt <= startedAt + FALLBACK_CORRELATION_WINDOW_MS;
+    && createdAt >= startedAt - FALLBACK_CORRELATION_EARLY_TOLERANCE_MS;
 }
 
 module.exports = {
   DEFAULT_DETACHED_GRACE_MS,
+  FALLBACK_CORRELATION_EARLY_TOLERANCE_MS,
   isFallbackPendingSessionCandidate,
   pendingSessionDisposition,
 };

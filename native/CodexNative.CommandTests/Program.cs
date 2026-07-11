@@ -540,6 +540,12 @@ await CheckAsync("GitHub release checks reuse cached ETags", async () =>
     Equal("\"release-v1\"", query.EntityTag);
 });
 
+Check("malformed cached GitHub ETags are discarded before update checks", () =>
+{
+    Equal(true, GitHubReleaseClient.SanitizeEntityTag("malformed etag") is null);
+    Equal("\"release-v1\"", GitHubReleaseClient.SanitizeEntityTag("\"release-v1\"")?.ToString());
+});
+
 await CheckAsync("GitHub ETag cache retains the latest release across a downgrade", async () =>
 {
     const string json = """

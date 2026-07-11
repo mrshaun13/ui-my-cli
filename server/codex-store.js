@@ -479,9 +479,22 @@ function isNativeHeadlessThread(thread) {
     || HEADLESS_STAMP_RE.test(haystack);
 }
 
+function storedUserPrompt(thread) {
+  const prompt = thread.first_user_message;
+  return prompt && !isSyntheticUserMessage(prompt) ? prompt : null;
+}
+
+function storedPromptOrPreview(thread) {
+  const prompt = storedUserPrompt(thread);
+  if (prompt) return prompt;
+  return thread.preview && !isSyntheticUserMessage(thread.preview) ? thread.preview : null;
+}
+
 function normalizeThread(thread, _overrides = null, rollout = null) {
   const parsed = rollout || readRolloutSummary(thread);
-  const firstUser = thread.first_user_message || parsed.messages.find(m => m.role === 'user')?.text || null;
+  const firstUser = storedUserPrompt(thread)
+    || parsed.messages.find(m => m.role === 'user')?.text
+    || null;
   const lastUser = [...parsed.messages].reverse().find(m => m.role === 'user')?.text || firstUser;
   const lastAssistant = [...parsed.messages].reverse().find(m => m.role === 'assistant')?.text || null;
   const title = sessionDisplayTitle(
@@ -881,7 +894,7 @@ function resolveNativeRenameTitle(id, title) {
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) throw new Error('Codex session not found');
   const nextTitle = title === null
-    ? (thread.first_user_message || thread.preview || thread.title || thread.id.slice(0, 8))
+    ? (storedPromptOrPreview(thread) || thread.title || thread.id.slice(0, 8))
     : normalizeNativeTitle(title);
   return { id, title: nextTitle };
 }
@@ -980,7 +993,7 @@ function searchSessions(query, includeArchived) {
         session.title,
         thread.title,
         thread.cwd,
-        thread.first_user_message,
+        storedUserPrompt(thread),
         thread.preview,
         ...rollout.messages.filter(m => m.role === 'user').map(m => m.text),
       ].filter(Boolean).join('\n').toLowerCase();
@@ -993,12 +1006,12 @@ function searchSessions(query, includeArchived) {
 
 function latestPrompt() {
   const threads = listThreads({ includeArchived: true, includeSystem: false });
-  const thread = threads.find(t => t.first_user_message || t.preview);
+  const thread = threads.find(storedPromptOrPreview);
   const native = thread ? {
     sessionId: thread.id,
     title: thread.title || thread.id.slice(0, 8),
     project: projectName(thread.cwd),
-    prompt: thread.first_user_message || thread.preview,
+    prompt: storedPromptOrPreview(thread),
     timestamp: thread.updated_at,
   } : null;
   const external = transcriptHeadless.latestPrompt();
@@ -1143,12 +1156,13 @@ function stats(options = {}) {
     if (!rollout.tokenEvents?.length && tokens.totalTokens) {
       addTokenActivity(tokensByHour, tokenHeatmap, thread.updated_at || thread.created_at || 0, tokens);
     }
-    if (thread.first_user_message) {
+    const prompt = storedUserPrompt(thread);
+    if (prompt) {
       recentPrompts.push({
         sessionId: thread.id,
         title: thread.title || thread.id.slice(0, 8),
         project: projectName(thread.cwd),
-        prompt: thread.first_user_message,
+        prompt,
         timestamp: thread.updated_at,
       });
     }

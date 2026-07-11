@@ -41,7 +41,7 @@ test('native Codex rename validation resolves a title without writing Codex stat
   process.env.UI_MY_CLI_DB_PATH = path.join(dir, 'dashboard.sqlite')
 
   try {
-    const { findNewSessionInDir, resolveNativeRenameTitle } = await import('../server/codex-store.js')
+    const { findNewSessionInDir, getSession, latestPrompt, resolveNativeRenameTitle } = await import('../server/codex-store.js')
     assert.deepEqual(resolveNativeRenameTitle(threadId, 'Fix keyboard shortcuts and rename functionality'), {
       id: threadId,
       title: 'Fix keyboard shortcuts and rename functionality',
@@ -52,6 +52,17 @@ test('native Codex rename validation resolves a title without writing Codex stat
     db.close()
     assert.throws(() => resolveNativeRenameTitle(threadId, 'bad\nname'), /control characters/)
     assert.throws(() => resolveNativeRenameTitle(threadId, 'x'.repeat(201)), /1-200 characters/)
+
+    const writablePrompt = new Database(statePath)
+    writablePrompt.prepare(`
+      UPDATE threads
+      SET title = '', first_user_message = ?, preview = ?, updated_at = ?
+      WHERE id = ?
+    `).run('<environment_context>injected dashboard metadata</environment_context>', 'safe fallback', 4_102_444_800, threadId)
+    writablePrompt.close()
+    assert.equal(getSession(threadId).firstUserPrompt, null)
+    assert.equal(resolveNativeRenameTitle(threadId, null).title, 'safe fallback')
+    assert.equal(latestPrompt().prompt, 'safe fallback')
 
     const expectedRollout = path.join(dir, 'expected.jsonl')
     const unrelatedRollout = path.join(dir, 'unrelated.jsonl')

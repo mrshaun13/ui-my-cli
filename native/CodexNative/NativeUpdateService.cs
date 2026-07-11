@@ -83,6 +83,8 @@ public sealed class NativeUpdateService : IDisposable
                 && cachedRuntime == runtime
                     ? _cache.EntityTag
                     : null;
+            if (GitHubReleaseClient.SanitizeEntityTag(entityTag) is null)
+                entityTag = null;
             try
             {
                 var query = await _releaseClient.QueryLatestAsync(
