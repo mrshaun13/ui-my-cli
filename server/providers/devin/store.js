@@ -137,11 +137,44 @@ function _removeHidden(id) {
  *               and nothing has happened for >30s — work is done / paused
  *   idle      — no activity for >10 minutes, or no messages at all
  */
+function hasPendingToolCalls(nodes) {
+  const pendingToolCallIds = new Set();
+  let pendingAnonymousToolCalls = 0;
+  for (const node of nodes) {
+    let message;
+    try {
+      message = typeof node.chat_message === 'string'
+        ? JSON.parse(node.chat_message)
+        : node.chat_message;
+    } catch {
+      continue;
+    }
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const toolCall of message.tool_calls) {
+        if (typeof toolCall?.id === 'string' && toolCall.id.length > 0) {
+          pendingToolCallIds.add(toolCall.id);
+        } else {
+          pendingAnonymousToolCalls++;
+        }
+      }
+    } else if (message?.role === 'tool') {
+      if (typeof message.tool_call_id === 'string' && message.tool_call_id.length > 0) {
+        pendingToolCallIds.delete(message.tool_call_id);
+      } else if (pendingAnonymousToolCalls > 0) {
+        pendingAnonymousToolCalls--;
+      }
+    }
+  }
+  return pendingToolCallIds.size > 0 || pendingAnonymousToolCalls > 0;
+}
+
 function deriveStatus(nodes, lastActivityAt) {
   if (!nodes || nodes.length === 0) return 'idle';
 
   const nowSec = Math.floor(Date.now() / 1000);
   const idleSec = nowSec - lastActivityAt;
+
+  if (hasPendingToolCalls(nodes)) return 'active';
 
   // Hard idle cutoff: 10 minutes of silence = nothing is happening
   if (idleSec > 600) return 'idle';
@@ -183,6 +216,30 @@ function deriveStatus(nodes, lastActivityAt) {
 
   // User or system message is last and it's been >60s — unusual, treat as finished
   return 'finished';
+}
+
+function isSessionInFlight(id) {
+  const rows = getReadDb().prepare(`
+    SELECT chat_message
+    FROM message_nodes
+    WHERE session_id = ?
+    ORDER BY row_id DESC
+  `).iterate(id);
+  const currentTurn = [];
+  for (const row of rows) {
+    currentTurn.push(row);
+    let message;
+    try {
+      message = typeof row.chat_message === 'string'
+        ? JSON.parse(row.chat_message)
+        : row.chat_message;
+    } catch {
+      continue;
+    }
+    if (message?.role === 'user') break;
+  }
+  currentTurn.reverse();
+  return hasPendingToolCalls(_dedupeMessageNodes(currentTurn));
 }
 
 /**
@@ -329,6 +386,7 @@ function listSessions() {
       FROM message_nodes
       WHERE session_id IN (${placeholders})
     ) WHERE rn <= 10
+    ORDER BY session_id, rn
   `).all(...visibleIds);
 
   const tailBySession = {};
@@ -1260,4 +1318,4 @@ function getSessionConfig(id) {
   };
 }
 
-module.exports = { listSessions, listArchivedSessions, getSession, getSessionPreview, getSessionConversation, getSessionContextBreakdown, getSessionConfig, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };
+module.exports = { listSessions, listArchivedSessions, isSessionInFlight, getSession, getSessionPreview, getSessionConversation, getSessionContextBreakdown, getSessionConfig, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };

@@ -73,6 +73,7 @@ module.exports = {
   watchPaths,
   listSessions: () => withProviderList(store.listSessions()),
   listArchivedSessions: () => withProviderList(store.listArchivedSessions()),
+  isSessionInFlight: store.isSessionInFlight,
   getSession: id => withProviderSession(store.getSession(id)),
   getSessionPreview: store.getSessionPreview,
   getSessionConversation: store.getSessionConversation,

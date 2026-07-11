@@ -49,6 +49,7 @@ internal static class Program
             }
             catch (Exception updateFailure)
             {
+                allowFailureRestart = false;
                 installLock ??= NativeInstallLock.Acquire(
                     request.TargetDirectory,
                     ProcessExitTimeout);
@@ -60,6 +61,7 @@ internal static class Program
                 {
                     throw NativeUpdatePolicy.RollbackFailure(updateFailure, recoveryFailure);
                 }
+                allowFailureRestart = true;
                 throw;
             }
             try
@@ -82,7 +84,10 @@ internal static class Program
                 WriteResult(
                     succeeded: false,
                     failureMessage);
-                if (parentExited && allowFailureRestart) TryRestartPreviousInstall(request);
+                installLock?.Dispose();
+                installLock = null;
+                if (parentExited && allowFailureRestart && ex is not AggregateException)
+                    TryRestartPreviousInstall(request);
                 ShowFailure(request.Platform, failureMessage);
             }
             return 1;
