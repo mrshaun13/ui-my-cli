@@ -26,6 +26,7 @@ export function useStatusFeed(providerId) {
   const [error, setError] = useState(null)
   // rekeyMap: { [tempKey]: realId } — pending sessions that have been re-keyed
   const [rekeyMap, setRekeyMap] = useState({})
+  const [collisionPending, setCollisionPending] = useState(() => new Set())
   // expiredPending: Set of temp keys whose PTY exited before session registration
   const [expiredPending, setExpiredPending] = useState(() => new Set())
   const [collisionNotice, setCollisionNotice] = useState('')
@@ -95,6 +96,7 @@ export function useStatusFeed(providerId) {
         else if (msg.type === 'rekey' && msg.tempKey && msg.realId) {
           setRekeyMap(prev => ({ ...prev, [msg.tempKey]: msg.realId }))
           if (msg.collision) {
+            setCollisionPending(prev => new Set(prev).add(msg.tempKey))
             setCollisionNotice('Session already had a canonical terminal; redundant terminal cleanup occurs only after its client detaches.')
             clearTimeout(collisionNoticeTimerRef.current)
             collisionNoticeTimerRef.current = setTimeout(() => setCollisionNotice(''), 8000)
@@ -130,6 +132,7 @@ export function useStatusFeed(providerId) {
     setLatestPrompt(null)
     setError(null)
     setRekeyMap({})
+    setCollisionPending(new Set())
     setExpiredPending(new Set())
     setCollisionNotice('')
     pendingTitleRenamesRef.current.clear()
@@ -152,5 +155,5 @@ export function useStatusFeed(providerId) {
     setLatestPrompt(prev => prev?.sessionId === sessionId ? { ...prev, title } : prev)
   }, [])
 
-  return { sessions, connected, error, latestPrompt, rekeyMap, expiredPending, collisionNotice, updateSessionTitle }
+  return { sessions, connected, error, latestPrompt, rekeyMap, collisionPending, expiredPending, collisionNotice, updateSessionTitle }
 }

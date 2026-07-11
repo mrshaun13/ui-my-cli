@@ -27,13 +27,14 @@ const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 
-const { attachClient, killPty, isPtyActive, isPtyControlPlane, pendingPtyState, activePtySessions, spawnNewSession, rekeyPty, resolvePtyRekeyCollision, validatePty } = require('./pty-manager');
-const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./providers');
+const { attachClient, killPty, isPtyActive, isPtyControlPlane, pendingPtyState, activePtySessions, spawnNewSession, rekeyPty, resolvePtyRekeyCollision, onPtyRemoved, validatePty } = require('./pty-manager');
+const { DEFAULT_PROVIDER_ID, getProvider, providers, safeListProviders } = require('./providers');
 const { isTrustedLaunchRequest, launchNativeDashboard, nativeLaunchCapability } = require('./native-launcher');
 const { CodexAppServer } = require('./codex-app-server');
 const { wantsCodexControlPlane, tryStartCodexControlPlane } = require('./codex-control-plane');
 const {
   pendingReconciliationDelay,
+  PENDING_REKEY_COMPATIBILITY_MS,
   pendingSessionDisposition,
   pendingSessionExclusionIds,
 } = require('./pending-session-lifecycle');
@@ -42,12 +43,13 @@ const {
   matchesNativeControlCapability,
   validNativeControlCapability,
 } = require('./native-service-control');
+const { nativeUpdateActivity } = require('./native-update-activity');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
-// v5 passes the user-selected working root explicitly to remote Codex TUIs.
-// Native clients must not reuse a v4 service whose shared app-server causes
-// new sessions to inherit the dashboard checkout.
-const API_VERSION = 5;
+// v6 adds authenticated, fail-closed update readiness across provider sessions.
+// Native clients must not reuse an older service that cannot close the final
+// activity race before replacing the desktop installation.
+const API_VERSION = 6;
 const SERVICE_INSTANCE_ID = process.env.UI_MY_CLI_NATIVE_INSTANCE_ID
   || `${process.pid}-${Date.now()}`;
 const SERVICE_CONTROL_CAPABILITY = validNativeControlCapability(
@@ -62,6 +64,33 @@ const CLIENT_DIST = path.resolve(__dirname, '..', 'client', 'dist');
 // Populated when the background rekey poll detects the real ID.
 // Used by the DELETE handler so archiving a pending session targets the right ID.
 const pendingToReal = new Map();
+const pendingMappingTimers = new Map();
+
+function forgetPendingMapping(providerId, tempKey) {
+  const key = pendingKey(providerId, tempKey);
+  clearTimeout(pendingMappingTimers.get(key));
+  pendingMappingTimers.delete(key);
+  pendingToReal.delete(key);
+}
+
+function rememberPendingMapping(providerId, tempKey, realId, collision = false) {
+  const key = pendingKey(providerId, tempKey);
+  clearTimeout(pendingMappingTimers.get(key));
+  pendingMappingTimers.delete(key);
+  pendingToReal.set(key, realId);
+  if (collision && isPtyActive(providerId, tempKey)) return;
+  const timer = setTimeout(
+    () => forgetPendingMapping(providerId, tempKey),
+    PENDING_REKEY_COMPATIBILITY_MS);
+  timer.unref?.();
+  pendingMappingTimers.set(key, timer);
+}
+
+onPtyRemoved(entry => {
+  if (entry?.collisionRealId && entry.sessionId?.startsWith('pending-')) {
+    forgetPendingMapping(entry.providerId, entry.sessionId);
+  }
+});
 
 const app = express();
 const server = http.createServer(app);
@@ -104,6 +133,28 @@ app.get('/api/native/compatibility', (req, res) => {
   });
 });
 
+app.get('/api/native/update-readiness', (req, res) => {
+  if (!hasNativeControlCapability(req)) {
+    return res.status(403).json({ error: 'Dashboard service control authentication failed.' });
+  }
+  try {
+    res.json({
+      ok: true,
+      apiVersion: API_VERSION,
+      service: 'ui-my-cli-dashboard',
+      instanceId: SERVICE_INSTANCE_ID,
+      activePtys: activePtySessions().length,
+      blockingSessions: nativeUpdateActivity(providers.values()).blockingSessions,
+      activityCheckOk: true,
+      controlAuthenticated: true,
+    });
+  } catch (err) {
+    res.status(503).json({
+      error: `Dashboard activity could not be verified: ${err.message}`,
+    });
+  }
+});
+
 app.post('/api/native/shutdown', (req, res) => {
   if (!hasNativeControlCapability(req)) {
     return res.status(403).json({ error: 'Dashboard service control authentication failed.' });
@@ -114,11 +165,25 @@ app.post('/api/native/shutdown', (req, res) => {
   if (typeof shutdownDashboard !== 'function') {
     return res.status(503).json({ error: 'Dashboard service is not ready to stop.' });
   }
-  const activePtys = activePtySessions().length;
-  if (activePtys > 0) {
-    return res.status(409).json({ error: `Dashboard service has ${activePtys} active terminal(s).` });
+  if (updateShutdownPending) {
+    return res.status(409).json({ error: 'Dashboard service shutdown is already pending.' });
   }
   updateShutdownPending = true;
+  try {
+    const activePtys = activePtySessions().length;
+    if (activePtys > 0) {
+      updateShutdownPending = false;
+      return res.status(409).json({ error: `Dashboard service has ${activePtys} active terminal(s).` });
+    }
+    const { blockingSessions } = nativeUpdateActivity(providers.values());
+    if (blockingSessions > 0) {
+      updateShutdownPending = false;
+      return res.status(409).json({ error: `Dashboard service has ${blockingSessions} active provider session(s).` });
+    }
+  } catch (err) {
+    updateShutdownPending = false;
+    return res.status(503).json({ error: `Dashboard activity could not be verified: ${err.message}` });
+  }
   res.status(202).json({ ok: true, instanceId: SERVICE_INSTANCE_ID });
   setImmediate(() => shutdownDashboard('native update'));
 });
@@ -325,14 +390,14 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
         pendingPtyState(provider.id, tempKey));
       if (disposition === 'rekey') {
         if (rekeyPty(provider.id, tempKey, realId)) {
-          pendingToReal.set(pendingKey(provider.id, tempKey), realId);
+          rememberPendingMapping(provider.id, tempKey, realId);
           console.log(`[${provider.id}:create] re-keyed ${tempKey.slice(0, 20)}… → ${realId.slice(0, 8)}…`);
           broadcastRekey(provider.id, tempKey, realId);
           broadcastSessions(provider.id);
           return;
         }
         if (resolvePtyRekeyCollision(provider.id, tempKey, realId)) {
-          pendingToReal.set(pendingKey(provider.id, tempKey), realId);
+          rememberPendingMapping(provider.id, tempKey, realId, true);
           console.warn(`[${provider.id}:create] retained canonical PTY for ${realId.slice(0, 8)}… and completed pending collision reconciliation`);
           broadcastRekey(provider.id, tempKey, realId, true);
           broadcastSessions(provider.id);
@@ -406,7 +471,7 @@ app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
       const route = await codexAppServer.startAdaptiveTurn(workingDir, text, preference);
       const realId = route.threadId;
       const trackedId = pendingToReal.get(pendingKey('codex', sessionId));
-      pendingToReal.set(pendingKey('codex', sessionId), realId);
+      rememberPendingMapping('codex', sessionId, realId);
       killPty('codex', sessionId);
       killPty('codex', realId);
       if (trackedId && trackedId !== realId) killPty('codex', trackedId);
@@ -536,7 +601,7 @@ app.delete(['/api/:providerId/sessions/:id', '/api/sessions/:id'], providerRoute
     if (realId !== reqId) killPty(provider.id, reqId);
     provider.hideSession(realId);
     // Clean up the server-side rekey map entry
-    if (reqId.startsWith('pending-')) pendingToReal.delete(pendingKey(provider.id, reqId));
+    if (reqId.startsWith('pending-')) forgetPendingMapping(provider.id, reqId);
     broadcastSessions(provider.id);
     res.json({ ok: true });
   } catch (err) {

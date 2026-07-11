@@ -16,7 +16,7 @@ test.describe('Dashboard smoke tests', () => {
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
     expect(body.ok).toBe(true);
-    expect(body.apiVersion).toBe(5);
+    expect(body.apiVersion).toBe(6);
     expect(body).toHaveProperty('activePtys');
     expect(body).toHaveProperty('uptime');
   });
@@ -27,7 +27,7 @@ test.describe('Dashboard smoke tests', () => {
     const body = await res.json();
     expect(body).toMatchObject({
       ok: true,
-      apiVersion: 5,
+      apiVersion: 6,
       service: 'ui-my-cli-dashboard',
       activePtys: expect.any(Number),
       instanceId: expect.any(String),
@@ -35,12 +35,16 @@ test.describe('Dashboard smoke tests', () => {
     expect(body).not.toHaveProperty('providers');
   });
 
-  test('native update shutdown rejects the wrong service instance', async ({ request }) => {
+  test('native update control endpoints require the private capability', async ({ request }) => {
+    const readiness = await request.get('/api/native/update-readiness');
+    expect(readiness.status()).toBe(403);
+    await expect(readiness.json()).resolves.toEqual({ error: 'Dashboard service control authentication failed.' });
+
     const res = await request.post('/api/native/shutdown', {
       data: { instanceId: '00000000-0000-0000-0000-000000000000' },
     });
-    expect(res.status()).toBe(409);
-    await expect(res.json()).resolves.toEqual({ error: 'Dashboard service instance mismatch.' });
+    expect(res.status()).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: 'Dashboard service control authentication failed.' });
   });
 
   test('sessions API returns an array', async ({ request }) => {

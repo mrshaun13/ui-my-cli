@@ -14,6 +14,7 @@ const PENDING_RECONCILIATION_FAST_INTERVAL_MS = 2_000;
 const PENDING_RECONCILIATION_MEDIUM_WINDOW_MS = 5 * 60_000;
 const PENDING_RECONCILIATION_MEDIUM_INTERVAL_MS = 10_000;
 const PENDING_RECONCILIATION_SLOW_INTERVAL_MS = 30_000;
+const PENDING_REKEY_COMPATIBILITY_MS = 15 * 60_000;
 
 function pendingSessionDisposition(realSessionId, ptyState) {
   if (typeof realSessionId === 'string' && realSessionId.length > 0) return 'rekey';
@@ -53,6 +54,7 @@ module.exports = {
   PENDING_RECONCILIATION_MEDIUM_INTERVAL_MS,
   PENDING_RECONCILIATION_MEDIUM_WINDOW_MS,
   PENDING_RECONCILIATION_SLOW_INTERVAL_MS,
+  PENDING_REKEY_COMPATIBILITY_MS,
   isFallbackPendingSessionCandidate,
   pendingReconciliationDelay,
   pendingSessionExclusionIds,

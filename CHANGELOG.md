@@ -28,11 +28,15 @@
   private-service PID, process start time, loopback endpoint, instance identity,
   and per-service control capability. A restarted UI securely re-adopts its
   persistent service from private settings, while the helper
-  revalidates zero active PTYs immediately before graceful service shutdown and
+  revalidates zero active provider sessions and PTYs immediately before graceful service shutdown and
   never scans or terminates unrelated terminal hosts, CLIs, IDEs, or apps.
 - Completed pending-session PTY collisions by keeping the existing real-session
   terminal canonical, preserving an attached pending terminal until detach, and
   notifying clients before closing only the redundant pending process.
+- Preserved collided browser terminals with separate canonical metadata and
+  transport identities, and bounded temporary-to-canonical compatibility maps.
+- Closed native update races with authenticated all-provider activity
+  revalidation and an install-scoped lock honored by competing native starts.
 - Kept successful browser renames stable across stale status-feed frames while
   the provider's canonical title persistence catches up.
 - Added cached and coalesced GitHub release checks with ETag revalidation,

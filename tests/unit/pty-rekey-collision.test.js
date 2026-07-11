@@ -27,7 +27,8 @@ test('rekey collision retains both terminals until the pending client detaches',
   assert.equal(terminateDetachedCollision(pending), false);
   assert.equal(pendingKills, 0);
   assert.equal(canonicalKills, 0);
-  assert.match(frames[0].data, /canonical terminal/);
+  assert.match(frames[0].data, /also has a canonical terminal/);
+  assert.match(frames[0].data, /remains available/);
   assert.match(frames[0].data, /close after detaching/);
 
   pending.clients.clear();

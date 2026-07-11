@@ -267,10 +267,10 @@ Additional release/runtime capabilities preserved from v1.1.2:
   active provider sessions from any dashboard-tracked client or local-shell
   tabs. The updating UI supplies the external helper with the exact private-
   service PID, loopback endpoint, and instance identity it owns. The helper
-  revalidates that same instance has zero active PTYs immediately before asking
+  revalidates that same instance has zero active provider sessions and PTYs immediately before asking
   it to shut down gracefully; unrelated terminal hosts, CLIs, IDEs, and apps
   are never scanned or terminated. It retries
-  transient install-directory locks, verifies the installed version and
+  holds a target-specific install lock through replacement and rollback, verifies the installed version and
   restarted process, keeps the previous payload until startup validation
   completes, restores and relaunches it on failure, and reports the outcome
   once at the next launch.
@@ -317,8 +317,9 @@ private service, backend stdout and stderr are written to
 card also displays the provider error instead of reducing it to
 `Unavailable · version unknown`.
 
-The native client requires dashboard API v5 so remote Codex sessions preserve
-the project root selected in the native chooser. It will not attach to an older
+The native client requires dashboard API v6 so remote Codex sessions preserve
+the project root selected in the native chooser and updates can perform
+authenticated, fail-closed provider-activity revalidation. It will not attach to an older
 long-running service that lacks that launch contract or the complete
 usage-rollup, pricing, hourly, and heatmap analytics contract; it starts the
 current private service on port 7577 instead. This prevents sessions from
@@ -473,10 +474,11 @@ endpoint, instance identity, and an unguessable per-service control capability.
 That ownership record is retained in user-private native settings so a normally
 restarted UI can re-adopt only the same process and authenticated loopback
 instance. After the desktop exits, the helper revalidates that exact instance
-still has zero active PTYs, authenticates the graceful shutdown request, and waits a
+still has zero active provider sessions and PTYs, authenticates the graceful shutdown request, and waits a
 bounded time for only that PID to exit. It never scans or terminates unrelated
 terminal hosts, CLIs, IDEs, or native apps. The helper retries
-transient install-directory locks for a bounded period, verifies that the
+transient install-directory locks for a bounded period, holds a target-specific
+exclusive lock through replacement, rollback, and restart verification, verifies that the
 payload version matches the updater, and
 checks that the replacement process remains running. The previous payload stays
 available until that startup check succeeds. If replacement or restart fails,

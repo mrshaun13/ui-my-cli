@@ -11,6 +11,7 @@
  */
 
 import { memo } from 'react'
+import { tabSessionId } from '../lib/tabState.js'
 
 const STATUS_COLOR = {
   question: 'var(--yellow)',
@@ -27,7 +28,7 @@ export default memo(function TabBar({ tabs, activeTabId, sessions, onActivate, o
   return (
     <div className="tab-bar">
       {tabs.map(tab => {
-        const session = sessions.find(s => s.id === tab.id)
+        const session = sessions.find(s => s.id === tabSessionId(tab))
         const isActive = tab.id === activeTabId
         const title = session?.title || tab.id.slice(0, 8)
         const status = session?.status || 'idle'

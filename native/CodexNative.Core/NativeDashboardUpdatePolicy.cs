@@ -33,6 +33,12 @@ public static class NativeDashboardUpdatePolicy
         if (!probe.ControlAuthenticated)
             throw new InvalidOperationException(
                 "The dashboard service rejected the update control capability; no process was stopped.");
+        if (!probe.ActivityCheckOk)
+            throw new InvalidOperationException(
+                "The dashboard service could not verify provider activity; no process was stopped.");
+        if (probe.BlockingSessions > 0)
+            throw new InvalidOperationException(
+                $"The dashboard service has {probe.BlockingSessions} active provider session(s); wait for them to finish and retry the update.");
         if (probe.ActivePtys > 0)
             throw new InvalidOperationException(
                 $"The dashboard service has {probe.ActivePtys} active terminal(s); close them and retry the update.");

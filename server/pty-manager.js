@@ -85,6 +85,20 @@ const TERMINAL_QUERY_RE = new RegExp(
 
 // Map of `${providerId}:${sessionId}` -> { pty, clients, scrollback, providerId, sessionId }
 const ptys = new Map();
+const ptyRemovedListeners = new Set();
+
+function notifyPtyRemoved(entry) {
+  if (!entry || entry.removalNotified) return;
+  entry.removalNotified = true;
+  for (const listener of ptyRemovedListeners) {
+    try { listener(entry); } catch {}
+  }
+}
+
+function onPtyRemoved(listener) {
+  ptyRemovedListeners.add(listener);
+  return () => ptyRemovedListeners.delete(listener);
+}
 
 // ── Shell resolution ────────────────────────────────────────────────────────
 
@@ -243,6 +257,7 @@ function wirePtyEvents(entry) {
     for (const [key, val] of ptys.entries()) {
       if (val === entry) { ptys.delete(key); break; }
     }
+    notifyPtyRemoved(entry);
   });
 }
 
@@ -398,6 +413,7 @@ function attachClient(providerId, sessionId, workingDir, ws, cols, rows, options
           for (const [key, value] of ptys) {
             if (value === entry) ptys.delete(key);
           }
+          notifyPtyRemoved(entry);
         }
       }
       break;
@@ -425,6 +441,7 @@ function killPty(providerId, sessionId) {
     // Already dead
   }
   ptys.delete(key);
+  notifyPtyRemoved(entry);
   return true;
 }
 
@@ -547,6 +564,7 @@ function resolvePtyRekeyCollision(providerId, pendingKey, realSessionId) {
 
   if (terminateDetachedCollision(pendingEntry)) {
     ptys.delete(ptyKey(providerId, pendingKey));
+    notifyPtyRemoved(pendingEntry);
   }
   return true;
 }
@@ -554,7 +572,7 @@ function resolvePtyRekeyCollision(providerId, pendingKey, realSessionId) {
 function markPtyRekeyCollision(pendingEntry, canonicalEntry, realSessionId) {
   if (!pendingEntry || !canonicalEntry || pendingEntry === canonicalEntry) return false;
   pendingEntry.collisionRealId = realSessionId;
-  const message = '\r\n\x1b[33mThis session is already attached in another terminal. Switching to that canonical terminal; this redundant terminal will close after detaching.\x1b[0m\r\n';
+  const message = '\r\n\x1b[33mThis session also has a canonical terminal. This terminal remains available until you close it; its process will close after detaching.\x1b[0m\r\n';
   for (const client of pendingEntry.clients) {
     if (client.readyState === 1) {
       client.send(JSON.stringify({ type: 'output', data: message }));
@@ -618,6 +636,7 @@ module.exports = {
   resolvePtyRekeyCollision,
   markPtyRekeyCollision,
   terminateDetachedCollision,
+  onPtyRemoved,
   validatePty,
   interactivePtyEnv,
   ensurePtySpawnHelperIsExecutable,

@@ -3,6 +3,7 @@ const test = require('node:test');
 const {
   isFallbackPendingSessionCandidate,
   pendingReconciliationDelay,
+  PENDING_REKEY_COMPATIBILITY_MS,
   pendingSessionExclusionIds,
   pendingSessionDisposition,
 } = require('../../server/pending-session-lifecycle');
@@ -48,4 +49,8 @@ test('pending reconciliation excludes provider session IDs already claimed by an
     'devin');
 
   assert.deepEqual([...exclusions], ['existing', 'claimed-devin']);
+});
+
+test('successful rekey compatibility mappings have a bounded lifetime', () => {
+  assert.equal(PENDING_REKEY_COMPATIBILITY_MS, 15 * 60_000);
 });

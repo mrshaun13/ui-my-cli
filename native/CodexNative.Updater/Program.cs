@@ -15,6 +15,7 @@ internal static class Program
     private static int Main(string[] args)
     {
         NativeInstallRequest? request = null;
+        NativeInstallLock? installLock = null;
         var parentExited = false;
         try
         {
@@ -25,6 +26,7 @@ internal static class Program
             UpdateLog.Write($"Preparing update from {request.SourcePayload} to {request.TargetDirectory}.");
             WaitForProcess(request.ParentProcessId, "native app", ProcessExitTimeout);
             parentExited = true;
+            installLock = NativeInstallLock.Acquire(request.TargetDirectory, ProcessExitTimeout);
             WaitForRelatedProcesses(request);
             EnsureNoOtherInstallProcesses(request, request.DashboardServiceProcessId);
             QuiesceOwnedDashboardService(request);
@@ -68,6 +70,10 @@ internal static class Program
                 ShowFailure(request.Platform, failureMessage);
             }
             return 1;
+        }
+        finally
+        {
+            installLock?.Dispose();
         }
     }
 
@@ -160,7 +166,7 @@ internal static class Program
             async cancellationToken =>
             {
                 var compatibility = await client.GetFromJsonAsync<DashboardCompatibilityResponse>(
-                    new Uri(endpoint, "native/compatibility"), cancellationToken)
+                    new Uri(endpoint, "native/update-readiness"), cancellationToken)
                     ?? throw new InvalidOperationException(
                         "The owned dashboard service returned an empty compatibility response; no process was stopped.");
                 return compatibility.Service == "ui-my-cli-dashboard"
@@ -169,7 +175,9 @@ internal static class Program
                         compatibility.ApiVersion,
                         compatibility.ActivePtys,
                         compatibility.InstanceId,
-                        compatibility.ControlAuthenticated)
+                        compatibility.ControlAuthenticated,
+                        compatibility.BlockingSessions,
+                        compatibility.ActivityCheckOk)
                     : DashboardApiProbeResult.Unreachable();
             },
             async cancellationToken =>
@@ -239,6 +247,8 @@ internal static class Program
         string Service,
         string? InstanceId,
         int ActivePtys,
+        int BlockingSessions,
+        bool ActivityCheckOk,
         bool ControlAuthenticated);
 
     private static bool Install(NativeInstallRequest request)
@@ -297,6 +307,7 @@ internal static class Program
                 UseShellExecute = true,
                 WorkingDirectory = request.TargetDirectory,
             };
+            startInfo.ArgumentList.Add(NativeInstallLock.AuthorizedRestartArgument);
         }
         else
         {
@@ -308,6 +319,8 @@ internal static class Program
             };
             startInfo.ArgumentList.Add("-n");
             startInfo.ArgumentList.Add(request.TargetDirectory);
+            startInfo.ArgumentList.Add("--args");
+            startInfo.ArgumentList.Add(NativeInstallLock.AuthorizedRestartArgument);
         }
 
         using var process = Process.Start(startInfo)

@@ -2498,9 +2498,9 @@ public sealed partial class MainWindow : Window
         LatestPromptButton.IsVisible = latest is not null;
         LatestPromptButton.Tag = latest;
         if (latest is null) return;
-        LatestPromptText.Text = latest.LastUserPrompt.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        LatestPromptText.Text = latest.DisplayPrompt;
         LatestPromptMetaText.Text = $"{latest.CompactDisplayTitle} · {latest.Project} · {latest.LastActivityAgo}";
-        ToolTip.SetTip(LatestPromptButton, latest.LastUserPrompt);
+        ToolTip.SetTip(LatestPromptButton, latest.DisplayPrompt);
     }
 
     private static string CohortLabel(string mode) => mode switch

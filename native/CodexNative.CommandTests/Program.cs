@@ -225,14 +225,15 @@ Check("macOS dashboard repository recovery skips stale checkouts without depende
     Equal(false, stale.IsReady);
 });
 
-Check("dashboard API v5 requires remote sessions to preserve their selected root", () =>
+Check("dashboard API v6 requires authoritative native update readiness", () =>
 {
     Equal(false, DashboardApiCompatibility.IsCompatible(0));
     Equal(false, DashboardApiCompatibility.IsCompatible(1));
     Equal(false, DashboardApiCompatibility.IsCompatible(2));
     Equal(false, DashboardApiCompatibility.IsCompatible(3));
     Equal(false, DashboardApiCompatibility.IsCompatible(4));
-    Equal(true, DashboardApiCompatibility.IsCompatible(5));
+    Equal(false, DashboardApiCompatibility.IsCompatible(5));
+    Equal(true, DashboardApiCompatibility.IsCompatible(6));
 });
 
 Check("dashboard compatibility probes distinguish mismatches from outages", () =>
@@ -279,6 +280,9 @@ Check("session display text cannot expand sidebar rows or tab headers", () =>
     var prompt = SessionDisplayText.PromptPreview($"line one\nline two {new string('p', 600)}");
     Equal(false, prompt.Contains('\n'));
     Equal(SessionDisplayText.MaximumPromptPreviewLength, prompt.Length);
+    Equal(false, prompt.Any(char.IsControl));
+    Equal("safe prompt", SessionDisplayText.PromptPreview("safe\0\u0085prompt"));
+    Equal(string.Empty, SessionDisplayText.PromptPreview(null));
 
     Equal(
         "Preserve  internal   spaces",
@@ -541,7 +545,8 @@ await CheckAsync("owned dashboard handoff revalidates before stopping", async ()
                 DashboardApiCompatibility.RequiredVersion,
                 0,
                 dashboardInstanceId,
-                true));
+                controlAuthenticated: true,
+                activityCheckOk: true));
         },
         _ =>
         {
@@ -559,7 +564,8 @@ await CheckAsync("owned dashboard handoff revalidates before stopping", async ()
                 DashboardApiCompatibility.RequiredVersion,
                 1,
                 dashboardInstanceId,
-                true)),
+                controlAuthenticated: true,
+                activityCheckOk: true)),
             _ =>
             {
                 stopped = true;
@@ -575,7 +581,26 @@ await CheckAsync("owned dashboard handoff revalidates before stopping", async ()
                 DashboardApiCompatibility.RequiredVersion,
                 0,
                 "6ced4140-c8c6-4290-b467-2cc5613af732",
-                true)),
+                controlAuthenticated: true,
+                activityCheckOk: true)),
+            _ =>
+            {
+                stopped = true;
+                return Task.CompletedTask;
+            }));
+    Equal(false, stopped);
+
+    await ThrowsAsync<InvalidOperationException>(() =>
+        NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
+            dashboardInstanceId,
+            _ => Task.FromResult(DashboardApiProbeResult.FromResponse(
+                true,
+                DashboardApiCompatibility.RequiredVersion,
+                0,
+                dashboardInstanceId,
+                controlAuthenticated: true,
+                blockingSessions: 1,
+                activityCheckOk: true)),
             _ =>
             {
                 stopped = true;
@@ -649,6 +674,42 @@ Check("updater marker validates live process identity", () =>
     {
         Directory.Delete(root, recursive: true);
     }
+});
+
+Check("native install lock is target-specific and exclusive", () =>
+{
+    var parent = Path.Combine(Path.GetTempPath(), $"codex-native-lock-{Guid.NewGuid():N}");
+    var first = Path.Combine(parent, "CodexNative");
+    var second = Path.Combine(parent, "OtherNative");
+    Directory.CreateDirectory(first);
+    Directory.CreateDirectory(second);
+    try
+    {
+        Equal(false, NativeInstallLock.IsHeld(first));
+        using (NativeInstallLock.Acquire(first, TimeSpan.FromSeconds(1)))
+        {
+            Equal(true, NativeInstallLock.IsHeld(first));
+            Equal(false, NativeInstallLock.IsHeld(second));
+            Throws<TimeoutException>(() => NativeInstallLock.Acquire(first, TimeSpan.FromMilliseconds(20)));
+        }
+        Equal(false, NativeInstallLock.IsHeld(first));
+        Equal(
+            Path.Combine(parent, ".CodexNative.update.lock"),
+            NativeInstallLock.LockPath(first));
+    }
+    finally
+    {
+        Directory.Delete(parent, recursive: true);
+    }
+});
+
+Check("native startup rejects arbitrary launches during an update lock", () =>
+{
+    Equal(true, NativeInstallLock.CanStart(lockHeld: false, []));
+    Equal(false, NativeInstallLock.CanStart(lockHeld: true, []));
+    Equal(true, NativeInstallLock.CanStart(
+        lockHeld: true,
+        [NativeInstallLock.AuthorizedRestartArgument]));
 });
 
 await CheckAsync("GitHub release selection requires the matching runtime and checksum", async () =>
