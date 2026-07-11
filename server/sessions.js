@@ -6,6 +6,7 @@
  */
 
 const codex = require('./codex-store');
+const codexProvider = require('./providers/codex');
 
 module.exports = {
   listSessions: codex.listSessions,
@@ -15,7 +16,7 @@ module.exports = {
   getSessionConversation: codex.getSessionConversation,
   getSessionContextBreakdown: codex.getSessionContextBreakdown,
   getSessionConfig: codex.getSessionConfig,
-  renameSession: codex.renameSession,
+  renameSession: codexProvider.renameSession,
   hideSession: codex.hideSession,
   restoreSession: codex.restoreSession,
   listRepos: codex.listRepos,

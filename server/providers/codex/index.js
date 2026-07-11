@@ -4,8 +4,10 @@
 
 const { execFileSync } = require('child_process');
 const codex = require('../../codex-store');
+const transcriptHeadless = require('../../transcript-headless-store');
 const { resolveCodexHome, resolveStateDbPath, resolveSessionsDir } = require('../../codex-paths');
 const { resolveCodexExecutable } = require('./executable');
+const { renameCodexSession } = require('./rename');
 
 const metadata = {
   id: 'codex',
@@ -31,6 +33,13 @@ function buildCommand(sessionId, options = {}) {
   if (options.workingDirectory) args.push('-C', options.workingDirectory);
   if (sessionId) args.push('resume', sessionId);
   return { command, args };
+}
+
+function pendingSessionEnvironment(correlationId) {
+  if (!/^ui-my-cli-[0-9a-f-]{36}$/.test(correlationId || '')) {
+    throw new Error('Pending Codex session correlation ID is invalid');
+  }
+  return { CODEX_INTERNAL_ORIGINATOR_OVERRIDE: correlationId };
 }
 
 let cachedVersion;
@@ -59,20 +68,35 @@ function watchPaths() {
   return [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, resolveSessionsDir()];
 }
 
+function renameSession(id, title, { codexAppServer } = {}) {
+  return renameCodexSession(id, title, {
+    appServer: codexAppServer,
+    isTranscriptHeadlessId: transcriptHeadless.isTranscriptHeadlessId,
+    setTranscriptTitle: codex.renameTranscriptSession,
+    resolveNativeTitle: codex.resolveNativeRenameTitle,
+    clearLegacyTitle: codex.clearLegacyTitle,
+    onCleanupError: error => console.warn(
+      `[codex:sessions] durable rename succeeded but legacy title cleanup failed: ${error.message}`),
+  });
+}
+
 module.exports = {
   ...metadata,
   availability,
   buildCommand,
+  pendingSessionEnvironment,
   codexExecutable,
   watchPaths,
   listSessions: codex.listSessions,
   listArchivedSessions: codex.listArchivedSessions,
   getSession: codex.getSession,
+  isSessionInFlight: codex.isSessionInFlight,
+  listInFlightSessionIds: codex.listInFlightSessionIds,
   getSessionPreview: codex.getSessionPreview,
   getSessionConversation: codex.getSessionConversation,
   getSessionContextBreakdown: codex.getSessionContextBreakdown,
   getSessionConfig: codex.getSessionConfig,
-  renameSession: codex.renameSession,
+  renameSession,
   hideSession: codex.hideSession,
   restoreSession: codex.restoreSession,
   listRepos: codex.listRepos,

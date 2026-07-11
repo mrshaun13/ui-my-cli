@@ -11,6 +11,8 @@ import { isHeadless } from './lib/headless.js'
 import { DEFAULT_PROVIDER_ID, providerApiPath, providerStorageKey } from './lib/providers.js'
 import { DASHBOARD_STYLES, applyDashboardStyle, loadDashboardStyle, saveDashboardStyle } from './lib/dashboardStyles.js'
 import { TEXT_SIZES, applyTextSize, loadTextSize, saveTextSize } from './lib/textSizes.js'
+import { renameSessionTitle } from './lib/sessionTitles.js'
+import { stableTabState, tabReducer, tabSessionId, tabTransportId } from './lib/tabState.js'
 // ContextPieChart is rendered inside ControlBar (not imported here)
 
 /**
@@ -76,13 +78,16 @@ function loadStoredTabs(providerId) {
     const raw = localStorage.getItem(providerStorageKey(providerId, 'open-tabs'))
     if (!raw) return null
     const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed?.tabs)) return parsed
+    if (Array.isArray(parsed?.tabs)) return stableTabState(parsed.tabs, parsed.activeTabId)
   } catch { /* ignore */ }
   return null
 }
 function saveStoredTabs(providerId, tabs, activeTabId) {
   try {
-    localStorage.setItem(providerStorageKey(providerId, 'open-tabs'), JSON.stringify({ tabs, activeTabId }))
+    localStorage.setItem(
+      providerStorageKey(providerId, 'open-tabs'),
+      JSON.stringify(stableTabState(tabs, activeTabId)),
+    )
   } catch { /* ignore */ }
 }
 
@@ -103,86 +108,6 @@ function saveSelectedProvider(providerId) {
 // ── Tab state reducer ────────────────────────────────────────────────────────
 // Combines tabs[] and activeTabId into one atomic state to avoid
 // coordination bugs between multiple useState setters.
-
-function tabReducer(state, action) {
-  switch (action.type) {
-    case 'open': {
-      // Open a session in a tab (or activate existing tab)
-      const { id, mode } = action
-      const exists = state.tabs.find(t => t.id === id)
-      if (exists) {
-        return {
-          tabs: state.tabs.map(t => t.id === id ? { ...t, mode } : t),
-          activeTabId: id,
-        }
-      }
-      // New tab — mountKey is set once and never changes (survives rekey)
-      return {
-        tabs: [...state.tabs, { id, mode, mountKey: id }],
-        activeTabId: id,
-      }
-    }
-    case 'activate': {
-      // Click on tab title — activate in terminal mode
-      const tab = state.tabs.find(t => t.id === action.id)
-      if (!tab) return state
-      return {
-        tabs: state.tabs.map(t => t.id === action.id ? { ...t, mode: 'terminal' } : t),
-        activeTabId: action.id,
-      }
-    }
-    case 'togglePreview': {
-      // Click the info icon on a tab — toggle between terminal and preview
-      const tab = state.tabs.find(t => t.id === action.id)
-      if (!tab) return state
-      return {
-        tabs: state.tabs.map(t =>
-          t.id === action.id
-            ? { ...t, mode: t.mode === 'preview' ? 'terminal' : 'preview' }
-            : t
-        ),
-        activeTabId: action.id,
-      }
-    }
-    case 'close': {
-      // Close a tab — pick a neighbor if it was active
-      const idx = state.tabs.findIndex(t => t.id === action.id)
-      if (idx === -1) return state
-      const next = state.tabs.filter(t => t.id !== action.id)
-      let nextActive = state.activeTabId
-      if (state.activeTabId === action.id) {
-        if (next.length === 0) {
-          nextActive = null
-        } else {
-          nextActive = next[Math.min(idx, next.length - 1)].id
-        }
-      }
-      return { tabs: next, activeTabId: nextActive }
-    }
-    case 'rekey': {
-      // Pending session got its real UUID — update tab ID, keep mountKey stable
-      const { oldId, newId } = action
-      if (!state.tabs.some(t => t.id === oldId)) return state
-      return {
-        tabs: state.tabs.map(t => t.id === oldId ? { ...t, id: newId } : t),
-        activeTabId: state.activeTabId === oldId ? newId : state.activeTabId,
-      }
-    }
-    case 'deactivate': {
-      // Logo click — go to splash, keep tabs open
-      return { ...state, activeTabId: null }
-    }
-    case 'restore': {
-      // Restore from localStorage on initial load
-      return { tabs: action.tabs, activeTabId: action.activeTabId }
-    }
-    case 'reset': {
-      return { tabs: [], activeTabId: null }
-    }
-    default:
-      return state
-  }
-}
 
 function useProviders() {
   const [providers, setProviders] = useState(FALLBACK_PROVIDERS)
@@ -372,7 +297,7 @@ export default function App() {
   const providerId = selectedProvider?.id || DEFAULT_PROVIDER_ID
   const providerLabel = selectedProvider?.label || providerId
   const providerCommand = selectedProvider?.command || providerId
-  const { sessions, connected, error, latestPrompt, rekeyMap, expiredPending } = useStatusFeed(providerId)
+  const { sessions, connected, error, latestPrompt, rekeyMap, collisionPending, expiredPending, collisionNotice, updateSessionTitle } = useStatusFeed(providerId)
   const providerSessionsReady = sessions.length > 0 && sessions.every(s => !s.provider || s.provider === providerId)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
@@ -512,7 +437,7 @@ export default function App() {
     const cutoff = Math.floor(Date.now() / 1000) - coldDays * 86400
     const validTabs = stored.tabs
       .filter(t => {
-        const s = sessionsById.get(t.id)
+        const s = sessionsById.get(tabSessionId(t))
         if (!s) return false
         if (t.id === stored.activeTabId) return true
         return (s.lastActivityAt || 0) >= cutoff
@@ -521,6 +446,8 @@ export default function App() {
         id: t.id,
         mode: t.mode || 'terminal',
         mountKey: t.mountKey || t.id,
+        canonicalId: t.canonicalId || t.id,
+        transportId: t.transportId || t.id,
       }))
     if (validTabs.length === 0) return
     const activeId = validTabs.find(t => t.id === stored.activeTabId)
@@ -544,7 +471,7 @@ export default function App() {
     if (sessions.length === 0) return
     const sessionIds = new Set(sessions.map(s => s.id))
     for (const tab of tabs) {
-      if (!tab.id.startsWith('pending-') && !sessionIds.has(tab.id)) {
+      if (!tabTransportId(tab).startsWith('pending-') && !sessionIds.has(tabSessionId(tab))) {
         dispatch({ type: 'close', id: tab.id })
       }
     }
@@ -563,8 +490,8 @@ export default function App() {
     const sessionsById = new Map(sessions.map(s => [s.id, s]))
     for (const tab of tabs) {
       if (tab.id === activeTabId) continue
-      if (tab.id.startsWith('pending-')) continue
-      const s = sessionsById.get(tab.id)
+      if (tabTransportId(tab).startsWith('pending-')) continue
+      const s = sessionsById.get(tabSessionId(tab))
       if (!s) continue   // handled by the disappearance effect above
       if ((s.lastActivityAt || 0) < cutoff) {
         dispatch({ type: 'close', id: tab.id })
@@ -576,7 +503,7 @@ export default function App() {
   // and clean up the pendingMeta entry (the real session is now in the DB feed).
   useEffect(() => {
     for (const [oldId, newId] of Object.entries(rekeyMap)) {
-      dispatch({ type: 'rekey', oldId, newId })
+      dispatch({ type: 'rekey', oldId, newId, collision: collisionPending.has(oldId) })
       setPendingMeta(prev => {
         if (!prev[oldId]) return prev
         const next = { ...prev }
@@ -584,10 +511,10 @@ export default function App() {
         return next
       })
     }
-  }, [rekeyMap])
+  }, [rekeyMap, collisionPending])
 
-  // When a pending terminal exits before its session persists, close the dead
-  // placeholder tab and clean up pendingMeta.
+  // When the server reports that a pending PTY expired before registration,
+  // close the orphaned tab and clean up pendingMeta.
   useEffect(() => {
     if (expiredPending.size === 0) return
     for (const tempKey of expiredPending) {
@@ -602,12 +529,13 @@ export default function App() {
   }, [expiredPending])
 
   const handleRename = useCallback(async (id, title) => {
-    await fetch(providerApiPath(providerId, `sessions/${id}/rename`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
-    })
-  }, [providerId])
+    const savedTitle = await renameSessionTitle(
+      providerApiPath(providerId, `sessions/${id}/rename`),
+      title,
+    )
+    updateSessionTitle(id, savedTitle)
+    return savedTitle
+  }, [providerId, updateSessionTitle])
 
   const handleRemove = useCallback(async (id) => {
     // Optimistically close the tab
@@ -678,7 +606,7 @@ export default function App() {
 
   // ── Synthetic sidebar entries for pending sessions ─────────────────────────
   // Injects a placeholder card so the sidebar shows the new session immediately
-  // (before the Codex CLI writes a DB record).  Three detection methods prevent
+  // (before the Codex CLI writes a DB record). Two exact detection methods prevent
   // duplicate cards when the real session arrives before the rekey poll fires.
   const sidebarSessions = useMemo(() => {
     const pendingKeys = Object.keys(pendingMeta)
@@ -688,19 +616,11 @@ export default function App() {
 
     const synthetics = pendingKeys
       .filter(key => {
-        const meta = pendingMeta[key]
         // Method 1: re-keyed and real session is in DB
         const realId = rekeyMap[key]
         if (realId && dbIds.has(realId)) return false
         // Method 2: pending key itself appeared in DB (unusual, but safe)
         if (dbIds.has(key)) return false
-        // Method 3: WAL watcher pushed the real session before rekey poll —
-        // match by workingDir + creation time (within 30s window)
-        const hasDbMatch = sessions.some(s =>
-          s.workingDir === meta.workingDir &&
-          Math.abs(s.createdAt - meta.createdAt) < 30
-        )
-        if (hasDbMatch) return false
         return true
       })
       .map(key => ({
@@ -724,12 +644,13 @@ export default function App() {
 
   // ── Derived state ──────────────────────────────────────────────────────────
   const activeTab = tabs.find(t => t.id === activeTabId) || null
-  const selectedSession = sidebarSessions.find(s => s.id === activeTabId) || null
+  const selectedSessionId = tabSessionId(activeTab)
+  const selectedSession = sidebarSessions.find(s => s.id === selectedSessionId) || null
   const selectedIsHeadless = selectedSession ? isHeadless(selectedSession) : false
 
   // For the Sidebar: derive selectedId/previewId from the active tab's mode
-  const sidebarSelectedId = (activeTab?.mode === 'terminal') ? activeTabId : null
-  const sidebarPreviewId  = (activeTab?.mode === 'preview')  ? activeTabId : null
+  const sidebarSelectedId = (activeTab?.mode === 'terminal') ? selectedSessionId : null
+  const sidebarPreviewId  = (activeTab?.mode === 'preview')  ? selectedSessionId : null
 
   // What to show in the main area
   const mainView = activeTabId
@@ -836,6 +757,9 @@ export default function App() {
         {error && (
           <div className="error-banner"><span>⚠</span> {error}</div>
         )}
+        {collisionNotice && (
+          <div className="error-banner" role="status"><span>ℹ</span> {collisionNotice}</div>
+        )}
 
         <TabBar
           tabs={tabs}
@@ -852,7 +776,7 @@ export default function App() {
               there is no PTY to attach to (the run was launched out-of-band)
               so spawning the WS would just 404. */}
           {tabs.map(tab => {
-            const tabSession = sidebarSessions.find(s => s.id === tab.id)
+            const tabSession = sidebarSessions.find(s => s.id === tabSessionId(tab))
             const headless = isHeadless(tabSession)
             const paneActive = tab.id === activeTabId && activeTab?.mode === 'terminal'
             return (
@@ -865,7 +789,7 @@ export default function App() {
                 ) : (
                   <Terminal
                     providerId={providerId}
-                    sessionId={tab.id}
+                    sessionId={tabTransportId(tab)}
                     active={paneActive}
                     styleId={styleId}
                     textSizeId={textSizeId}
@@ -881,7 +805,7 @@ export default function App() {
               <SessionPreview
                 providerId={providerId}
                 providerLabel={providerLabel}
-                sessionId={activeTabId}
+                sessionId={selectedSessionId}
                 onResume={handleResume}
                 onArchive={handleRemove}
                 onRestore={handleRestore}
@@ -907,7 +831,7 @@ export default function App() {
         providerId={providerId}
         providerLabel={providerLabel}
         session={selectedSession}
-        sessionId={activeTabId}
+        sessionId={selectedSessionId}
         onRename={handleRename}
         onRemove={handleRemove}
       />

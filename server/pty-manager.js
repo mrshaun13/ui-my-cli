@@ -85,6 +85,20 @@ const TERMINAL_QUERY_RE = new RegExp(
 
 // Map of `${providerId}:${sessionId}` -> { pty, clients, scrollback, providerId, sessionId }
 const ptys = new Map();
+const ptyRemovedListeners = new Set();
+
+function notifyPtyRemoved(entry) {
+  if (!entry || entry.removalNotified) return;
+  entry.removalNotified = true;
+  for (const listener of ptyRemovedListeners) {
+    try { listener(entry); } catch {}
+  }
+}
+
+function onPtyRemoved(listener) {
+  ptyRemovedListeners.add(listener);
+  return () => ptyRemovedListeners.delete(listener);
+}
 
 // ── Shell resolution ────────────────────────────────────────────────────────
 
@@ -243,6 +257,7 @@ function wirePtyEvents(entry) {
     for (const [key, val] of ptys.entries()) {
       if (val === entry) { ptys.delete(key); break; }
     }
+    notifyPtyRemoved(entry);
   });
 }
 
@@ -258,6 +273,7 @@ function doSpawn(providerId, command, args, cwd, cols, rows, ws, envOverrides = 
     if (ensurePtySpawnHelperIsExecutable()) {
       console.info('[pty] Restored executable permission to node-pty spawn-helper.');
     }
+    const startedAt = Date.now();
     const p = pty.spawn(command, args, {
       name: 'xterm-256color',
       cols,
@@ -271,6 +287,8 @@ function doSpawn(providerId, command, args, cwd, cols, rows, ws, envOverrides = 
       clients: new Set(),
       scrollback: [],
       scrollbackSize: 0,
+      startedAt,
+      lastClientDetachedAt: null,
     };
   } catch (err) {
     // Log full diagnostic server-side
@@ -308,6 +326,7 @@ function spawnPty(providerId, sessionId, workingDir, ws, cols = 80, rows = 24, o
     const entry = ptys.get(key);
     replayScrollback(entry, ws);
     entry.clients.add(ws);
+    entry.lastClientDetachedAt = null;
     // Resize the PTY to the new client's dimensions. This is critical for
     // pending sessions where the PTY was spawned with default dimensions
     // before any client connected. Without this, line wrapping and cursor
@@ -388,7 +407,17 @@ function attachClient(providerId, sessionId, workingDir, ws, cols, rows, options
   const removeClient = () => {
     // Look up by identity scan in case the entry was re-keyed
     for (const [, entry] of ptys) {
-      if (entry.clients.delete(ws)) break;
+      if (!entry.clients.delete(ws)) continue;
+      if (entry.clients.size === 0) {
+        entry.lastClientDetachedAt = Date.now();
+        if (terminateDetachedCollision(entry)) {
+          for (const [key, value] of ptys) {
+            if (value === entry) ptys.delete(key);
+          }
+          notifyPtyRemoved(entry);
+        }
+      }
+      break;
     }
   };
   ws.on('close', removeClient);
@@ -413,6 +442,7 @@ function killPty(providerId, sessionId) {
     // Already dead
   }
   ptys.delete(key);
+  notifyPtyRemoved(entry);
   return true;
 }
 
@@ -425,6 +455,20 @@ function isPtyActive(providerId, sessionId) {
     providerId = DEFAULT_PROVIDER_ID;
   }
   return ptys.has(ptyKey(providerId, sessionId));
+}
+
+function pendingPtyState(providerId, sessionId) {
+  const entry = ptys.get(ptyKey(providerId, sessionId));
+  if (!entry) return null;
+  return {
+    active: true,
+    processId: entry.pty.pid,
+    startedAt: entry.startedAt,
+    clientCount: entry.clients.size,
+    detachedAt: entry.clients.size === 0
+      ? entry.lastClientDetachedAt ?? entry.startedAt
+      : null,
+  };
 }
 
 function isPtyControlPlane(providerId, sessionId) {
@@ -475,13 +519,17 @@ function spawnNewSession(providerId, tempKey, workingDir, cols = 80, rows = 24, 
     remoteEndpoint: options.remoteEndpoint || null,
     workingDirectory: cwd,
   });
+  const pendingEnvironment = typeof provider.pendingSessionEnvironment === 'function'
+    ? provider.pendingSessionEnvironment(options.correlationId)
+    : {};
 
-  const entry = doSpawn(provider.id, command, args, cwd, cols, rows, null);
+  const entry = doSpawn(provider.id, command, args, cwd, cols, rows, null, pendingEnvironment);
   if (!entry) return null;
 
   entry.providerId = provider.id;
   entry.sessionId = tempKey;
   entry.controlPlane = Boolean(options.remoteEndpoint);
+  entry.correlationId = options.correlationId || null;
   ptys.set(ptyKey(provider.id, tempKey), entry);
   wirePtyEvents(entry);
 
@@ -503,9 +551,40 @@ function rekeyPty(providerId, oldKey, newKey) {
   const newPtyKey = ptyKey(providerId, newKey);
   const entry = ptys.get(oldPtyKey);
   if (!entry) return false;
+  if (ptys.has(newPtyKey)) return false;
   ptys.delete(oldPtyKey);
   entry.sessionId = newKey;
   ptys.set(newPtyKey, entry);
+  return true;
+}
+
+function resolvePtyRekeyCollision(providerId, pendingKey, realSessionId) {
+  const pendingEntry = ptys.get(ptyKey(providerId, pendingKey));
+  const canonicalEntry = ptys.get(ptyKey(providerId, realSessionId));
+  if (!markPtyRekeyCollision(pendingEntry, canonicalEntry, realSessionId)) return false;
+
+  if (terminateDetachedCollision(pendingEntry)) {
+    ptys.delete(ptyKey(providerId, pendingKey));
+    notifyPtyRemoved(pendingEntry);
+  }
+  return true;
+}
+
+function markPtyRekeyCollision(pendingEntry, canonicalEntry, realSessionId) {
+  if (!pendingEntry || !canonicalEntry || pendingEntry === canonicalEntry) return false;
+  pendingEntry.collisionRealId = realSessionId;
+  const message = '\r\n\x1b[33mThis session also has a canonical terminal. This terminal remains available until you close it; its process will close after detaching.\x1b[0m\r\n';
+  for (const client of pendingEntry.clients) {
+    if (client.readyState === 1) {
+      client.send(JSON.stringify({ type: 'output', data: message }));
+    }
+  }
+  return true;
+}
+
+function terminateDetachedCollision(entry) {
+  if (!entry?.collisionRealId || entry.clients.size > 0) return false;
+  try { entry.pty.kill(); } catch {}
   return true;
 }
 
@@ -551,9 +630,14 @@ module.exports = {
   killPty,
   isPtyActive,
   isPtyControlPlane,
+  pendingPtyState,
   activePtySessions,
   spawnNewSession,
   rekeyPty,
+  resolvePtyRekeyCollision,
+  markPtyRekeyCollision,
+  terminateDetachedCollision,
+  onPtyRemoved,
   validatePty,
   interactivePtyEnv,
   ensurePtySpawnHelperIsExecutable,

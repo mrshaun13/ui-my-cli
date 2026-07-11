@@ -17,6 +17,7 @@ using Iciclecreek.Terminal;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using XT = global::XTerm;
 
 namespace CodexNative;
 
@@ -57,6 +58,7 @@ public sealed partial class MainWindow : Window
     private readonly List<TerminalPaneState> _panes = [];
     private readonly List<Border> _paneSplitters = [];
     private readonly HashSet<TerminalPaneState> _paneRemovalsInProgress = [];
+    private readonly Dictionary<string, PendingSessionRename> _pendingSessionRenames = [];
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _connectionPulseTimer;
     private readonly DispatcherTimer _sessionHoverAnimationTimer;
@@ -817,6 +819,7 @@ public sealed partial class MainWindow : Window
         state.AdaptivePromptBox.IsEnabled = !state.AdaptiveSubmitting && !state.Pane.AdaptiveChanging;
         state.AdaptiveSendButton.IsEnabled = !state.AdaptiveSubmitting && !state.Pane.AdaptiveChanging;
         ApplyAdaptiveToggleTheme(state, EffectivePaneTheme(state.Pane));
+        state.ScreenshotButton.Margin = new Thickness(0);
         ToolTip.SetTip(
             state.AdaptiveToggleButton,
             state.ControlPlaneAvailable switch
@@ -1037,6 +1040,7 @@ public sealed partial class MainWindow : Window
         _workspaceReady = true;
         await SaveWorkspaceAsync();
         _updateService.CleanupPreviousInstall(_platform);
+        ShowPreviousUpdateResult();
         _refreshTimer.Start();
         _updateCheckTimer.Start();
         _ = CheckForUpdateAsync(reportCurrent: false);
@@ -1313,6 +1317,24 @@ public sealed partial class MainWindow : Window
         LaunchBrowserButton.Content = width < 1050 ? "Browser" : "Launch in Browser";
     }
 
+    private void ShowPreviousUpdateResult()
+    {
+        try
+        {
+            var result = NativeUpdateResultStore.Take(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+            if (result is null) return;
+            SetStatus(result.Message, result.Succeeded ? RunningBrush : ErrorBrush);
+            NativeLog.Write(
+                $"Previous updater result for {result.Version}: " +
+                $"{(result.Succeeded ? "success" : "failure")} at {result.RecordedAt:O}.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            NativeLog.Write($"Could not read previous update result: {ex.Message}");
+        }
+    }
+
     private void InitializeSelectors()
     {
         _initializingSelectors = true;
@@ -1357,7 +1379,10 @@ public sealed partial class MainWindow : Window
         SetStatus("Connecting to ui-my-cli data service…", StartingBrush);
         if (await _api.TryUseExistingServiceAsync(cancellationToken))
         {
-            SetStatus($"Dashboard connected on {_api.ConnectedPort} · persistent terminals enabled", RunningBrush);
+            var adopted = await TryReadoptDashboardServiceAsync(cancellationToken);
+            SetStatus(
+                $"Dashboard {(adopted ? "reconnected to owned service" : "connected")} on {_api.ConnectedPort} · persistent terminals enabled",
+                RunningBrush);
             return true;
         }
 
@@ -1375,6 +1400,8 @@ public sealed partial class MainWindow : Window
                 }
             }
             var hostExecutable = Path.Combine(AppContext.BaseDirectory, _platform.TerminalHostFileName);
+            DashboardApiProbeResult? incompatibleService = null;
+            var incompatiblePort = 0;
             foreach (var port in DashboardServicePorts.PrivateCandidates)
             {
                 _api.UsePrivateService(port);
@@ -1382,28 +1409,71 @@ public sealed partial class MainWindow : Window
                 // service alive while a new UI is starting. Recheck immediately
                 // before spawning so a short probe race does not create a noisy
                 // EADDRINUSE child process.
-                if (await _api.IsAvailableAsync(cancellationToken))
+                var existingProbe = await _api.ProbeCurrentServiceAsync(cancellationToken);
+                if (existingProbe.IsCompatible)
                 {
-                    SetStatus($"Dashboard reconnected on {port} · persistent terminals enabled", RunningBrush);
+                    var adopted = await TryReadoptDashboardServiceAsync(cancellationToken);
+                    SetStatus(
+                        $"Dashboard reconnected{(adopted ? " to owned service" : string.Empty)} on {port} · persistent terminals enabled",
+                        RunningBrush);
                     return true;
                 }
-                _serviceManager.EnsureStarted(
+                if (existingProbe.State == DashboardApiProbeState.Incompatible)
+                {
+                    incompatibleService ??= existingProbe;
+                    if (incompatiblePort == 0) incompatiblePort = port;
+                    var ownsService = _serviceManager.OwnsServiceOnPort(port);
+                    if (!ownsService) continue;
+                    if (!existingProbe.CanReplaceOwnedService(ownsService))
+                    {
+                        throw new InvalidOperationException(
+                            $"{existingProbe.DescribeMismatch(port)} The service is owned by this app and has " +
+                            $"{existingProbe.ActivePtys} active terminal{(existingProbe.ActivePtys == 1 ? string.Empty : "s")}, " +
+                            "so it was not replaced.");
+                    }
+                    NativeLog.Write(
+                        $"Replacing incompatible dashboard service owned by this UI on port {port}; no active PTYs were reported.");
+                    if (!_serviceManager.StopOwnedService())
+                    {
+                        throw new InvalidOperationException(
+                            $"{existingProbe.DescribeMismatch(port)} The owned zero-PTY service could not be stopped safely.");
+                    }
+                }
+                var ownership = _serviceManager.EnsureStarted(
                     _platform.Platform,
                     hostExecutable,
                     _settings.Distribution,
                     _settings.DashboardWorkingDirectory,
                     Environment.GetEnvironmentVariable("NODE_BIN"),
                     port);
+                _settings = _settings with { DashboardServiceOwnership = ownership };
+                await _settingsStore.SaveAsync(_settings, cancellationToken);
                 var exited = false;
                 for (var attempt = 0; attempt < 20; attempt++)
                 {
                     await Task.Delay(500, cancellationToken);
-                    if (await _api.IsAvailableAsync(cancellationToken))
+                    var launchedProbe = await _api.ProbeCurrentServiceAsync(cancellationToken);
+                    if (launchedProbe.IsCompatible)
                     {
                         SetStatus(
                             $"Started ui-my-cli data service on {port} · persistent terminals enabled",
                             RunningBrush);
                         return true;
+                    }
+                    if (launchedProbe.State == DashboardApiProbeState.Incompatible)
+                    {
+                        var mismatch = launchedProbe.DescribeMismatch(port);
+                        if (launchedProbe.CanReplaceOwnedService(
+                                _serviceManager.OwnsServiceOnPort(port)))
+                        {
+                            NativeLog.Write(
+                                $"Stopping newly launched incompatible dashboard service on port {port}; no active PTYs were reported.");
+                            if (!_serviceManager.StopOwnedService())
+                                mismatch += " The newly launched service could not be stopped cleanly.";
+                        }
+                        throw new InvalidOperationException(
+                            $"{mismatch} The dashboard checkout at '{_settings.DashboardWorkingDirectory}' " +
+                            "does not match this native build.");
                     }
                     if (!_serviceManager.TryGetExitCode(out var exitCode)) continue;
                     NativeLog.Write(
@@ -1415,6 +1485,8 @@ public sealed partial class MainWindow : Window
                 throw new TimeoutException(
                     $"The native dashboard data service did not answer on port {port}. See {NativeLog.FilePath}");
             }
+            if (incompatibleService is not null)
+                throw new InvalidOperationException(incompatibleService.DescribeMismatch(incompatiblePort));
             throw new InvalidOperationException(
                 $"No private dashboard port from {DashboardServicePorts.FirstPrivate} through " +
                 $"{DashboardServicePorts.LastPrivate} could start the data service. See {NativeLog.FilePath}");
@@ -1429,6 +1501,25 @@ public sealed partial class MainWindow : Window
             SetStatus($"Dashboard data unavailable: {ex.Message}", ErrorBrush);
             return false;
         }
+    }
+
+    private async Task<bool> TryReadoptDashboardServiceAsync(CancellationToken cancellationToken)
+    {
+        var ownership = _settings.DashboardServiceOwnership;
+        if (ownership is null || ownership.Port != _api.ConnectedPort) return false;
+        if (!_serviceManager.TryAdopt(
+                _platform.Platform,
+                AppContext.BaseDirectory,
+                ownership)) return false;
+        var probe = await _api.ProbeOwnedServiceAsync(ownership, cancellationToken);
+        if (!probe.IsCompatible
+            || !probe.ControlAuthenticated
+            || !string.Equals(probe.InstanceId, ownership.InstanceId, StringComparison.Ordinal))
+        {
+            _serviceManager.ReleaseOwnership();
+            return false;
+        }
+        return true;
     }
 
     private async Task ReconcileDashboardRepositoryAsync()
@@ -1467,11 +1558,11 @@ public sealed partial class MainWindow : Window
             if (!ReferenceEquals(_statusFeed, feed) || !IsCurrentProviderData(providerId, epoch)) return;
             ApplyPushedSessions(sessions);
         });
-        feed.SessionRekeyed += (temporaryKey, realId) =>
+        feed.SessionRekeyed += (temporaryKey, realId, collision) =>
             Dispatcher.UIThread.Post(() =>
             {
                 if (!ReferenceEquals(_statusFeed, feed) || !IsCurrentProviderData(providerId, epoch)) return;
-                ApplySessionRekey(temporaryKey, realId, providerId);
+                ApplySessionRekey(temporaryKey, realId, providerId, collision);
             });
         feed.PendingSessionExpired += temporaryKey =>
             Dispatcher.UIThread.Post(() =>
@@ -1498,6 +1589,7 @@ public sealed partial class MainWindow : Window
     private void ApplyPushedSessions(IReadOnlyList<DashboardSession> sessions)
     {
         var ordered = sessions.OrderByDescending(session => session.LastActivityAt).ToList();
+        ReconcilePendingSessionRenames(ordered);
         if (SessionListsMateriallyEqual(_sessions, ordered))
         {
             ReconcilePendingSessions();
@@ -1546,7 +1638,11 @@ public sealed partial class MainWindow : Window
         return true;
     }
 
-    private void ApplySessionRekey(string temporaryKey, string realId, string? providerId = null)
+    private void ApplySessionRekey(
+        string temporaryKey,
+        string realId,
+        string? providerId = null,
+        bool collision = false)
     {
         providerId = string.IsNullOrWhiteSpace(providerId) ? _api.ProviderId : providerId;
         if (string.IsNullOrWhiteSpace(temporaryKey) || string.IsNullOrWhiteSpace(realId)
@@ -1555,19 +1651,41 @@ public sealed partial class MainWindow : Window
         var session = string.Equals(state.ProviderId, _api.ProviderId, StringComparison.Ordinal)
             ? _sessions.FirstOrDefault(candidate => candidate.Id == realId)
             : null;
+        if (collision)
+        {
+            CancelTerminalReconnect(state, suppress: true);
+            EndTerminalStartupReveal(state);
+            state.CollisionSessionId = realId;
+            if (session is not null) BindRegisteredSession(state, session);
+            UpdatePaneAdaptiveControls(state.Pane);
+            SetStatus(
+                _openTabs.TryGetValue(ProviderTabKey(providerId, realId), out var canonicalState)
+                    && !ReferenceEquals(state, canonicalState)
+                    ? "Session registered · canonical terminal also open · pending terminal retained until closed"
+                    : "Session registered · canonical terminal exists elsewhere · pending terminal retained until closed",
+                StartingBrush);
+            _ = SaveWorkspaceAsync();
+            return;
+        }
         _openTabs.Remove(OpenTabRegistryKey(state));
         state.Key = realId;
-        state.Session = session;
-        state.TitleBlock.Text = session?.DisplayTitle ?? state.TitleBlock.Text;
-        AutomationProperties.SetName(state.Tab, state.TitleBlock.Text ?? ProviderNoun(state.ProviderId));
-        state.RenameBox.Text = session?.DisplayTitle ?? state.RenameBox.Text;
-        state.ArchiveButton.IsVisible = session is not null;
-        state.SummaryButton.IsVisible = session is not null;
+        if (session is not null) BindRegisteredSession(state, session);
         _openTabs[OpenTabRegistryKey(state)] = state;
-        if (session is not null) _ = LoadSessionDetailsAsync(state, session);
         UpdatePaneAdaptiveControls(state.Pane);
         SetStatus($"Session registered · {realId[..Math.Min(8, realId.Length)]}", RunningBrush);
         _ = SaveWorkspaceAsync();
+    }
+
+    private void BindRegisteredSession(SessionTabState state, DashboardSession session)
+    {
+        state.Session = session;
+        state.RawTitle = session.DisplayTitle;
+        state.TitleBlock.Text = session.CompactDisplayTitle;
+        AutomationProperties.SetName(state.Tab, session.CompactDisplayTitle);
+        state.RenameBox.Text = session.DisplayTitle;
+        state.ArchiveButton.IsVisible = true;
+        state.SummaryButton.IsVisible = true;
+        _ = LoadSessionDetailsAsync(state, session);
     }
 
     private void RemoveExpiredPendingSession(string temporaryKey, string? providerId = null)
@@ -1620,6 +1738,8 @@ public sealed partial class MainWindow : Window
 
             var sessions = sessionsTask.Result.OrderByDescending(session => session.LastActivityAt).ToList();
             var archivedSessions = archivedTask.Result.OrderByDescending(session => session.LastActivityAt).ToList();
+            ReconcilePendingSessionRenames(sessions);
+            ReconcilePendingSessionRenames(archivedSessions);
             var sessionsChanged = !SessionListsMateriallyEqual(_sessions, sessions);
             var archivedSessionsChanged = !SessionListsMateriallyEqual(_archivedSessions, archivedSessions);
             if (sessionsChanged) _sessions = sessions;
@@ -1670,7 +1790,7 @@ public sealed partial class MainWindow : Window
                 .OrderByDescending(session => session.LastActivityAt)
                 .ToList();
             if (!IsCurrentProviderData(providerId, epoch)) return;
-
+            ReconcilePendingSessionRenames(sessions);
             var sessionsChanged = !SessionListsMateriallyEqual(_sessions, sessions);
             if (sessionsChanged) _sessions = sessions;
             var archivedSessionsChanged = false;
@@ -1680,6 +1800,7 @@ public sealed partial class MainWindow : Window
                     .OrderByDescending(session => session.LastActivityAt)
                     .ToList();
                 if (!IsCurrentProviderData(providerId, epoch)) return;
+                ReconcilePendingSessionRenames(archivedSessions);
                 archivedSessionsChanged = !SessionListsMateriallyEqual(_archivedSessions, archivedSessions);
                 if (archivedSessionsChanged) _archivedSessions = archivedSessions;
             }
@@ -1781,6 +1902,16 @@ public sealed partial class MainWindow : Window
     {
         var changed = false;
         foreach (var state in _openTabs.Values
+                     .Where(state => state.CollisionSessionId is not null && state.Session is null)
+                     .ToList())
+        {
+            var registered = _sessions.FirstOrDefault(session => session.Id == state.CollisionSessionId);
+            if (registered is null) continue;
+            BindRegisteredSession(state, registered);
+            UpdatePaneAdaptiveControls(state.Pane);
+            changed = true;
+        }
+        foreach (var state in _openTabs.Values
                      .Where(state => state.Kind == TerminalSessionKind.Codex
                          && state.ProviderId == _api.ProviderId
                          && state.Session is null
@@ -1801,8 +1932,9 @@ public sealed partial class MainWindow : Window
             _openTabs.Remove(OpenTabRegistryKey(state));
             state.Key = candidate.Id;
             state.Session = candidate;
-            state.TitleBlock.Text = candidate.DisplayTitle;
-            AutomationProperties.SetName(state.Tab, candidate.DisplayTitle);
+            state.RawTitle = candidate.DisplayTitle;
+            state.TitleBlock.Text = candidate.CompactDisplayTitle;
+            AutomationProperties.SetName(state.Tab, candidate.CompactDisplayTitle);
             state.RenameBox.Text = candidate.DisplayTitle;
             state.ArchiveButton.IsVisible = true;
             state.SummaryButton.IsVisible = true;
@@ -2106,7 +2238,7 @@ public sealed partial class MainWindow : Window
                 state.Key,
                 state.Session?.Id,
                 state.WorkingDirectory,
-                state.TitleBlock.Text ?? state.Key,
+                state.RawTitle,
                 state.LaunchedAt,
                 string.IsNullOrWhiteSpace(state.ProviderId) ? null : state.ProviderId);
         }
@@ -2366,9 +2498,9 @@ public sealed partial class MainWindow : Window
         LatestPromptButton.IsVisible = latest is not null;
         LatestPromptButton.Tag = latest;
         if (latest is null) return;
-        LatestPromptText.Text = latest.LastUserPrompt.Replace('\n', ' ').Replace('\r', ' ').Trim();
-        LatestPromptMetaText.Text = $"{latest.DisplayTitle} · {latest.Project} · {latest.LastActivityAgo}";
-        ToolTip.SetTip(LatestPromptButton, latest.LastUserPrompt);
+        LatestPromptText.Text = latest.DisplayPrompt;
+        LatestPromptMetaText.Text = $"{latest.CompactDisplayTitle} · {latest.Project} · {latest.LastActivityAgo}";
+        ToolTip.SetTip(LatestPromptButton, latest.DisplayPrompt);
     }
 
     private static string CohortLabel(string mode) => mode switch
@@ -2528,7 +2660,7 @@ public sealed partial class MainWindow : Window
                             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
                             Children =
                             {
-                                new TextBlock { Text = entry.Title, Foreground = ResourceBrush("PrimaryBrush"), TextTrimming = TextTrimming.CharacterEllipsis },
+                                new TextBlock { Text = SessionTitleDisplay.Compact(entry.Title), Foreground = ResourceBrush("PrimaryBrush"), MaxLines = 1, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
                                 LeaderValue($"{FormatNumber(visibleTotal)} · {CreditEstimate(entry)}"),
                             },
                         },
@@ -2619,7 +2751,7 @@ public sealed partial class MainWindow : Window
                             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
                             Children =
                             {
-                                new TextBlock { Text = entry.Title, Foreground = ResourceBrush("PrimaryBrush"), TextTrimming = TextTrimming.CharacterEllipsis },
+                                new TextBlock { Text = SessionTitleDisplay.Compact(entry.Title), Foreground = ResourceBrush("PrimaryBrush"), MaxLines = 1, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
                                 LeaderValue(display(entry)),
                             },
                         },
@@ -2858,6 +2990,7 @@ public sealed partial class MainWindow : Window
         TerminalPaneState pane,
         string? providerId = null)
     {
+        var displayTitle = SessionTitleDisplay.Compact(title);
         var isLocalShell = kind == TerminalSessionKind.LocalShell;
         providerId = isLocalShell
             ? string.Empty
@@ -2879,7 +3012,7 @@ public sealed partial class MainWindow : Window
         };
         terminal.AddHandler(
             InputElement.KeyDownEvent,
-            OnTerminalPasteKeyDown,
+            OnTerminalClipboardKeyDown,
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
         terminal.AddHandler(
@@ -3196,16 +3329,33 @@ public sealed partial class MainWindow : Window
             Background = ResourceBrush("ElevatedBrush"),
             BorderBrush = ResourceBrush("BorderBrightBrush"),
         };
+        var copyAllButton = new Button
+        {
+            Content = "Copy all",
+            Height = 28,
+            Padding = new Thickness(9, 2),
+            FontSize = 11,
+            Opacity = 0.82,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Background = ResourceBrush("ElevatedBrush"),
+            BorderBrush = ResourceBrush("BorderBrightBrush"),
+        };
         ToolTip.SetTip(microphoneButton, "Start voice-to-text for this terminal");
         AutomationProperties.SetName(microphoneButton, "Start voice-to-text for this terminal");
-        var captureActions = new StackPanel
+        var copyShortcut = OperatingSystem.IsMacOS() ? "Cmd+A" : "Ctrl+Shift+A";
+        ToolTip.SetTip(
+            copyAllButton,
+            $"Copy all terminal scrollback ({copyShortcut}). Hold Alt while dragging to send raw mouse input to the terminal app.");
+        AutomationProperties.SetName(copyAllButton, "Copy all terminal scrollback");
+        var terminalUtilityBar = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 6,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
             Margin = new Thickness(0, 0, 9, 8),
-            Children = { microphoneButton, screenshotButton },
+            Children = { copyAllButton, microphoneButton, screenshotButton },
         };
         var adaptiveToggleButton = new ToggleButton
         {
@@ -3288,7 +3438,7 @@ public sealed partial class MainWindow : Window
         };
         AutomationProperties.SetName(adaptiveComposer, "Adaptive Codex prompt composer");
         content.Children.Add(terminalClip);
-        content.Children.Add(captureActions);
+        content.Children.Add(terminalUtilityBar);
         content.Children.Add(adaptiveToggleHost);
         content.Children.Add(adaptiveComposer);
         content.Children.Add(reconnectBanner);
@@ -3298,10 +3448,10 @@ public sealed partial class MainWindow : Window
         Grid.SetRow(adaptiveComposer, AdaptiveComposerRow);
         Grid.SetRow(inspectorResizeTrack, InspectorSplitterRow);
         Grid.SetRow(inspector, InspectorRow);
-        Grid.SetRow(captureActions, 0);
+        Grid.SetRow(terminalUtilityBar, 0);
         Grid.SetRow(adaptiveToggleHost, 0);
         terminalClip.ZIndex = 0;
-        captureActions.ZIndex = 5;
+        terminalUtilityBar.ZIndex = 5;
         adaptiveToggleHost.ZIndex = 6;
         adaptiveComposer.ZIndex = 6;
         inspectorResizeTrack.ZIndex = 3;
@@ -3328,10 +3478,13 @@ public sealed partial class MainWindow : Window
         if (!isLocalShell) ToolTip.SetTip(statusGlyph, $"{providerLabel} terminal");
         var titleBlock = new TextBlock
         {
-            Text = title,
+            Text = displayTitle,
             FontSize = tabFontSize,
             MaxWidth = 220,
+            MaxLines = 1,
+            TextWrapping = TextWrapping.NoWrap,
             TextTrimming = TextTrimming.CharacterEllipsis,
+            ClipToBounds = true,
             VerticalAlignment = VerticalAlignment.Center,
         };
         var inlineRenameBox = new TextBox
@@ -3365,9 +3518,9 @@ public sealed partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             VerticalContentAlignment = VerticalAlignment.Stretch,
         };
-        AutomationProperties.SetName(tab, title);
+        AutomationProperties.SetName(tab, displayTitle);
         var state = new SessionTabState(
-            key, tab, terminal, content, screenshotButton, microphoneButton,
+            key, tab, terminal, content, screenshotButton, microphoneButton, copyAllButton,
             adaptiveToggleButton, adaptivePulseHalo, adaptiveComposer, adaptivePromptBox, adaptiveSendButton, adaptiveRouteText,
             inspector, inspectorBody, inspectorHeading, inspectorToggleButton, inspectorSplitter,
             inspectorResizeTrack, inspectorResizeGrip,
@@ -3381,6 +3534,7 @@ public sealed partial class MainWindow : Window
         ApplyThemeToSessionState(state, EffectivePaneTheme(pane));
         screenshotButton.Click += async (_, _) => await CaptureAndPasteScreenshotAsync(state);
         microphoneButton.Click += async (_, _) => await ToggleSpeechCaptureAsync(state);
+        copyAllButton.Click += async (_, _) => await CopyAllTerminalAsync(state);
         adaptiveToggleButton.Click += async (_, _) =>
             await SetPaneAdaptiveEnabledAsync(pane, adaptiveToggleButton.IsChecked == true);
         adaptiveSendButton.Click += async (_, _) => await SubmitAdaptivePromptAsync(state);
@@ -3461,7 +3615,7 @@ public sealed partial class MainWindow : Window
         titleBlock.DoubleTapped += (_, args) =>
         {
             args.Handled = true;
-            inlineRenameBox.Text = titleBlock.Text;
+            inlineRenameBox.Text = state.RenameBox.Text ?? titleBlock.Text;
             titleBlock.IsVisible = false;
             inlineRenameBox.IsVisible = true;
             inlineRenameBox.Focus();
@@ -3769,41 +3923,141 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnTerminalPasteKeyDown(object? sender, KeyEventArgs args)
+    private async void OnTerminalClipboardKeyDown(object? sender, KeyEventArgs args)
     {
         var primary = (args.KeyModifiers & (OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control)) != 0;
         var control = (args.KeyModifiers & KeyModifiers.Control) != 0;
         var meta = (args.KeyModifiers & KeyModifiers.Meta) != 0;
         var shift = (args.KeyModifiers & KeyModifiers.Shift) != 0;
         var alt = (args.KeyModifiers & KeyModifiers.Alt) != 0;
-        var standardPaste = args.Key == Key.V && primary && !alt;
-        var terminalPaste = args.Key == Key.Insert && shift && !control && !meta && !alt;
-        if (!standardPaste && !terminalPaste) return;
-
-        args.Handled = true;
+        var action = TerminalClipboardShortcut.Resolve(
+            _platform.Platform,
+            args.Key.ToString(),
+            control,
+            meta,
+            shift,
+            alt);
+        var standardCopy = args.Key == Key.C && primary && !alt;
         if (sender is not TerminalControl terminal) return;
         var terminalView = args.Source as TerminalView
             ?? terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault();
         if (terminalView is null) return;
+        var state = _openTabs.Values.FirstOrDefault(candidate =>
+            ReferenceEquals(candidate.Terminal, terminal));
+        var selection = terminalView.Terminal.Selection;
 
+        if (IsPrimaryModifierKey(args.Key)
+            && (selection.HasSelection || !string.IsNullOrEmpty(state?.TerminalSelectedText)))
+        {
+            // Keep the terminal library from clearing its selection when the
+            // standalone Ctrl/Cmd key event arrives before the copy shortcut.
+            args.Handled = true;
+            return;
+        }
+
+        if (OperatingSystem.IsMacOS()
+            && args.Key == Key.C
+            && control
+            && !meta
+            && !shift
+            && !alt)
+        {
+            // Cmd+C owns clipboard copying on macOS. Let Control+C continue
+            // to the PTY as SIGINT even when a selection is visible.
+            selection.ClearSelection();
+            if (state is not null) state.TerminalSelectedText = null;
+            terminalView.InvalidateVisual();
+            return;
+        }
+
+        if (standardCopy || action == TerminalClipboardAction.CopySelection)
+        {
+            var selectedText = selection.HasSelection
+                ? selection.GetSelectionText()
+                : state?.TerminalSelectedText;
+            if (string.IsNullOrEmpty(selectedText))
+            {
+                if (action == TerminalClipboardAction.CopySelection)
+                {
+                    args.Handled = true;
+                    SetStatus("Select terminal text first, or use Copy all", StartingBrush);
+                    return;
+                }
+            }
+            else
+            {
+                args.Handled = true;
+                try
+                {
+                    var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
+                        ?? throw new InvalidOperationException("The system clipboard is unavailable.");
+                    await clipboard.SetTextAsync(selectedText);
+                    if (state is not null) state.TerminalSelectedText = null;
+                    SetStatus("Terminal selection copied to clipboard", RunningBrush);
+                }
+                catch (Exception ex)
+                {
+                    NativeLog.Write($"Terminal copy failed: {ex}");
+                    SetStatus($"Copy failed: {ex.Message}", ErrorBrush);
+                }
+                return;
+            }
+        }
+
+        if (!IsModifierKey(args.Key) && state is not null)
+            state.TerminalSelectedText = null;
+
+        if (action == TerminalClipboardAction.CopyAll)
+        {
+            args.Handled = true;
+            if (state is not null) await CopyAllTerminalAsync(state);
+            return;
+        }
+
+        if (action != TerminalClipboardAction.Paste) return;
+        args.Handled = true;
         try
         {
             terminalView.Focus();
-            var state = _openTabs.Values.FirstOrDefault(candidate =>
-                ReferenceEquals(candidate.Terminal, terminal));
             if (state?.Kind == TerminalSessionKind.Codex
-                && await TryPasteClipboardScreenshotAsync(state, terminalView))
-            {
-                return;
-            }
+                && await TryPasteClipboardScreenshotAsync(state, terminalView)) return;
             await terminalView.PasteAsync();
         }
         catch (Exception ex)
         {
-            NativeLog.Write($"Terminal paste failed: {ex}");
-            SetStatus($"Paste failed: {ex.Message}", ErrorBrush);
+            NativeLog.Write($"Terminal clipboard action failed: {ex}");
+            SetStatus($"Terminal clipboard action failed: {ex.Message}", ErrorBrush);
         }
     }
+
+    private async Task CopyAllTerminalAsync(SessionTabState state)
+    {
+        var terminalView = state.TerminalView
+            ?? state.Terminal.GetVisualDescendants().OfType<TerminalView>().FirstOrDefault();
+        if (terminalView is null) return;
+        try
+        {
+            terminalView.Terminal.Selection.SelectAll();
+            terminalView.InvalidateVisual();
+            await terminalView.CopyAsync();
+            SetStatus($"Copied all terminal scrollback for {state.TitleBlock.Text}", RunningBrush);
+        }
+        catch (Exception ex)
+        {
+            NativeLog.Write($"Copy all terminal scrollback failed: {ex}");
+            SetStatus($"Copy all failed: {ex.Message}", ErrorBrush);
+        }
+    }
+
+    private static bool IsModifierKey(Key key) => key is
+        Key.LeftCtrl or Key.RightCtrl
+        or Key.LeftShift or Key.RightShift
+        or Key.LeftAlt or Key.RightAlt
+        or Key.LWin or Key.RWin;
+
+    private static bool IsPrimaryModifierKey(Key key) => OperatingSystem.IsMacOS()
+        ? key is Key.LWin or Key.RWin
+        : key is Key.LeftCtrl or Key.RightCtrl;
 
     private async Task<bool> TryPasteClipboardScreenshotAsync(
         SessionTabState state,
@@ -4316,6 +4570,11 @@ public sealed partial class MainWindow : Window
             await StopAndRemoveTabAsync(state, selectFallback);
             return;
         }
+        if (state.CollisionSessionId is not null)
+        {
+            await StopAndRemoveTabAsync(state, selectFallback);
+            return;
+        }
         await CancelSpeechCaptureAsync(state);
         CancelTerminalReconnect(state, suppress: true);
         EndTerminalStartupReveal(state);
@@ -4559,7 +4818,8 @@ public sealed partial class MainWindow : Window
     {
         if (state.Session is null)
         {
-            state.TitleBlock.Text = state.RenameBox.Text?.Trim() ?? state.TitleBlock.Text;
+            state.RawTitle = state.RenameBox.Text?.Trim() ?? state.RawTitle;
+            state.TitleBlock.Text = SessionTitleDisplay.Compact(state.RawTitle);
             AutomationProperties.SetName(
                 state.Tab,
                 state.TitleBlock.Text ?? (state.Kind == TerminalSessionKind.LocalShell
@@ -4572,18 +4832,114 @@ public sealed partial class MainWindow : Window
         {
             return;
         }
+        if (title.EnumerateRunes().Count() > SessionDisplayText.MaximumTitleLength)
+        {
+            SetStatus($"Rename failed: title must be 1-{SessionDisplayText.MaximumTitleLength} characters", ErrorBrush);
+            return;
+        }
         try
         {
-            await _api.RenameAsync(state.Session.Id, title, providerId: state.ProviderId);
-            state.TitleBlock.Text = title;
-            AutomationProperties.SetName(state.Tab, title);
-            await RefreshAllAsync();
+            var renamedTitle = await RenameDashboardSessionAsync(state.Session, title);
+            state.RawTitle = renamedTitle;
+            state.RenameBox.Text = renamedTitle;
+            state.TitleBlock.Text = SessionTitleDisplay.Compact(renamedTitle);
+            AutomationProperties.SetName(state.Tab, state.TitleBlock.Text);
+            await SaveWorkspaceAsync();
+            await RefreshSessionsAsync();
+            SetStatus($"Renamed {renamedTitle}", RunningBrush);
         }
         catch (Exception ex)
         {
             SetStatus($"Rename failed: {ex.Message}", ErrorBrush);
         }
     }
+
+    private async Task<string> RenameDashboardSessionAsync(DashboardSession session, string title)
+    {
+        var expectedTitle = title.Trim();
+        var key = SessionRenameKey(session.Provider, session.Id);
+        _pendingSessionRenames[key] = new PendingSessionRename(
+            expectedTitle,
+            DateTimeOffset.UtcNow.AddSeconds(12));
+        SessionRenameResult result;
+        try
+        {
+            result = await _api.RenameAsync(session.Id, expectedTitle, providerId: session.Provider);
+        }
+        catch
+        {
+            if (_pendingSessionRenames.TryGetValue(key, out var pending)
+                && pending.ExpectedTitle == expectedTitle)
+            {
+                _pendingSessionRenames.Remove(key);
+            }
+            throw;
+        }
+
+        var canonicalTitle = string.IsNullOrWhiteSpace(result.Title) ? expectedTitle : result.Title;
+        var renamedSessionId = string.IsNullOrWhiteSpace(result.Id) ? session.Id : result.Id;
+        _pendingSessionRenames[key] = new PendingSessionRename(
+            canonicalTitle,
+            DateTimeOffset.UtcNow.AddSeconds(12));
+        ApplySuccessfulSessionRename(session.Provider, renamedSessionId, canonicalTitle);
+        return canonicalTitle;
+    }
+
+    private void ApplySuccessfulSessionRename(string provider, string sessionId, string title)
+    {
+        foreach (var candidate in _sessions
+                     .Concat(_archivedSessions)
+                     .Concat(_searchResults ?? []))
+        {
+            if (candidate.Id == sessionId
+                && string.Equals(candidate.Provider, provider, StringComparison.OrdinalIgnoreCase))
+            {
+                candidate.Title = title;
+            }
+        }
+        foreach (var state in _openTabs.Values)
+        {
+            if (state.Session?.Id != sessionId
+                || !string.Equals(state.Session.Provider, provider, StringComparison.OrdinalIgnoreCase)) continue;
+            state.Session.Title = title;
+            state.RenameBox.Text = title;
+            state.TitleBlock.Text = SessionTitleDisplay.Compact(title);
+            AutomationProperties.SetName(state.Tab, state.TitleBlock.Text);
+        }
+        if (_previewTabs.TryGetValue($"preview:{sessionId}", out var previewTab)
+            && previewTab.Header is StackPanel previewHeader
+            && previewHeader.Children.ElementAtOrDefault(1) is TextBlock previewTitle)
+        {
+            var displayTitle = SessionTitleDisplay.Compact(title);
+            previewTitle.Text = displayTitle;
+            AutomationProperties.SetName(previewTab, $"Session summary: {displayTitle}");
+        }
+        ApplySessionFilter();
+    }
+
+    private void ReconcilePendingSessionRenames(IList<DashboardSession> sessions)
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var key in _pendingSessionRenames
+                     .Where(entry => !SessionRenameGuard.IsActive(entry.Value, now))
+                     .Select(entry => entry.Key)
+                     .ToList())
+        {
+            _pendingSessionRenames.Remove(key);
+        }
+        foreach (var session in sessions)
+        {
+            if (_pendingSessionRenames.TryGetValue(
+                    SessionRenameKey(session.Provider, session.Id),
+                    out var pending))
+            {
+                session.Title = SessionRenameGuard.ResolveTitle(session.Title, pending, now);
+            }
+        }
+    }
+
+    private static string SessionRenameKey(string provider, string sessionId) =>
+        $"{(string.IsNullOrWhiteSpace(provider) ? "codex" : provider).ToLowerInvariant()}:{sessionId}";
 
     private async Task ArchiveSessionAsync(SessionTabState state)
     {
@@ -4656,6 +5012,17 @@ public sealed partial class MainWindow : Window
             if (_shutdownConfirmed || state.SuppressReconnect || !state.IsAttached)
             {
                 state.StatusGlyph.Foreground = args.ExitCode == 0 ? StartingBrush : ErrorBrush;
+                if (state.CollisionSessionId is not null && state.IsAttached)
+                {
+                    state.Pane.Tabs.Items.Remove(state.Tab);
+                    state.IsAttached = false;
+                    _openTabs.Remove(OpenTabRegistryKey(state));
+                    UpdatePaneAdaptiveControls(state.Pane);
+                    SelectPaneFallback(state.Pane);
+                    UpdatePaneEmptyStates();
+                    SetStatus("Redundant pending terminal exited · canonical session retained", StartingBrush);
+                    _ = SaveWorkspaceAsync();
+                }
                 return;
             }
             BeginTerminalReconnect(state, args.ExitCode);
@@ -4760,10 +5127,10 @@ public sealed partial class MainWindow : Window
             Spacing = 4,
             Children =
             {
-                new TextBlock { Text = session.DisplayTitle, Foreground = ResourceBrush("PrimaryBrush"), FontWeight = FontWeight.Bold, TextWrapping = TextWrapping.Wrap },
+                new TextBlock { Text = session.CompactDisplayTitle, Foreground = ResourceBrush("PrimaryBrush"), FontWeight = FontWeight.Bold, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis },
                 new TextBlock { Text = session.DisplayMeta, Foreground = ResourceBrush("SecondaryBrush"), FontSize = 11 },
                 new TextBlock { Text = $"status · {session.Status}", Foreground = ResourceBrush("AccentBrush"), FontSize = 11 },
-                new TextBlock { Text = session.LastUserPrompt, Foreground = ResourceBrush("MutedBrush"), FontSize = 11, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis },
+                new TextBlock { Text = session.DisplayPrompt, Foreground = ResourceBrush("MutedBrush"), FontSize = 11, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis },
             },
         },
     };
@@ -4826,7 +5193,7 @@ public sealed partial class MainWindow : Window
             Children =
             {
                 new TextBlock { Text = session.IsHeadless ? "◈" : "ⓘ", FontSize = TabIconFontSize(textSize), Foreground = ResourceBrush("AccentBrush") },
-                new TextBlock { Text = session.DisplayTitle, FontSize = TabHeaderFontSize(textSize), MaxWidth = 220, TextTrimming = TextTrimming.CharacterEllipsis },
+                new TextBlock { Text = session.CompactDisplayTitle, FontSize = TabHeaderFontSize(textSize), MaxWidth = 220, MaxLines = 1, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
                 close,
             },
         };
@@ -4841,12 +5208,13 @@ public sealed partial class MainWindow : Window
         }
         async Task RenamePreviewAsync(string title)
         {
-            await _api.RenameAsync(session.Id, title, providerId: providerId);
-            session.Title = title;
-            if (header.Children.ElementAtOrDefault(1) is TextBlock titleBlock) titleBlock.Text = title;
-            if (tab is not null) AutomationProperties.SetName(tab, $"Session summary: {title}");
+            var renamedTitle = await RenameDashboardSessionAsync(session, title);
+            session.Title = renamedTitle;
+            var displayTitle = SessionTitleDisplay.Compact(renamedTitle);
+            if (header.Children.ElementAtOrDefault(1) is TextBlock titleBlock) titleBlock.Text = displayTitle;
+            if (tab is not null) AutomationProperties.SetName(tab, $"Session summary: {displayTitle}");
             await RefreshSessionsAsync();
-            SetStatus($"Renamed {title}", RunningBrush);
+            SetStatus($"Renamed {renamedTitle}", RunningBrush);
         }
         async Task ArchivePreviewAsync()
         {
@@ -5153,6 +5521,7 @@ public sealed partial class MainWindow : Window
             await Task.Delay(250, cancellationToken);
             var results = await _api.SearchSessionsAsync(query, ArchivedCheckBox.IsChecked == true, cancellationToken);
             if (!IsCurrentProviderData(providerId, epoch)) return;
+            ReconcilePendingSessionRenames(results);
             _searchResults = results;
             ApplySessionFilter();
         }
@@ -5192,8 +5561,9 @@ public sealed partial class MainWindow : Window
             try
             {
                 var archivedSessions = await _api.GetArchivedSessionsAsync(providerId: providerId);
-                if (IsCurrentProviderData(providerId, epoch))
-                    _archivedSessions = archivedSessions;
+                if (!IsCurrentProviderData(providerId, epoch)) return;
+                ReconcilePendingSessionRenames(archivedSessions);
+                _archivedSessions = archivedSessions;
             }
             catch (Exception ex)
             {
@@ -5350,7 +5720,7 @@ public sealed partial class MainWindow : Window
         UpdateButton.Content = "Checking…";
         try
         {
-            var release = await _updateService.CheckAsync(_platform);
+            var release = await _updateService.CheckAsync(_platform, force: reportCurrent);
             _availableUpdate = release;
             if (release is null)
             {
@@ -5364,6 +5734,12 @@ public sealed partial class MainWindow : Window
                 ToolTip.SetTip(UpdateButton, $"Install {release.DisplayName} after active sessions finish");
                 SetStatus($"Codex Native {release.Version} is available", StartingBrush);
             }
+        }
+        catch (GitHubRateLimitException ex)
+        {
+            UpdateButton.Content = "Check updates";
+            NativeLog.Write($"Update check rate limited until {ex.RetryAt:O}.");
+            SetStatus($"GitHub rate limit reached · retry after {ex.RetryAt.ToLocalTime():g}", StartingBrush);
         }
         catch (Exception ex)
         {
@@ -5388,6 +5764,14 @@ public sealed partial class MainWindow : Window
         UpdateButton.Content = "Cancel update";
         try
         {
+            if (!_serviceManager.OwnsServiceOnPort(_api.ConnectedPort)
+                && !await _api.IsAvailableAsync(cancellationToken))
+            {
+                await EnsureDashboardServiceAsync(cancellationToken);
+            }
+            NativeDashboardUpdatePolicy.RequireOwnedPrivateService(
+                _api.ConnectedPort,
+                _serviceManager.OwnsServiceOnPort(_api.ConnectedPort));
             SetStatus($"Downloading verified Codex Native {release.Version} package…", StartingBrush);
             var progress = new Progress<double>(value =>
             {
@@ -5401,7 +5785,17 @@ public sealed partial class MainWindow : Window
                 cancellationToken);
             await WaitForUpdateDrainAsync(cancellationToken);
             await SaveWorkspaceAsync();
-            _updateService.LaunchInstaller(prepared, _platform).Dispose();
+            var dashboardService = await GetOwnedDashboardUpdateHandoffAsync(cancellationToken);
+            var terminalHostProcessIds = _openTabs.Values
+                .Where(state => state.IsRunning && state.Terminal.Pid > 0)
+                .Select(state => state.Terminal.Pid)
+                .Distinct()
+                .ToArray();
+            _updateService.LaunchInstaller(
+                prepared,
+                _platform,
+                terminalHostProcessIds,
+                dashboardService).Dispose();
             SetStatus($"Installing Codex Native {release.Version}; restarting…", RunningBrush);
             _shutdownConfirmed = true;
             Close();
@@ -5454,55 +5848,77 @@ public sealed partial class MainWindow : Window
 
     private async Task WaitForUpdateDrainAsync(CancellationToken cancellationToken)
     {
+        using var drainTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        drainTimeout.CancelAfter(NativeUpdatePolicy.DrainTimeout);
+        var drainToken = drainTimeout.Token;
         var consecutiveClearChecks = 0;
-        var providerIds = UpdateDrainProviderIds();
-        while (consecutiveClearChecks < 2)
+        if (_serviceManager.Ownership is not { } ownership)
+            throw new InvalidOperationException(
+                "Dashboard service ownership metadata is unavailable; no process was stopped.");
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var blockingSessions = 0;
-            foreach (var providerId in providerIds)
+            while (consecutiveClearChecks < 2)
             {
-                var sessions = await NativeUpdateDataServiceRecovery.RunAsync(
-                    token => _api.GetSessionsAsync(token, providerId: providerId),
-                    async token =>
-                    {
-                        NativeLog.Write(
-                            $"Dashboard service on port {_api.ConnectedPort} stopped during update drain; attempting recovery.");
-                        SetStatus("Update downloaded · reconnecting to verify active sessions…", StartingBrush);
-                        return await EnsureDashboardServiceAsync(token);
-                    },
-                    cancellationToken);
-                blockingSessions += NativeUpdatePolicy.CountBlockingSessions(
-                    sessions.Select(session => (session.Status, session.IsHeadless)));
-            }
+                drainToken.ThrowIfCancellationRequested();
+                var readiness = await _api.ProbeOwnedUpdateReadinessAsync(ownership, drainToken);
+                NativeDashboardUpdatePolicy.RequireOwnedActivitySnapshot(
+                    ownership.InstanceId,
+                    readiness);
+                var blockingSessions = readiness.BlockingSessions;
+                var activePtys = readiness.ActivePtys;
 
-            var localShells = _openTabs.Values.Count(state =>
-                state.Kind == TerminalSessionKind.LocalShell && state.IsRunning);
-            if (blockingSessions == 0 && localShells == 0)
-            {
-                consecutiveClearChecks++;
-                if (consecutiveClearChecks < 2)
+                var localShells = _openTabs.Values.Count(state =>
+                    state.Kind == TerminalSessionKind.LocalShell && state.IsRunning);
+                if (blockingSessions == 0 && activePtys == 0 && localShells == 0)
                 {
-                    SetStatus("Sessions are drained · confirming update handoff…", StartingBrush);
-                    await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+                    consecutiveClearChecks++;
+                    if (consecutiveClearChecks < 2)
+                    {
+                        SetStatus("Sessions are drained · confirming update handoff…", StartingBrush);
+                        await Task.Delay(TimeSpan.FromSeconds(2), drainToken);
+                    }
+                    continue;
                 }
-                continue;
-            }
 
-            consecutiveClearChecks = 0;
-            var details = new List<string>();
-            if (blockingSessions > 0)
-            {
-                var sessionLabel = providerIds.Count == 1
-                    ? ProviderLabel(providerIds[0])
-                    : "provider";
-                details.Add($"{blockingSessions} active {sessionLabel} session(s)");
+                consecutiveClearChecks = 0;
+                var details = new List<string>();
+                if (blockingSessions > 0)
+                    details.Add($"{blockingSessions} active dashboard session(s)");
+                if (activePtys > 0) details.Add($"{activePtys} active dashboard terminal(s)");
+                if (localShells > 0) details.Add($"{localShells} local shell tab(s) to close");
+                UpdateButton.Content = "Cancel update";
+                SetStatus($"Update ready · waiting for {string.Join(" and ", details)}", StartingBrush);
+                await Task.Delay(TimeSpan.FromSeconds(3), drainToken);
             }
-            if (localShells > 0) details.Add($"{localShells} local shell tab(s) to close");
-            UpdateButton.Content = "Cancel update";
-            SetStatus($"Update ready · waiting for {string.Join(" and ", details)}", StartingBrush);
-            await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "Active dashboard sessions or local shells did not drain within two minutes. " +
+                "They were left running; close them and retry the update.");
+        }
+    }
+
+    private async Task<OwnedDashboardServiceHandoff> GetOwnedDashboardUpdateHandoffAsync(
+        CancellationToken cancellationToken)
+    {
+        NativeDashboardUpdatePolicy.RequireOwnedPrivateService(
+            _api.ConnectedPort,
+            _serviceManager.OwnsServiceOnPort(_api.ConnectedPort));
+        if (_serviceManager.Ownership is not { } ownership)
+            throw new InvalidOperationException("Dashboard service ownership metadata is unavailable; no process was stopped.");
+
+        var probe = await _api.ProbeOwnedUpdateReadinessAsync(ownership, cancellationToken);
+        if (!probe.ControlAuthenticated)
+            throw new InvalidOperationException(
+                "The dashboard service rejected its persisted control capability; no process was stopped.");
+        NativeDashboardUpdatePolicy.RequireDrainedOwnedInstance(ownership.InstanceId, probe);
+        return new OwnedDashboardServiceHandoff(
+            ownership.ProcessId,
+            ownership.ProcessStartTimeUnixMilliseconds,
+            _api.ServiceBaseUri.AbsoluteUri,
+            ownership.InstanceId,
+            ownership.ControlCapability);
     }
 
     private static void DiscardPreparedUpdate(PreparedNativeUpdate? prepared)
@@ -5686,6 +6102,9 @@ public sealed partial class MainWindow : Window
         state.MicrophoneButton.Background = Brush.Parse(theme.Elevated);
         state.MicrophoneButton.BorderBrush = Brush.Parse(theme.BorderBright);
         state.MicrophoneButton.Foreground = primary;
+        state.CopyAllButton.Background = Brush.Parse(theme.Elevated);
+        state.CopyAllButton.BorderBrush = Brush.Parse(theme.BorderBright);
+        state.CopyAllButton.Foreground = primary;
         ApplyAdaptiveToggleTheme(state, theme);
         state.AdaptiveComposer.Background = surface;
         state.AdaptiveComposer.BorderBrush = accent;
@@ -5893,9 +6312,24 @@ public sealed partial class MainWindow : Window
         terminalView.Terminal.Options.CursorBlink = false;
         terminalView.AddHandler(
             InputElement.PointerPressedEvent,
-            (_, args) => OnTerminalLinkPointerPressed(state, args),
+            (_, args) =>
+            {
+                OnTerminalLinkPointerPressed(state, args);
+                if (!args.Handled) OnTerminalSelectionPointerPressed(state, args);
+            },
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
+        terminalView.AddHandler(
+            InputElement.PointerMovedEvent,
+            (_, args) => OnTerminalSelectionPointerMoved(state, args),
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        terminalView.AddHandler(
+            InputElement.PointerReleasedEvent,
+            (_, args) => OnTerminalSelectionPointerReleased(state, args),
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        terminalView.PointerCaptureLost += (_, _) => CancelTerminalSelection(state);
         terminalView.Terminal.CursorStyleChanged += (_, _) =>
             Dispatcher.UIThread.Post(() =>
             {
@@ -5918,6 +6352,113 @@ public sealed partial class MainWindow : Window
                 if (state.TerminalStartupGate is null) RestyleTerminalText(state);
             });
         RestyleTerminalText(state);
+    }
+
+    private static void OnTerminalSelectionPointerPressed(
+        SessionTabState state,
+        PointerPressedEventArgs args)
+    {
+        if (state.TerminalView is not { } terminalView
+            || args.KeyModifiers.HasFlag(KeyModifiers.Alt)
+            || args.GetCurrentPoint(terminalView).Properties.PointerUpdateKind
+                is not PointerUpdateKind.LeftButtonPressed
+            || !TryGetTerminalCell(terminalView, args.GetPosition(terminalView), out var cell))
+        {
+            return;
+        }
+
+        terminalView.Focus();
+        var selection = terminalView.Terminal.Selection;
+        if (selection.HasSelection)
+        {
+            selection.ClearSelection();
+            terminalView.InvalidateVisual();
+        }
+
+        state.TerminalSelectionAnchor = cell;
+        state.TerminalSelectionActive = true;
+        state.TerminalSelectionStarted = args.ClickCount > 1;
+        state.TerminalSelectedText = null;
+        if (state.TerminalSelectionStarted)
+        {
+            var mode = args.ClickCount >= 3
+                ? XT.Selection.SelectionMode.Line
+                : XT.Selection.SelectionMode.Word;
+            selection.StartSelection(cell.Column, cell.Row, mode);
+            terminalView.InvalidateVisual();
+        }
+
+        args.Pointer.Capture(terminalView);
+        args.Handled = true;
+    }
+
+    private static void OnTerminalSelectionPointerMoved(
+        SessionTabState state,
+        PointerEventArgs args)
+    {
+        if (!state.TerminalSelectionActive
+            || state.TerminalView is not { } terminalView
+            || !TryGetTerminalCell(terminalView, args.GetPosition(terminalView), out var cell))
+        {
+            return;
+        }
+
+        var selection = terminalView.Terminal.Selection;
+        if (!state.TerminalSelectionStarted)
+        {
+            var anchor = state.TerminalSelectionAnchor;
+            selection.StartSelection(anchor.Column, anchor.Row, XT.Selection.SelectionMode.Normal);
+            state.TerminalSelectionStarted = true;
+        }
+        selection.UpdateSelection(cell.Column, cell.Row);
+        terminalView.InvalidateVisual();
+        args.Handled = true;
+    }
+
+    private static void OnTerminalSelectionPointerReleased(
+        SessionTabState state,
+        PointerReleasedEventArgs args)
+    {
+        if (!state.TerminalSelectionActive || state.TerminalView is not { } terminalView) return;
+
+        if (state.TerminalSelectionStarted)
+        {
+            var selection = terminalView.Terminal.Selection;
+            selection.EndSelection();
+            state.TerminalSelectedText = selection.GetSelectionText();
+            terminalView.InvalidateVisual();
+        }
+        state.TerminalSelectionActive = false;
+        state.TerminalSelectionStarted = false;
+        args.Pointer.Capture(null);
+        args.Handled = true;
+    }
+
+    private static void CancelTerminalSelection(SessionTabState state)
+    {
+        state.TerminalSelectionActive = false;
+        state.TerminalSelectionStarted = false;
+        state.TerminalSelectedText = null;
+    }
+
+    private static bool TryGetTerminalCell(TerminalView terminalView, Point point, out TerminalCell cell)
+    {
+        var terminal = terminalView.Terminal;
+        if (terminal.Cols <= 0 || terminal.Rows <= 0
+            || terminalView.Bounds.Width <= 0 || terminalView.Bounds.Height <= 0)
+        {
+            cell = default;
+            return false;
+        }
+
+        cell = TerminalSelectionGeometry.CellAt(
+            point.X,
+            point.Y,
+            terminalView.Bounds.Width,
+            terminalView.Bounds.Height,
+            terminal.Cols,
+            terminal.Rows);
+        return true;
     }
 
     private void OnTerminalLinkPointerPressed(SessionTabState state, PointerPressedEventArgs args)
@@ -6263,6 +6804,8 @@ public sealed partial class MainWindow : Window
         }
 
         _serviceStopRequested = true;
+        _settings = _settings with { DashboardServiceOwnership = null };
+        await _settingsStore.SaveAsync(_settings);
         if (_statusFeed is not null)
         {
             await _statusFeed.DisposeAsync();
@@ -6526,6 +7069,7 @@ public sealed partial class MainWindow : Window
         Grid terminalViewport,
         Button screenshotButton,
         Button microphoneButton,
+        Button copyAllButton,
         ToggleButton adaptiveToggleButton,
         Border adaptivePulseHalo,
         Border adaptiveComposer,
@@ -6569,6 +7113,7 @@ public sealed partial class MainWindow : Window
         public Grid TerminalViewport { get; } = terminalViewport;
         public Button ScreenshotButton { get; } = screenshotButton;
         public Button MicrophoneButton { get; } = microphoneButton;
+        public Button CopyAllButton { get; } = copyAllButton;
         public ToggleButton AdaptiveToggleButton { get; } = adaptiveToggleButton;
         public Border AdaptivePulseHalo { get; } = adaptivePulseHalo;
         public Border AdaptiveComposer { get; } = adaptiveComposer;
@@ -6576,6 +7121,11 @@ public sealed partial class MainWindow : Window
         public Button AdaptiveSendButton { get; } = adaptiveSendButton;
         public TextBlock AdaptiveRouteText { get; } = adaptiveRouteText;
         public TerminalView? TerminalView { get; set; }
+        public TerminalCell TerminalSelectionAnchor { get; set; }
+        public bool TerminalSelectionActive { get; set; }
+        public bool TerminalSelectionStarted { get; set; }
+        public string RawTitle { get; set; } = session?.DisplayTitle ?? renameBox.Text ?? titleBlock.Text ?? key;
+        public string? TerminalSelectedText { get; set; }
         public Color MutedTextColor { get; set; } = Colors.Gray;
         public Border Inspector { get; } = inspector;
         public ScrollViewer InspectorBody { get; } = inspectorBody;
@@ -6626,5 +7176,6 @@ public sealed partial class MainWindow : Window
         public int SessionDetailsGeneration { get; set; }
         public bool TerminalStartupAllowsQuietReveal { get; set; }
         public bool ArchiveConfirmationPending { get; set; }
+        public string? CollisionSessionId { get; set; }
     }
 }

@@ -158,8 +158,12 @@ class CodexAppServer {
       if (!pending) return;
       this.pending.delete(message.id);
       clearTimeout(pending.timeout);
-      if (message.error) pending.reject(new Error(message.error.message || 'Codex app-server request failed'));
-      else pending.resolve(message.result);
+      if (message.error) {
+        const error = new Error(message.error.message || 'Codex app-server request failed');
+        if (message.error.code !== undefined) error.code = message.error.code;
+        if (message.error.data !== undefined) error.data = message.error.data;
+        pending.reject(error);
+      } else pending.resolve(message.result);
       return;
     }
 

@@ -7,6 +7,9 @@ with an appropriate HTTP status code.
 
 | Method | Path | Description |
 | --- | --- | --- |
+| `GET` | `/api/native/compatibility` | Fast native startup probe — returns `{ ok, apiVersion, service, instanceId, activePtys, controlAuthenticated }` without database or provider CLI checks; the control flag reflects the optional `X-UI-My-CLI-Control` header. |
+| `GET` | `/api/native/update-readiness` | Authenticated native update gate — requires `X-UI-My-CLI-Control` and returns the exact service identity plus `activePtys`, fail-closed `blockingSessions`, and activity/authentication status. |
+| `POST` | `/api/native/shutdown` | Gracefully stop the exact private dashboard service; requires `X-UI-My-CLI-Control` and body `{ instanceId }`, blocks new mutations, then revalidates identity, active PTYs, and provider sessions before returning `202`. |
 | `GET` | `/api/status` | Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds |
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
 | `GET` | `/api/native/launch/status` | Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching. |
@@ -27,7 +30,7 @@ with an appropriate HTTP status code.
 | `GET` | `/api/sessions/search` | Compatibility alias for default provider search |
 | `GET` | `/api/:providerId/repos` | List all unique repos (working directories) from one provider's past sessions |
 | `GET` | `/api/repos` | Compatibility alias for default provider repos |
-| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string, controlPlane?: boolean }`); returns `{ tempKey, controlPlane }`, where `controlPlane` reports the transport actually selected |
+| `POST` | `/api/:providerId/sessions/create` | Start a new session for one provider in the given working directory (body: `{ workingDir: string, controlPlane?: boolean, adaptive?: boolean }`); returns `{ tempKey, controlPlane }`, where `controlPlane` reports the transport actually selected. The status feed later sends `rekey` after ownership-safe persistence or `pending-expired` when an unregistered terminal exits. |
 | `POST` | `/api/sessions/create` | Compatibility alias for default provider session creation |
 | `GET` | `/api/:providerId/sessions/:id/preview` | Provider-scoped rich read-only session detail — chat history, stats, top tools |
 | `GET` | `/api/sessions/:id/preview` | Rich read-only session detail — chat history, stats, top tools |
@@ -41,8 +44,8 @@ with an appropriate HTTP status code.
 | `GET` | `/api/sessions/:id/config` | Compatibility alias for default provider config. |
 | `GET` | `/api/:providerId/sessions/:id` | Single provider session with `ptyActive` flag |
 | `GET` | `/api/sessions/:id` | Single session with `ptyActive` flag |
-| `POST` | `/api/:providerId/sessions/:id/rename` | Update a provider session title (body: `{ title: string }`) |
-| `POST` | `/api/sessions/:id/rename` | Update session title (body: `{ title: string }`) |
+| `POST` | `/api/:providerId/sessions/:id/rename` | Update or reset a provider session title (body: `{ title: string | null }`; strings must be 1-160 control-free characters). Returns the canonical `{ id, title }` saved by the provider. |
+| `POST` | `/api/sessions/:id/rename` | Compatibility alias for default-provider title update/reset; accepts `{ title: string | null }` and returns canonical `{ id, title }`. |
 | `POST` | `/api/:providerId/sessions/:id/kill-pty` | Kill the active provider-scoped PTY for a session without archiving it |
 | `POST` | `/api/sessions/:id/kill-pty` | Kill the active PTY for a session without archiving it |
 | `DELETE` | `/api/:providerId/sessions/:id` | Archive a provider session — kills PTY, hides from active list (reversible) |
@@ -94,14 +97,16 @@ Compatibility alias: `/ws/status` uses the default provider.
 | --- | --- | --- |
 | `sessions` | `{ type: "sessions", data: Session[] }` | Every 3 seconds + immediately on connect + after mutations |
 | `latest-prompt` | `{ type: "latest-prompt", data: { content, timestamp, isShell } }` | DB write events + immediately on connect |
-| `rekey` | `{ type: "rekey", tempKey: string, realId: string }` | A pending session persists and receives its provider session ID |
-| `pending-expired` | `{ type: "pending-expired", tempKey: string }` | A pending terminal exits before its session persists |
+| `rekey` | `{ type: "rekey", tempKey: string, realId: string, collision: boolean }` | A temporary new-session PTY is safely correlated to its persisted provider session; `collision` preserves an existing canonical PTY and closes the redundant pending PTY after detach |
+| `pending-expired` | `{ type: "pending-expired", tempKey: string }` | A temporary PTY process exits before session registration |
 
 ## Environment Variables
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `7575` | HTTP server port |
+| `UI_MY_CLI_NATIVE_INSTANCE_ID` | `—` | Internal native-service instance identity generated by Codex Native; do not configure manually |
+| `UI_MY_CLI_NATIVE_CONTROL_CAPABILITY` | `—` | Internal per-service shutdown capability generated and passed by Codex Native; do not configure or persist manually |
 | `NODE_ENV` | `—` | Set to `production` to enable static file serving from `client/dist/` |
 | `SHELL` | `—` | Shell binary for the node-pty process (falls back to `/bin/zsh` on macOS, then `/bin/bash`, then `/bin/sh`) |
 | `CODEX_HOME` | `—` | Override the Codex home directory (default: `~/.codex`) |

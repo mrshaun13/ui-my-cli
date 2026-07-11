@@ -7,6 +7,8 @@
  *   POST /api/sessions/:id/rename   — update title (body: { title })
  *   POST /api/sessions/:id/kill-pty — kill the active PTY (not the session)
  *   GET  /api/status                — server health + active PTY count
+ *   GET  /api/native/compatibility  — fast native API compatibility probe
+ *   POST /api/native/shutdown       — guarded zero-PTY native update handoff
  *
  * WebSocket:
  *   ws://localhost:PORT/ws/terminal/:id   — attach to PTY for session
@@ -20,22 +22,42 @@
 const http = require('http');
 const path = require('path');
 const fs   = require('fs');
+const { randomUUID } = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 
-const { attachClient, killPty, isPtyActive, isPtyControlPlane, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
-const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./providers');
+const { attachClient, killPty, isPtyActive, isPtyControlPlane, pendingPtyState, activePtySessions, spawnNewSession, rekeyPty, resolvePtyRekeyCollision, onPtyRemoved, validatePty } = require('./pty-manager');
+const { DEFAULT_PROVIDER_ID, getProvider, providers, safeListProviders } = require('./providers');
 const { isTrustedLaunchRequest, launchNativeDashboard, nativeLaunchCapability } = require('./native-launcher');
 const { CodexAppServer } = require('./codex-app-server');
 const { wantsCodexControlPlane, tryStartCodexControlPlane } = require('./codex-control-plane');
-const { trackPendingSession } = require('./pending-session-tracker');
+const {
+  pendingReconciliationDelay,
+  PENDING_REKEY_COMPATIBILITY_MS,
+  pendingSessionDisposition,
+  pendingSessionExclusionIds,
+} = require('./pending-session-lifecycle');
+const { validateSessionTitle } = require('./session-display-text');
+const {
+  matchesNativeControlCapability,
+  validNativeControlCapability,
+} = require('./native-service-control');
+const { nativeUpdateActivity } = require('./native-update-activity');
+const { NativeUpdateGate } = require('./native-update-gate');
 
 const PORT = parseInt(process.env.PORT || '7575', 10);
-// v5 passes the user-selected working root explicitly to remote Codex TUIs.
-// Native clients must not reuse a v4 service whose shared app-server causes
-// new sessions to inherit the dashboard checkout.
-const API_VERSION = 5;
+// v6 adds authenticated, fail-closed update readiness across provider sessions.
+// Native clients must not reuse an older service that cannot close the final
+// activity race before replacing the desktop installation.
+const API_VERSION = 6;
+const SERVICE_INSTANCE_ID = process.env.UI_MY_CLI_NATIVE_INSTANCE_ID
+  || `${process.pid}-${Date.now()}`;
+const SERVICE_CONTROL_CAPABILITY = validNativeControlCapability(
+  process.env.UI_MY_CLI_NATIVE_CONTROL_CAPABILITY)
+  ? process.env.UI_MY_CLI_NATIVE_CONTROL_CAPABILITY
+  : null;
+delete process.env.UI_MY_CLI_NATIVE_CONTROL_CAPABILITY;
 const IS_DEV = process.env.NODE_ENV !== 'production';
 const CLIENT_DIST = path.resolve(__dirname, '..', 'client', 'dist');
 
@@ -43,9 +65,38 @@ const CLIENT_DIST = path.resolve(__dirname, '..', 'client', 'dist');
 // Populated when the background rekey poll detects the real ID.
 // Used by the DELETE handler so archiving a pending session targets the right ID.
 const pendingToReal = new Map();
+const pendingMappingTimers = new Map();
+
+function forgetPendingMapping(providerId, tempKey) {
+  const key = pendingKey(providerId, tempKey);
+  clearTimeout(pendingMappingTimers.get(key));
+  pendingMappingTimers.delete(key);
+  pendingToReal.delete(key);
+}
+
+function rememberPendingMapping(providerId, tempKey, realId, collision = false) {
+  const key = pendingKey(providerId, tempKey);
+  clearTimeout(pendingMappingTimers.get(key));
+  pendingMappingTimers.delete(key);
+  pendingToReal.set(key, realId);
+  if (collision && isPtyActive(providerId, tempKey)) return;
+  const timer = setTimeout(
+    () => forgetPendingMapping(providerId, tempKey),
+    PENDING_REKEY_COMPATIBILITY_MS);
+  timer.unref?.();
+  pendingMappingTimers.set(key, timer);
+}
+
+onPtyRemoved(entry => {
+  if (entry?.collisionRealId && entry.sessionId?.startsWith('pending-')) {
+    forgetPendingMapping(entry.providerId, entry.sessionId);
+  }
+});
 
 const app = express();
 const server = http.createServer(app);
+const nativeUpdateGate = new NativeUpdateGate();
+let shutdownDashboard = null;
 const codexAppServer = new CodexAppServer({
   executable: () => getProvider('codex').codexExecutable(),
 });
@@ -63,6 +114,84 @@ app.use(cors({
 }));
 
 // ─── REST API ─────────────────────────────────────────────────────────────────
+
+// Keep this endpoint independent of provider discovery, databases, and CLI
+// version probes. Native startup uses a sub-second timeout and must be able to
+// distinguish an incompatible service from one that is not listening.
+function hasNativeControlCapability(req) {
+  const supplied = req.get('X-UI-My-CLI-Control');
+  return matchesNativeControlCapability(SERVICE_CONTROL_CAPABILITY, supplied);
+}
+
+app.get('/api/native/compatibility', (req, res) => {
+  res.json({
+    ok: true,
+    apiVersion: API_VERSION,
+    service: 'ui-my-cli-dashboard',
+    instanceId: SERVICE_INSTANCE_ID,
+    activePtys: activePtySessions().length,
+    controlAuthenticated: hasNativeControlCapability(req),
+  });
+});
+
+app.get('/api/native/update-readiness', (req, res) => {
+  if (!hasNativeControlCapability(req)) {
+    return res.status(403).json({ error: 'Dashboard service control authentication failed.' });
+  }
+  try {
+    res.json({
+      ok: true,
+      apiVersion: API_VERSION,
+      service: 'ui-my-cli-dashboard',
+      instanceId: SERVICE_INSTANCE_ID,
+      activePtys: activePtySessions().length,
+      blockingSessions: nativeUpdateActivity(providers.values()).blockingSessions,
+      activityCheckOk: true,
+      controlAuthenticated: true,
+    });
+  } catch (err) {
+    res.status(503).json({
+      error: `Dashboard activity could not be verified: ${err.message}`,
+    });
+  }
+});
+
+app.post('/api/native/shutdown', (req, res) => {
+  if (!hasNativeControlCapability(req)) {
+    return res.status(403).json({ error: 'Dashboard service control authentication failed.' });
+  }
+  if (req.body?.instanceId !== SERVICE_INSTANCE_ID) {
+    return res.status(409).json({ error: 'Dashboard service instance mismatch.' });
+  }
+  if (typeof shutdownDashboard !== 'function') {
+    return res.status(503).json({ error: 'Dashboard service is not ready to stop.' });
+  }
+  if (nativeUpdateGate.shutdownPending) {
+    return res.status(409).json({ error: 'Dashboard service shutdown is already pending.' });
+  }
+  if (!nativeUpdateGate.tryBeginShutdown()) {
+    return res.status(409).json({
+      error: 'Dashboard service has an in-flight session mutation; wait for it to finish and retry the update.',
+    });
+  }
+  try {
+    const activePtys = activePtySessions().length;
+    if (activePtys > 0) {
+      nativeUpdateGate.cancelShutdown();
+      return res.status(409).json({ error: `Dashboard service has ${activePtys} active terminal(s).` });
+    }
+    const { blockingSessions } = nativeUpdateActivity(providers.values());
+    if (blockingSessions > 0) {
+      nativeUpdateGate.cancelShutdown();
+      return res.status(409).json({ error: `Dashboard service has ${blockingSessions} active provider session(s).` });
+    }
+  } catch (err) {
+    nativeUpdateGate.cancelShutdown();
+    return res.status(503).json({ error: `Dashboard activity could not be verified: ${err.message}` });
+  }
+  res.status(202).json({ ok: true, instanceId: SERVICE_INSTANCE_ID });
+  setImmediate(() => shutdownDashboard('native update'));
+});
 
 app.get('/api/status', (_req, res) => {
   res.json({
@@ -192,6 +321,9 @@ app.get(['/api/:providerId/repos', '/api/repos'], providerRoute((provider, _req,
 }));
 
 app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerRoute(async (provider, req, res) => {
+  if (nativeUpdateGate.shutdownPending) {
+    return res.status(503).json({ error: 'Dashboard service is stopping for a native update.' });
+  }
   const { workingDir } = req.body;
   if (!workingDir || typeof workingDir !== 'string') {
     return res.status(400).json({ error: 'workingDir is required' });
@@ -203,7 +335,8 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
   try {
     // Snapshot current session IDs so the background re-key poller can detect the new one
     const before = provider.listSessionIds();
-    const tempKey = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const correlationId = `ui-my-cli-${randomUUID()}`;
+    const tempKey = `pending-${Date.now()}-${randomUUID()}`;
 
     const controlPlane = wantsCodexControlPlane(provider.id, req.body);
     const remoteEndpoint = controlPlane
@@ -211,7 +344,19 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
         () => codexAppServer.ensureStarted(),
         err => console.warn(`[codex:control-plane] unavailable for new session; using direct terminal: ${err.message}`))
       : null;
-    spawnNewSession(provider.id, tempKey, workingDir, 80, 24, { remoteEndpoint });
+    if (nativeUpdateGate.shutdownPending) {
+      return res.status(503).json({ error: 'Dashboard service is stopping for a native update.' });
+    }
+    const pendingPty = spawnNewSession(provider.id, tempKey, workingDir, 80, 24, {
+      remoteEndpoint,
+      correlationId,
+    });
+    if (!pendingPty) throw new Error('The provider terminal could not be started');
+    const ownership = {
+      correlationId,
+      processId: pendingPty.pty.pid,
+      startedAt: pendingPty.startedAt,
+    };
     console.log(`[${provider.id}:create] spawned new session in ${workingDir} (key: ${tempKey})`);
 
     // Return immediately — the client connects its terminal to the temp key.
@@ -219,34 +364,68 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
     // poll in the background to re-key the PTY entry once the real session ID
     // appears. This prevents a duplicate PTY from being spawned if the user
     // clicks the sidebar card for the new session.
-    // A new Codex TUI does not persist its thread until the first turn starts.
-    // Keep a healthy pending terminal alive indefinitely: poll quickly for the
-    // first three minutes, then back off until it registers or actually exits.
-    trackPendingSession({
-      findSessionId: () => {
-        const excluded = new Set(before);
-        const providerPrefix = `${provider.id}:`;
-        for (const [key, sessionId] of pendingToReal) {
-          if (key.startsWith(providerPrefix)) excluded.add(sessionId);
+    const pollingStartedAt = Date.now();
+    let polls = 0;
+    let bgPoll = null;
+
+    const pollForPersistedSession = () => {
+      polls++;
+      let realId = null;
+      try {
+        const excludeIds = pendingSessionExclusionIds(before, pendingToReal, provider.id);
+        realId = provider.findNewSessionInDir(workingDir, excludeIds, ownership);
+      } catch (err) {
+        console.warn(`[${provider.id}:create] re-key poll ${polls} failed: ${err.message}`);
+        const disposition = pendingSessionDisposition(
+          null,
+          pendingPtyState(provider.id, tempKey));
+        if (disposition === 'expire') {
+          killPty(provider.id, tempKey);
+          broadcastPendingExpired(provider.id, tempKey);
+          return;
         }
-        return provider.findNewSessionInDir(workingDir, excluded);
-      },
-      isTerminalActive: () => isPtyActive(provider.id, tempKey),
-      onRegistered: realId => {
-        pendingToReal.set(pendingKey(provider.id, tempKey), realId);
+        bgPoll = setTimeout(
+          pollForPersistedSession,
+          pendingReconciliationDelay(Date.now() - pollingStartedAt));
+        bgPoll.unref?.();
+        return;
+      }
+      const disposition = pendingSessionDisposition(
+        realId,
+        pendingPtyState(provider.id, tempKey));
+      if (disposition === 'rekey') {
         if (rekeyPty(provider.id, tempKey, realId)) {
+          rememberPendingMapping(provider.id, tempKey, realId);
           console.log(`[${provider.id}:create] re-keyed ${tempKey.slice(0, 20)}… → ${realId.slice(0, 8)}…`);
+          broadcastRekey(provider.id, tempKey, realId);
+          broadcastSessions(provider.id);
+          return;
         }
-        broadcastRekey(provider.id, tempKey, realId);
-        broadcastSessions(provider.id);
-      },
-      onTerminalEnded: () => {
-        console.warn(`[${provider.id}:create] pending terminal ${tempKey.slice(0, 20)}… exited before registering`);
+        if (resolvePtyRekeyCollision(provider.id, tempKey, realId)) {
+          rememberPendingMapping(provider.id, tempKey, realId, true);
+          console.warn(`[${provider.id}:create] retained canonical PTY for ${realId.slice(0, 8)}… and completed pending collision reconciliation`);
+          broadcastRekey(provider.id, tempKey, realId, true);
+          broadcastSessions(provider.id);
+          return;
+        }
+        console.warn(`[${provider.id}:create] refused re-key collision for ${realId.slice(0, 8)}…`);
+      } else if (disposition === 'expire') {
+        killPty(provider.id, tempKey);
+        console.log(`[${provider.id}:create] pending PTY ${tempKey.slice(0, 20)}… expired before registration`);
         broadcastPendingExpired(provider.id, tempKey);
-      },
-      onPollError: error =>
-        console.warn(`[${provider.id}:create] pending re-key poll failed: ${error.message}`),
-    });
+        return;
+      } else if (polls % 30 === 0) {
+        console.log(
+          `[${provider.id}:create] ${tempKey.slice(0, 20)}… is still live and awaiting its first persisted prompt`);
+      }
+      bgPoll = setTimeout(
+        pollForPersistedSession,
+        pendingReconciliationDelay(Date.now() - pollingStartedAt));
+      bgPoll.unref?.();
+    };
+
+    bgPoll = setTimeout(pollForPersistedSession, pendingReconciliationDelay(0));
+    bgPoll.unref?.();
 
     res.json({ tempKey, controlPlane: Boolean(remoteEndpoint) });
   } catch (err) {
@@ -283,6 +462,10 @@ app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
   const workingDir = typeof req.body?.workingDir === 'string' ? req.body.workingDir.trim() : '';
   if (!text) return res.status(400).json({ error: 'text is required' });
   if (text.length > 100000) return res.status(413).json({ error: 'Adaptive prompt is too large' });
+  const completeMutation = nativeUpdateGate.tryBeginMutation();
+  if (!completeMutation) {
+    return res.status(503).json({ error: 'Dashboard service is stopping for a native update.' });
+  }
   try {
     if (sessionId.startsWith('pending-')) {
       if (!workingDir || !isExistingDirectory(workingDir)) {
@@ -297,7 +480,7 @@ app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
       const route = await codexAppServer.startAdaptiveTurn(workingDir, text, preference);
       const realId = route.threadId;
       const trackedId = pendingToReal.get(pendingKey('codex', sessionId));
-      pendingToReal.set(pendingKey('codex', sessionId), realId);
+      rememberPendingMapping('codex', sessionId, realId);
       killPty('codex', sessionId);
       killPty('codex', realId);
       if (trackedId && trackedId !== realId) killPty('codex', trackedId);
@@ -316,6 +499,8 @@ app.post('/api/codex/sessions/:id/adaptive/submit', async (req, res) => {
     console.error(`[codex:adaptive] submit ${sessionId.slice(0, 8)}… failed:`, err.message);
     const conflict = /active turn|already.*turn|in progress/i.test(err.message);
     res.status(conflict ? 409 : 500).json({ error: err.message });
+  } finally {
+    completeMutation();
   }
 });
 
@@ -387,18 +572,33 @@ app.get(['/api/:providerId/sessions/:id', '/api/sessions/:id'], providerRoute((p
   }
 }));
 
-app.post(['/api/:providerId/sessions/:id/rename', '/api/sessions/:id/rename'], providerRoute((provider, req, res) => {
+app.post(['/api/:providerId/sessions/:id/rename', '/api/sessions/:id/rename'], providerRoute(async (provider, req, res) => {
+  let completeMutation = null;
   try {
-    const { title } = req.body;
+    const { title } = req.body || {};
     if (typeof title !== 'string' && title !== null) {
       return res.status(400).json({ error: 'title must be a string or null' });
     }
-    const result = provider.renameSession(req.params.id, title);
+    let canonicalTitle = title;
+    if (title !== null) {
+      try {
+        canonicalTitle = validateSessionTitle(title);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+    }
+    completeMutation = nativeUpdateGate.tryBeginMutation();
+    if (!completeMutation) {
+      return res.status(503).json({ error: 'Dashboard service is stopping for a native update.' });
+    }
+    const result = await provider.renameSession(req.params.id, canonicalTitle, { codexAppServer });
     // Push updated session list immediately to all status feed clients
     broadcastSessions(provider.id);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  } finally {
+    completeMutation?.();
   }
 }));
 
@@ -419,7 +619,7 @@ app.delete(['/api/:providerId/sessions/:id', '/api/sessions/:id'], providerRoute
     if (realId !== reqId) killPty(provider.id, reqId);
     provider.hideSession(realId);
     // Clean up the server-side rekey map entry
-    if (reqId.startsWith('pending-')) pendingToReal.delete(pendingKey(provider.id, reqId));
+    if (reqId.startsWith('pending-')) forgetPendingMapping(provider.id, reqId);
     broadcastSessions(provider.id);
     res.json({ ok: true });
   } catch (err) {
@@ -480,20 +680,20 @@ function broadcastSessions(providerId) {
  * to a real session ID. The client uses this to swap its selectedId so the
  * sidebar highlights the correct card and the Terminal remounts cleanly.
  *
- * Message shape: { type: 'rekey', tempKey: string, realId: string }
+ * Message shape: { type: 'rekey', tempKey: string, realId: string, collision: boolean }
  */
-function broadcastRekey(providerId, tempKey, realId) {
+function broadcastRekey(providerId, tempKey, realId, collision = false) {
   const clients = clientsFor(providerId);
   if (clients.size === 0) return;
-  const payload = JSON.stringify({ type: 'rekey', tempKey, realId });
+  const payload = JSON.stringify({ type: 'rekey', tempKey, realId, collision });
   for (const client of clients) {
     if (client.readyState === 1) client.send(payload);
   }
 }
 
 /**
- * Notify all status-feed clients that a pending terminal ended before Codex
- * persisted its real session ID. The client dismisses the dead placeholder.
+ * Notify all status-feed clients that a pending PTY exited before registration.
+ * The client uses this to dismiss the temporary tab.
  *
  * Message shape: { type: 'pending-expired', tempKey: string }
  */
@@ -568,6 +768,10 @@ wss.on('connection', async (ws, req) => {
   const termMatch = pathname.match(/^\/ws\/([^/]+)\/terminal\/([^/]+)$/);
   const legacyTermMatch = pathname.match(/^\/ws\/terminal\/([^/]+)$/);
   if (termMatch || legacyTermMatch) {
+    if (nativeUpdateGate.shutdownPending) {
+      ws.close(1013, 'Dashboard service is stopping for a native update');
+      return;
+    }
     const providerId = termMatch ? decodeURIComponent(termMatch[1]) : DEFAULT_PROVIDER_ID;
     let provider;
     try {
@@ -598,6 +802,10 @@ wss.on('connection', async (ws, req) => {
         () => codexAppServer.ensureStarted(),
         err => console.warn(`[codex:control-plane] unavailable; using direct terminal: ${err.message}`))
       : null;
+    if (nativeUpdateGate.shutdownPending) {
+      ws.close(1013, 'Dashboard service is stopping for a native update');
+      return;
+    }
     console.log(`[${provider.id}:pty] attaching to ${isPending ? 'pending' : 'session'} ${sessionId.slice(0, 20)}… (${cols}x${rows}${remoteEndpoint ? ', control-plane' : ''})`);
     attachClient(provider.id, sessionId, workingDir, ws, cols, rows, { remoteEndpoint });
     return;
@@ -672,7 +880,7 @@ server.listen(PORT, '127.0.0.1', () => {
 
   // ── Graceful shutdown ─────────────────────────────────────────────────────
   let shuttingDown = false;
-  function shutdown(signal) {
+  shutdownDashboard = signal => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n[shutdown] ${signal} received — cleaning up…`);
@@ -712,10 +920,10 @@ server.listen(PORT, '127.0.0.1', () => {
       console.warn('[shutdown] forced exit after timeout');
       process.exit(1);
     }, 5000).unref();
-  }
+  };
 
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT',  () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdownDashboard?.('SIGTERM'));
+  process.on('SIGINT',  () => shutdownDashboard?.('SIGINT'));
 });
 
 server.on('error', err => {

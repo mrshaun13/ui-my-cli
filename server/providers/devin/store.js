@@ -26,6 +26,9 @@ const { sessionsWithSubagents, countSubagents } = require('./subagents');
 
 let readDb;
 let writeDb;
+const IN_FLIGHT_TOOL_STALE_SEC = 24 * 60 * 60;
+const PENDING_SESSION_CLOCK_TOLERANCE_MS = 2_000;
+const PENDING_SESSION_LOG_SCAN_BYTES = 1024 * 1024;
 
 /**
  * Returns a readonly connection to sessions.db.
@@ -136,11 +139,65 @@ function _removeHidden(id) {
  *               and nothing has happened for >30s — work is done / paused
  *   idle      — no activity for >10 minutes, or no messages at all
  */
+function hasPendingToolCalls(nodes) {
+  const pendingToolCallIds = new Set();
+  let pendingAnonymousToolCalls = 0;
+  for (const node of nodes) {
+    let message;
+    try {
+      message = typeof node.chat_message === 'string'
+        ? JSON.parse(node.chat_message)
+        : node.chat_message;
+    } catch {
+      continue;
+    }
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const toolCall of message.tool_calls) {
+        if (typeof toolCall?.id === 'string' && toolCall.id.length > 0) {
+          pendingToolCallIds.add(toolCall.id);
+        } else {
+          pendingAnonymousToolCalls++;
+        }
+      }
+    } else if (message?.role === 'tool') {
+      if (typeof message.tool_call_id === 'string' && message.tool_call_id.length > 0) {
+        pendingToolCallIds.delete(message.tool_call_id);
+      } else if (pendingAnonymousToolCalls > 0) {
+        pendingAnonymousToolCalls--;
+      }
+    }
+  }
+  return pendingToolCallIds.size > 0 || pendingAnonymousToolCalls > 0;
+}
+
+function hasFreshPendingToolCalls(nodes, lastActivityAt, nowSec = Math.floor(Date.now() / 1000)) {
+  if (!hasPendingToolCalls(nodes)) return false;
+  if (!Number.isFinite(lastActivityAt)) return true;
+  return nowSec - lastActivityAt <= IN_FLIGHT_TOOL_STALE_SEC;
+}
+
+function currentTurnNodes(nodes) {
+  for (let index = nodes.length - 1; index >= 0; index--) {
+    let message;
+    try {
+      message = typeof nodes[index].chat_message === 'string'
+        ? JSON.parse(nodes[index].chat_message)
+        : nodes[index].chat_message;
+    } catch {
+      continue;
+    }
+    if (message?.role === 'user') return nodes.slice(index);
+  }
+  return nodes;
+}
+
 function deriveStatus(nodes, lastActivityAt) {
   if (!nodes || nodes.length === 0) return 'idle';
 
   const nowSec = Math.floor(Date.now() / 1000);
   const idleSec = nowSec - lastActivityAt;
+
+  if (hasFreshPendingToolCalls(currentTurnNodes(nodes), lastActivityAt, nowSec)) return 'active';
 
   // Hard idle cutoff: 10 minutes of silence = nothing is happening
   if (idleSec > 600) return 'idle';
@@ -182,6 +239,55 @@ function deriveStatus(nodes, lastActivityAt) {
 
   // User or system message is last and it's been >60s — unusual, treat as finished
   return 'finished';
+}
+
+function isSessionInFlight(id) {
+  return listInFlightSessionIds([{ id }]).has(id);
+}
+
+function listInFlightSessionIds(sessions) {
+  const requestedIds = [...new Set(sessions
+    .map(session => session?.id)
+    .filter(id => typeof id === 'string'))];
+  if (requestedIds.length === 0) return new Set();
+
+  const rows = getReadDb().prepare(`
+    WITH requested(session_id) AS (
+      SELECT value FROM json_each(?) WHERE type = 'text'
+    ), latest_user AS (
+      SELECT message_nodes.session_id, MAX(message_nodes.row_id) AS row_id
+      FROM message_nodes
+      JOIN requested USING (session_id)
+      WHERE json_valid(message_nodes.chat_message)
+        AND json_extract(message_nodes.chat_message, '$.role') = 'user'
+      GROUP BY message_nodes.session_id
+    )
+    SELECT sessions.id AS session_id, sessions.last_activity_at, message_nodes.chat_message
+    FROM requested
+    JOIN sessions ON sessions.id = requested.session_id
+    JOIN message_nodes ON message_nodes.session_id = sessions.id
+    LEFT JOIN latest_user ON latest_user.session_id = sessions.id
+    WHERE latest_user.row_id IS NULL OR message_nodes.row_id >= latest_user.row_id
+    ORDER BY sessions.id, message_nodes.row_id
+  `).all(JSON.stringify(requestedIds));
+
+  const currentTurns = new Map();
+  for (const row of rows) {
+    const turn = currentTurns.get(row.session_id) || {
+      lastActivityAt: row.last_activity_at,
+      nodes: [],
+    };
+    turn.nodes.push(row);
+    currentTurns.set(row.session_id, turn);
+  }
+
+  const inFlightIds = new Set();
+  for (const [id, turn] of currentTurns) {
+    if (hasFreshPendingToolCalls(_dedupeMessageNodes(turn.nodes), turn.lastActivityAt)) {
+      inFlightIds.add(id);
+    }
+  }
+  return inFlightIds;
 }
 
 /**
@@ -328,6 +434,7 @@ function listSessions() {
       FROM message_nodes
       WHERE session_id IN (${placeholders})
     ) WHERE rn <= 10
+    ORDER BY session_id, rn
   `).all(...visibleIds);
 
   const tailBySession = {};
@@ -592,6 +699,29 @@ function listArchivedSessions() {
     ORDER BY last_activity_at DESC
   `).all(JSON.stringify([...hidden]));
 
+  const archivedIds = sessions.map(session => session.id);
+  const tailBySession = new Map();
+  if (archivedIds.length > 0) {
+    const placeholders = archivedIds.map(() => '?').join(',');
+    const tailRows = db.prepare(`
+      SELECT session_id, chat_message FROM (
+        SELECT session_id, chat_message,
+          ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY row_id DESC) AS rn
+        FROM message_nodes
+        WHERE session_id IN (${placeholders})
+      ) WHERE rn <= 10
+      ORDER BY session_id, rn
+    `).all(...archivedIds);
+    for (const row of tailRows) {
+      if (!tailBySession.has(row.session_id)) tailBySession.set(row.session_id, []);
+      tailBySession.get(row.session_id).push(row);
+    }
+    for (const [id, rows] of tailBySession) {
+      rows.reverse();
+      tailBySession.set(id, _dedupeMessageNodes(rows).slice(-5));
+    }
+  }
+
   return sessions.map(session => {
     const firstUserPrompt = extractFirstUserPrompt(db, session.id);
     return {
@@ -601,6 +731,7 @@ function listArchivedSessions() {
       project: projectName(session.working_directory),
       model: session.model,
       status: 'archived',
+      activityStatus: deriveStatus(tailBySession.get(session.id) || [], session.last_activity_at),
       snippet: null,
       firstUserPrompt,
       lastActivityAt: session.last_activity_at,
@@ -999,19 +1130,61 @@ function listSessionIds() {
  * Uses a fresh connection to detect recently-created sessions.
  * Returns the session ID or null if not found.
  */
-function findNewSessionInDir(workingDir, excludeIds) {
+function findNewSessionInDir(workingDir, excludeIds, ownership = null) {
+  const processId = Number(ownership?.processId);
+  const startedAt = Number(ownership?.startedAt);
+  if (!Number.isSafeInteger(processId) || processId <= 0 || !Number.isFinite(startedAt)) {
+    return null;
+  }
+
+  const logsDir = path.join(path.dirname(resolveDbPath()), 'logs');
+  const processLogPattern = new RegExp(`^devin_[0-9]{8}-[0-9]{6}_${processId}\\.log$`);
+  let logFiles;
+  try {
+    logFiles = fs.readdirSync(logsDir, { withFileTypes: true })
+      .filter(entry => entry.isFile() && processLogPattern.test(entry.name))
+      .map(entry => path.join(logsDir, entry.name));
+  } catch {
+    return null;
+  }
+
+  let ownedId = null;
+  for (const logPath of logFiles) {
+    try {
+      const stat = fs.statSync(logPath);
+      const createdAt = stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.ctimeMs;
+      if (createdAt < startedAt - PENDING_SESSION_CLOCK_TOLERANCE_MS) continue;
+      const fd = fs.openSync(logPath, 'r');
+      try {
+        const length = Math.min(stat.size, PENDING_SESSION_LOG_SCAN_BYTES);
+        const first = Buffer.alloc(length);
+        fs.readSync(fd, first, 0, length, 0);
+        const last = stat.size > length ? Buffer.alloc(length) : Buffer.alloc(0);
+        if (last.length) fs.readSync(fd, last, 0, length, stat.size - length);
+        const match = `${first.toString('utf8')}\n${last.toString('utf8')}`
+          .match(/Created new session: ([A-Za-z0-9][A-Za-z0-9_-]{0,127})/);
+        if (match) {
+          ownedId = match[1];
+          break;
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      continue;
+    }
+  }
+  if (!ownedId || excludeIds.has(ownedId)) return null;
+
   const freshDb = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
   try {
-    const rows = freshDb.prepare(`
-      SELECT id FROM sessions
-      WHERE working_directory = ?
-      ORDER BY created_at DESC
-    `).all(workingDir);
-
-    for (const row of rows) {
-      if (!excludeIds.has(row.id)) return row.id;
-    }
-    return null;
+    const row = freshDb.prepare(`
+      SELECT id, created_at FROM sessions
+      WHERE id = ? AND working_directory = ?
+    `).get(ownedId, workingDir);
+    return row && row.created_at * 1000 >= startedAt - PENDING_SESSION_CLOCK_TOLERANCE_MS
+      ? row.id
+      : null;
   } finally {
     freshDb.close();
   }
@@ -1233,4 +1406,4 @@ function getSessionConfig(id) {
   };
 }
 
-module.exports = { listSessions, listArchivedSessions, getSession, getSessionPreview, getSessionConversation, getSessionContextBreakdown, getSessionConfig, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };
+module.exports = { listSessions, listArchivedSessions, isSessionInFlight, listInFlightSessionIds, getSession, getSessionPreview, getSessionConversation, getSessionContextBreakdown, getSessionConfig, renameSession, hideSession, restoreSession, listRepos, listSessionIds, findNewSessionInDir, searchSessions };
