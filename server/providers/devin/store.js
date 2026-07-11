@@ -227,47 +227,52 @@ function deriveStatus(nodes, lastActivityAt) {
 }
 
 function isSessionInFlight(id) {
-  const db = getReadDb();
-  const session = db.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get(id);
-  if (!session) return false;
-  const rows = db.prepare(`
-    SELECT chat_message
-    FROM message_nodes
-    WHERE session_id = ?
-    ORDER BY row_id DESC
-  `).iterate(id);
-  const currentTurn = [];
-  for (const row of rows) {
-    currentTurn.push(row);
-    let message;
-    try {
-      message = typeof row.chat_message === 'string'
-        ? JSON.parse(row.chat_message)
-        : row.chat_message;
-    } catch {
-      continue;
-    }
-    if (message?.role === 'user') break;
-  }
-  currentTurn.reverse();
-  return hasFreshPendingToolCalls(
-    _dedupeMessageNodes(currentTurn),
-    session.last_activity_at
-  );
+  return listInFlightSessionIds([{ id }]).has(id);
 }
 
 function listInFlightSessionIds(sessions) {
-  return new Set(sessions
-    .filter(session => {
-      const sessionStatus = typeof session?.status === 'string'
-        ? session.status.toLowerCase()
-        : '';
-      const status = sessionStatus === 'archived'
-        ? session.activityStatus
-        : sessionStatus;
-      return typeof status === 'string' && status.toLowerCase() === 'active';
-    })
-    .map(session => session.id));
+  const requestedIds = [...new Set(sessions
+    .map(session => session?.id)
+    .filter(id => typeof id === 'string'))];
+  if (requestedIds.length === 0) return new Set();
+
+  const rows = getReadDb().prepare(`
+    WITH requested(session_id) AS (
+      SELECT value FROM json_each(?) WHERE type = 'text'
+    ), latest_user AS (
+      SELECT message_nodes.session_id, MAX(message_nodes.row_id) AS row_id
+      FROM message_nodes
+      JOIN requested USING (session_id)
+      WHERE json_valid(message_nodes.chat_message)
+        AND json_extract(message_nodes.chat_message, '$.role') = 'user'
+      GROUP BY message_nodes.session_id
+    )
+    SELECT sessions.id AS session_id, sessions.last_activity_at, message_nodes.chat_message
+    FROM requested
+    JOIN sessions ON sessions.id = requested.session_id
+    JOIN message_nodes ON message_nodes.session_id = sessions.id
+    LEFT JOIN latest_user ON latest_user.session_id = sessions.id
+    WHERE latest_user.row_id IS NULL OR message_nodes.row_id >= latest_user.row_id
+    ORDER BY sessions.id, message_nodes.row_id
+  `).all(JSON.stringify(requestedIds));
+
+  const currentTurns = new Map();
+  for (const row of rows) {
+    const turn = currentTurns.get(row.session_id) || {
+      lastActivityAt: row.last_activity_at,
+      nodes: [],
+    };
+    turn.nodes.push(row);
+    currentTurns.set(row.session_id, turn);
+  }
+
+  const inFlightIds = new Set();
+  for (const [id, turn] of currentTurns) {
+    if (hasFreshPendingToolCalls(_dedupeMessageNodes(turn.nodes), turn.lastActivityAt)) {
+      inFlightIds.add(id);
+    }
+  }
+  return inFlightIds;
 }
 
 /**
