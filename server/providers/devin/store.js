@@ -176,13 +176,28 @@ function hasFreshPendingToolCalls(nodes, lastActivityAt, nowSec = Math.floor(Dat
   return nowSec - lastActivityAt <= IN_FLIGHT_TOOL_STALE_SEC;
 }
 
+function currentTurnNodes(nodes) {
+  for (let index = nodes.length - 1; index >= 0; index--) {
+    let message;
+    try {
+      message = typeof nodes[index].chat_message === 'string'
+        ? JSON.parse(nodes[index].chat_message)
+        : nodes[index].chat_message;
+    } catch {
+      continue;
+    }
+    if (message?.role === 'user') return nodes.slice(index);
+  }
+  return nodes;
+}
+
 function deriveStatus(nodes, lastActivityAt) {
   if (!nodes || nodes.length === 0) return 'idle';
 
   const nowSec = Math.floor(Date.now() / 1000);
   const idleSec = nowSec - lastActivityAt;
 
-  if (hasFreshPendingToolCalls(nodes, lastActivityAt, nowSec)) return 'active';
+  if (hasFreshPendingToolCalls(currentTurnNodes(nodes), lastActivityAt, nowSec)) return 'active';
 
   // Hard idle cutoff: 10 minutes of silence = nothing is happening
   if (idleSec > 600) return 'idle';

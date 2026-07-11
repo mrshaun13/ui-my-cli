@@ -101,7 +101,7 @@ test('Devin status uses deterministic tails and preserves unresolved tool activi
     assert.equal(visible.find(candidate => candidate.id === 'session-2')?.status, 'idle');
     assert.equal(visible.find(candidate => candidate.id === 'session-3')?.status, 'idle');
     assert.equal(visible.find(candidate => candidate.id === 'session-4')?.status, 'idle');
-    assert.equal(visible.find(candidate => candidate.id === 'session-5')?.status, 'active');
+    assert.equal(visible.find(candidate => candidate.id === 'session-5')?.status, 'idle');
     assert.equal(store.isSessionInFlight('session-2'), true);
     assert.equal(store.isSessionInFlight('session-3'), false);
     assert.equal(store.isSessionInFlight('session-4'), false);

@@ -5852,34 +5852,20 @@ public sealed partial class MainWindow : Window
         drainTimeout.CancelAfter(NativeUpdatePolicy.DrainTimeout);
         var drainToken = drainTimeout.Token;
         var consecutiveClearChecks = 0;
-        var providerIds = UpdateDrainProviderIds();
+        if (_serviceManager.Ownership is not { } ownership)
+            throw new InvalidOperationException(
+                "Dashboard service ownership metadata is unavailable; no process was stopped.");
         try
         {
             while (consecutiveClearChecks < 2)
             {
                 drainToken.ThrowIfCancellationRequested();
-                var blockingSessions = 0;
-                foreach (var providerId in providerIds)
-                {
-                    var sessions = await NativeUpdateDataServiceRecovery.RunAsync(
-                        token => _api.GetSessionsAsync(token, providerId: providerId),
-                        async token =>
-                        {
-                            NativeLog.Write(
-                                $"Dashboard service on port {_api.ConnectedPort} stopped during update drain; attempting recovery.");
-                            SetStatus("Update downloaded · reconnecting to verify active sessions…", StartingBrush);
-                            return await EnsureDashboardServiceAsync(token);
-                        },
-                        drainToken);
-                    blockingSessions += NativeUpdatePolicy.CountBlockingSessions(
-                        sessions.Select(session => (session.Status, session.IsHeadless)));
-                }
-                var serviceProbe = await _api.ProbeCurrentServiceAsync(drainToken);
-                if (!serviceProbe.IsCompatible)
-                    throw new InvalidOperationException(
-                        "The dashboard service could not be verified during update drain. " +
-                        "No process was stopped; reconnect and retry the update.");
-                var activePtys = serviceProbe.ActivePtys;
+                var readiness = await _api.ProbeOwnedUpdateReadinessAsync(ownership, drainToken);
+                NativeDashboardUpdatePolicy.RequireOwnedActivitySnapshot(
+                    ownership.InstanceId,
+                    readiness);
+                var blockingSessions = readiness.BlockingSessions;
+                var activePtys = readiness.ActivePtys;
 
                 var localShells = _openTabs.Values.Count(state =>
                     state.Kind == TerminalSessionKind.LocalShell && state.IsRunning);
@@ -5897,12 +5883,7 @@ public sealed partial class MainWindow : Window
                 consecutiveClearChecks = 0;
                 var details = new List<string>();
                 if (blockingSessions > 0)
-                {
-                    var sessionLabel = providerIds.Count == 1
-                        ? ProviderLabel(providerIds[0])
-                        : "provider";
-                    details.Add($"{blockingSessions} active {sessionLabel} session(s)");
-                }
+                    details.Add($"{blockingSessions} active dashboard session(s)");
                 if (activePtys > 0) details.Add($"{activePtys} active dashboard terminal(s)");
                 if (localShells > 0) details.Add($"{localShells} local shell tab(s) to close");
                 UpdateButton.Content = "Cancel update";

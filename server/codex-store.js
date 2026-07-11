@@ -533,12 +533,16 @@ function safeRolloutUserMessages(rollout) {
     message => message.role === 'user' && !isSyntheticUserMessage(message.text));
 }
 
+function safeFirstUserPrompt(thread, rollout) {
+  return storedUserPrompt(thread)
+    || safeRolloutUserMessages(rollout)[0]?.text
+    || null;
+}
+
 function normalizeThread(thread, _overrides = null, rollout = null) {
   const parsed = rollout || readRolloutSummary(thread);
   const userMessages = safeRolloutUserMessages(parsed);
-  const firstUser = storedUserPrompt(thread)
-    || userMessages[0]?.text
-    || null;
+  const firstUser = safeFirstUserPrompt(thread, parsed);
   const lastUser = userMessages.at(-1)?.text || firstUser;
   const lastAssistant = [...parsed.messages].reverse().find(m => m.role === 'assistant')?.text || null;
   const title = canonicalThreadTitle(thread, firstUser);
@@ -703,7 +707,7 @@ function tokenTelemetry(rollout, thread) {
 function usageRecordsForThread(thread, rollout, tokens = tokenTelemetry(rollout, thread)) {
   const session = {
     id: thread.id,
-    title: canonicalThreadTitle(thread),
+    title: canonicalThreadTitle(thread, safeFirstUserPrompt(thread, rollout)),
     model: rollout.currentModel || thread.model || 'codex',
     reasoningEffort: rollout.currentReasoningEffort || thread.reasoning_effort || 'unknown',
   };
@@ -1137,7 +1141,7 @@ function stats(options = {}) {
     bucket.durationSec += durationSec;
     bucket.sessions_detail.push({
       id: thread.id,
-      title: canonicalThreadTitle(thread),
+      title: canonicalThreadTitle(thread, safeFirstUserPrompt(thread, rollout)),
       durationSec,
       durationStr: formatDuration(durationSec),
       messages: rollout.messages.length,
@@ -1223,9 +1227,7 @@ function stats(options = {}) {
     if (!rollout.tokenEvents?.length && tokens.totalTokens) {
       addTokenActivity(tokensByHour, tokenHeatmap, thread.updated_at || thread.created_at || 0, tokens);
     }
-    const prompt = storedUserPrompt(thread)
-      || safeRolloutUserMessages(rollout)[0]?.text
-      || null;
+    const prompt = safeFirstUserPrompt(thread, rollout);
     if (prompt) {
       recentPrompts.push({
         sessionId: thread.id,
@@ -1289,7 +1291,7 @@ function stats(options = {}) {
     const tokens = tokenTelemetry(rollout, thread);
     return [thread.id, {
       id: thread.id,
-      title: canonicalThreadTitle(thread),
+      title: canonicalThreadTitle(thread, safeFirstUserPrompt(thread, rollout)),
       project: projectName(thread.cwd),
       model: thread.model || 'codex',
       reasoningEffort: thread.reasoning_effort || rollout.metadata.reasoning_effort || null,

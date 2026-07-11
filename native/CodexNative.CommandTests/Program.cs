@@ -567,6 +567,16 @@ Check("updater accepts only the explicitly owned dashboard service process", () 
 await CheckAsync("owned dashboard handoff revalidates before stopping", async () =>
 {
     var calls = new List<string>();
+    NativeDashboardUpdatePolicy.RequireOwnedActivitySnapshot(
+        dashboardInstanceId,
+        DashboardApiProbeResult.FromResponse(
+            true,
+            DashboardApiCompatibility.RequiredVersion,
+            activePtys: 2,
+            instanceId: dashboardInstanceId,
+            controlAuthenticated: true,
+            blockingSessions: 3,
+            activityCheckOk: true));
     await NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
         dashboardInstanceId,
         _ =>
