@@ -4,10 +4,22 @@ const { nativeUpdateActivity } = require('../../server/native-update-activity');
 
 test('native update activity counts active sessions across every provider', () => {
   const result = nativeUpdateActivity([
-    { id: 'codex', listSessions: () => [{ status: 'active' }, { status: 'finished' }] },
-    { id: 'devin', listSessions: () => [{ status: 'ACTIVE' }, { status: 'idle' }] },
+    { id: 'codex', availability: () => ({ available: true }), listSessions: () => [{ status: 'active' }, { status: 'finished' }] },
+    { id: 'devin', availability: () => ({ available: true }), listSessions: () => [{ status: 'ACTIVE' }, { status: 'idle' }] },
   ]);
   assert.equal(result.blockingSessions, 2);
+});
+
+test('native update activity skips unavailable providers', () => {
+  const result = nativeUpdateActivity([
+    {
+      id: 'codex',
+      availability: () => ({ available: false, error: 'state unavailable' }),
+      listSessions: () => { throw new Error('must not read unavailable provider'); },
+    },
+    { id: 'devin', availability: () => ({ available: true }), listSessions: () => [{ status: 'active' }] },
+  ]);
+  assert.equal(result.blockingSessions, 1);
 });
 
 test('native update activity fails closed on provider read errors', () => {
@@ -20,4 +32,7 @@ test('native update activity fails closed on provider read errors', () => {
   assert.throws(() => nativeUpdateActivity([
     { id: 'devin', listSessions: () => [{ status: 'unknown' }] },
   ]), /invalid session status/);
+  assert.throws(() => nativeUpdateActivity([
+    { id: 'codex', availability: () => { throw new Error('availability failed'); }, listSessions: () => [] },
+  ]), /availability failed/);
 });

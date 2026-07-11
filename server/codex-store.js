@@ -508,10 +508,12 @@ function canonicalThreadTitle(thread, firstUserPrompt = storedUserPrompt(thread)
 
 function normalizeThread(thread, _overrides = null, rollout = null) {
   const parsed = rollout || readRolloutSummary(thread);
+  const userMessages = parsed.messages.filter(
+    message => message.role === 'user' && !isSyntheticUserMessage(message.text));
   const firstUser = storedUserPrompt(thread)
-    || parsed.messages.find(m => m.role === 'user')?.text
+    || userMessages[0]?.text
     || null;
-  const lastUser = [...parsed.messages].reverse().find(m => m.role === 'user')?.text || firstUser;
+  const lastUser = userMessages.at(-1)?.text || firstUser;
   const lastAssistant = [...parsed.messages].reverse().find(m => m.role === 'assistant')?.text || null;
   const title = canonicalThreadTitle(thread, firstUser);
   const access = accessProfile(thread, parsed);

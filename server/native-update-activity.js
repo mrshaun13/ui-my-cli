@@ -4,6 +4,10 @@ function nativeUpdateActivity(providers) {
   const validStatuses = new Set(['active', 'question', 'finished', 'idle']);
   let blockingSessions = 0;
   for (const provider of providers) {
+    const availability = typeof provider.availability === 'function'
+      ? provider.availability()
+      : { available: true };
+    if (availability?.available === false) continue;
     const sessions = provider.listSessions();
     if (!Array.isArray(sessions)) {
       throw new TypeError(`Provider ${provider.id} returned an invalid session list.`);

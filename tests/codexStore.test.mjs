@@ -97,6 +97,37 @@ test('native Codex rename validation resolves a title without writing Codex stat
     assert.equal(sanitizedSession.snippet, 'safe prompt')
     assert.equal(latestPrompt().title, 'safe prompt')
 
+    const syntheticRollout = path.join(dir, 'synthetic.jsonl')
+    writeFileSync(syntheticRollout, [
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '<environment_context>injected rollout metadata</environment_context>' }],
+        },
+      }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'safe rollout prompt' }],
+        },
+      }),
+    ].join('\n') + '\n')
+    const rolloutMetadata = new Database(statePath)
+    rolloutMetadata.prepare(`
+      UPDATE threads
+      SET rollout_path = ?, title = '', first_user_message = '', preview = ''
+      WHERE id = ?
+    `).run(syntheticRollout, threadId)
+    rolloutMetadata.close()
+    const rolloutSession = getSession(threadId)
+    assert.equal(rolloutSession.title, 'safe rollout prompt')
+    assert.equal(rolloutSession.firstUserPrompt, 'safe rollout prompt')
+    assert.equal(rolloutSession.lastUserPrompt, 'safe rollout prompt')
+
     const expectedRollout = path.join(dir, 'expected.jsonl')
     const unrelatedRollout = path.join(dir, 'unrelated.jsonl')
     const correlationId = 'ui-my-cli-12345678-1234-1234-1234-123456789abc'
