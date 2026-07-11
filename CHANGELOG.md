@@ -24,8 +24,8 @@
   reporting, while preserving `Alt`+drag for raw TUI mouse input.
 - Added platform-native selection copying: `Ctrl+C` copies on Windows and
   Linux, `Cmd+C` copies on macOS, and macOS `Ctrl+C` still sends SIGINT.
-- Kept multiline and long session titles compact in constrained native views
-  without truncating the titles saved in workspace state.
+- Enforced a 160-character durable session-title limit for new renames, while
+  retaining compact legacy-title rendering only in constrained views.
 - Fixed the confirmed Windows updater handoff failure that left v1.1.3 in
   place after repeated v1.1.4 downloads. The helper now waits for UI-owned
   terminal hosts, retries transient install-directory locks, verifies the

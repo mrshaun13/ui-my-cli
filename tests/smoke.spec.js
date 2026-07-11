@@ -27,7 +27,7 @@ test.describe('Dashboard smoke tests', () => {
     const body = await res.json();
     expect(body).toMatchObject({
       ok: true,
-      apiVersion: 2,
+      apiVersion: 5,
       service: 'ui-my-cli-dashboard',
       activePtys: expect.any(Number),
       instanceId: expect.any(String),

@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace CodexNative.Core;
 
 public static class SessionDisplayText
@@ -11,12 +13,21 @@ public static class SessionDisplayText
     public static string PromptPreview(string? value) =>
         SingleLine(value, string.Empty, MaximumPromptPreviewLength);
 
+    public static string CanonicalTitleOrDisplay(string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value)
+            && value.EnumerateRunes().Count() <= MaximumTitleLength
+            && !value.Any(char.IsControl)) return value;
+        return Title(value);
+    }
+
     private static string SingleLine(string? value, string fallback, int maximumLength)
     {
         var source = string.IsNullOrWhiteSpace(value) ? fallback : value;
         var normalized = string.Join(' ', source
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        if (normalized.Length <= maximumLength) return normalized;
-        return $"{normalized[..(maximumLength - 1)].TrimEnd()}…";
+        var characters = normalized.EnumerateRunes().ToArray();
+        if (characters.Length <= maximumLength) return normalized;
+        return $"{string.Concat(characters.Take(maximumLength - 1).Select(character => character.ToString())).TrimEnd()}…";
     }
 }

@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const Database = require('better-sqlite3');
-const { sessionDisplayTitle, isSyntheticUserMessage } = require('./session-display-text');
+const { sessionCanonicalTitle, validateSessionTitle, isSyntheticUserMessage } = require('./session-display-text');
 const { resolveCodexHome, resolveStateDbPath, findRolloutPath } = require('./codex-paths');
 const dashboardStore = require('./dashboard-store');
 const transcriptHeadless = require('./transcript-headless-store');
@@ -484,10 +484,20 @@ function storedUserPrompt(thread) {
   return prompt && !isSyntheticUserMessage(prompt) ? prompt : null;
 }
 
+function storedTitle(thread) {
+  const title = thread.title;
+  return title && !isSyntheticUserMessage(title) ? title : null;
+}
+
+function storedPreview(thread) {
+  const preview = thread.preview;
+  return preview && !isSyntheticUserMessage(preview) ? preview : null;
+}
+
 function storedPromptOrPreview(thread) {
   const prompt = storedUserPrompt(thread);
   if (prompt) return prompt;
-  return thread.preview && !isSyntheticUserMessage(thread.preview) ? thread.preview : null;
+  return storedPreview(thread);
 }
 
 function normalizeThread(thread, _overrides = null, rollout = null) {
@@ -497,8 +507,8 @@ function normalizeThread(thread, _overrides = null, rollout = null) {
     || null;
   const lastUser = [...parsed.messages].reverse().find(m => m.role === 'user')?.text || firstUser;
   const lastAssistant = [...parsed.messages].reverse().find(m => m.role === 'assistant')?.text || null;
-  const title = sessionDisplayTitle(
-    thread.title || firstUser,
+  const title = sessionCanonicalTitle(
+    storedTitle(thread) || firstUser,
     thread.id.slice(0, 8));
   const access = accessProfile(thread, parsed);
 
@@ -520,7 +530,7 @@ function normalizeThread(thread, _overrides = null, rollout = null) {
     permissionMode: access?.label || null,
     memoryMode: thread.memory_mode || null,
     status: thread.archived ? 'archived' : statusFor(thread, parsed),
-    snippet: thread.preview || lastAssistant || firstUser || null,
+    snippet: storedPreview(thread) || lastAssistant || firstUser || null,
     firstUserPrompt: firstUser,
     lastUserPrompt: lastUser,
     hasSubagents: (parsed.subagentCount || parsed.subagentEvents?.filter(event => event.kind === 'started').length || 0) > 0,
@@ -640,7 +650,7 @@ function tokenTelemetry(rollout, thread) {
 function usageRecordsForThread(thread, rollout, tokens = tokenTelemetry(rollout, thread)) {
   const session = {
     id: thread.id,
-    title: thread.title || thread.id.slice(0, 8),
+    title: sessionCanonicalTitle(storedTitle(thread), thread.id.slice(0, 8)),
     model: rollout.currentModel || thread.model || 'codex',
     reasoningEffort: rollout.currentReasoningEffort || thread.reasoning_effort || 'unknown',
   };
@@ -882,19 +892,14 @@ function safeJson(raw) {
 }
 
 function normalizeNativeTitle(title) {
-  if (typeof title !== 'string') return null;
-  const trimmed = title.trim();
-  if (!trimmed || trimmed.length > 200 || /[\u0000-\u001f\u007f]/.test(trimmed)) {
-    throw new Error('title must be 1-200 characters without control characters');
-  }
-  return trimmed;
+  return typeof title === 'string' ? validateSessionTitle(title) : null;
 }
 
 function resolveNativeRenameTitle(id, title) {
   const thread = getThread(id, { includeArchived: true, includeSystem: false });
   if (!thread) throw new Error('Codex session not found');
   const nextTitle = title === null
-    ? (storedPromptOrPreview(thread) || thread.title || thread.id.slice(0, 8))
+    ? (storedPromptOrPreview(thread) || storedTitle(thread) || thread.id.slice(0, 8))
     : normalizeNativeTitle(title);
   return { id, title: nextTitle };
 }
@@ -991,11 +996,11 @@ function searchSessions(query, includeArchived) {
     .filter(({ thread, rollout, session }) => {
       const haystack = [
         session.title,
-        thread.title,
+        storedTitle(thread),
         thread.cwd,
         storedUserPrompt(thread),
-        thread.preview,
-        ...rollout.messages.filter(m => m.role === 'user').map(m => m.text),
+        storedPreview(thread),
+        ...rollout.messages.filter(m => m.role === 'user' && !isSyntheticUserMessage(m.text)).map(m => m.text),
       ].filter(Boolean).join('\n').toLowerCase();
       return haystack.includes(q);
     })
@@ -1009,7 +1014,7 @@ function latestPrompt() {
   const thread = threads.find(storedPromptOrPreview);
   const native = thread ? {
     sessionId: thread.id,
-    title: thread.title || thread.id.slice(0, 8),
+    title: sessionCanonicalTitle(storedTitle(thread), thread.id.slice(0, 8)),
     project: projectName(thread.cwd),
     prompt: storedPromptOrPreview(thread),
     timestamp: thread.updated_at,
@@ -1070,7 +1075,7 @@ function stats(options = {}) {
     bucket.durationSec += durationSec;
     bucket.sessions_detail.push({
       id: thread.id,
-      title: thread.title || thread.id.slice(0, 8),
+      title: sessionCanonicalTitle(storedTitle(thread), thread.id.slice(0, 8)),
       durationSec,
       durationStr: formatDuration(durationSec),
       messages: rollout.messages.length,
@@ -1160,7 +1165,7 @@ function stats(options = {}) {
     if (prompt) {
       recentPrompts.push({
         sessionId: thread.id,
-        title: thread.title || thread.id.slice(0, 8),
+        title: sessionCanonicalTitle(storedTitle(thread), thread.id.slice(0, 8)),
         project: projectName(thread.cwd),
         prompt,
         timestamp: thread.updated_at,
@@ -1220,7 +1225,7 @@ function stats(options = {}) {
     const tokens = tokenTelemetry(rollout, thread);
     return [thread.id, {
       id: thread.id,
-      title: thread.title || thread.id.slice(0, 8),
+      title: sessionCanonicalTitle(storedTitle(thread), thread.id.slice(0, 8)),
       project: projectName(thread.cwd),
       model: thread.model || 'codex',
       reasoningEffort: thread.reasoning_effort || rollout.metadata.reasoning_effort || null,

@@ -68,8 +68,8 @@ UI-owned and end when their tab or the app closes.
   `Cmd+C` on macOS copies the selection without interrupting the session,
   macOS `Ctrl+C` remains SIGINT, and `Alt`+drag remains available for raw TUI
   mouse input.
-- Multiline and long session titles are compacted only in constrained native
-  views; renaming and workspace persistence retain the complete title.
+- New session titles are limited to 160 characters and invalid rename requests
+  are rejected; legacy titles are compacted only in constrained native views.
 - Unlimited horizontally scrollable terminal panes, each with its own tab strip
   and independently resizable context/configuration panel. Session and new-run
   pickers can target any pane, and the complete pane workspace is restored.
@@ -121,7 +121,7 @@ UI-owned and end when their tab or the app closes.
 - Live per-session context usage, model, reasoning, permissions, rules, active
   skills, latest prompt, rename, and archive controls. Persisted `turn_context`
   changes from either `/model` or Adaptive routing refresh the open inspector.
-  Display titles and latest-prompt previews are normalized to bounded
+  Legacy display titles and latest-prompt previews are normalized to bounded
   single-line text, and injected Codex context envelopes are not presented as
   user prompts.
 - Native session summaries with complete conversation history, copy actions,

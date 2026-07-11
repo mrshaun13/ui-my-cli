@@ -3286,7 +3286,7 @@ public sealed partial class MainWindow : Window
         var copyShortcut = OperatingSystem.IsMacOS() ? "Cmd+A" : "Ctrl+Shift+A";
         ToolTip.SetTip(
             copyAllButton,
-            $"Copy all terminal scrollback ({copyShortcut}). Hold Shift while dragging to select when the terminal app tracks the mouse.");
+            $"Copy all terminal scrollback ({copyShortcut}). Hold Alt while dragging to send raw mouse input to the terminal app.");
         AutomationProperties.SetName(copyAllButton, "Copy all terminal scrollback");
         var terminalUtilityBar = new StackPanel
         {
@@ -3932,7 +3932,7 @@ public sealed partial class MainWindow : Window
                     var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
                         ?? throw new InvalidOperationException("The system clipboard is unavailable.");
                     await clipboard.SetTextAsync(selectedText);
-                    if (state is not null) state.TerminalSelectedText = selectedText;
+                    if (state is not null) state.TerminalSelectedText = null;
                     SetStatus("Terminal selection copied to clipboard", RunningBrush);
                 }
                 catch (Exception ex)
@@ -4765,6 +4765,11 @@ public sealed partial class MainWindow : Window
         var title = state.RenameBox.Text?.Trim();
         if (string.IsNullOrWhiteSpace(title))
         {
+            return;
+        }
+        if (title.EnumerateRunes().Count() > SessionDisplayText.MaximumTitleLength)
+        {
+            SetStatus($"Rename failed: title must be 1-{SessionDisplayText.MaximumTitleLength} characters", ErrorBrush);
             return;
         }
         try
@@ -6322,6 +6327,7 @@ public sealed partial class MainWindow : Window
     {
         state.TerminalSelectionActive = false;
         state.TerminalSelectionStarted = false;
+        state.TerminalSelectedText = null;
     }
 
     private static bool TryGetTerminalCell(TerminalView terminalView, Point point, out TerminalCell cell)

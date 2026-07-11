@@ -12,7 +12,7 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - **Click to switch** — click any agent in the sidebar to attach its live terminal; switching is instant with scrollback preserved
 - **New session** — floating "+" button in the sidebar lets you start a new Codex or Devin session in any previously-used repo; the temporary terminal remains available until it safely correlates to a persisted provider session
 - **Session preview** — click the status badge to open a read-only view of any session's chat history without spawning a PTY
-- **Inline rename** — double-click any session title to rename it (native constrained views compact multiline and long titles without changing the saved title; native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)
+- **Inline rename** — double-click any session title to rename it (new titles are limited to 160 characters; constrained native views compact only legacy titles; native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)
 - **Needs-your-input filter** — one click to show only agents waiting for a reply
 - **Project filter** — compact count-labelled project selection replaces the unbounded native pill wall; selection persists across reloads
 - **Persistent native terminals** — provider-scoped PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback. On macOS the private service is launched through `nohup`, window close hides to the menu bar, and the menu-bar icon can reopen, reconnect, stop an idle app-managed service, or quit

@@ -42,8 +42,8 @@ with an appropriate HTTP status code.
 | `GET` | `/api/sessions/:id/config` | Compatibility alias for default provider config. |
 | `GET` | `/api/:providerId/sessions/:id` | Single provider session with `ptyActive` flag |
 | `GET` | `/api/sessions/:id` | Single session with `ptyActive` flag |
-| `POST` | `/api/:providerId/sessions/:id/rename` | Update a provider session title (body: `{ title: string }`) |
-| `POST` | `/api/sessions/:id/rename` | Update session title (body: `{ title: string }`) |
+| `POST` | `/api/:providerId/sessions/:id/rename` | Update a provider session title (body: `{ title: string }`, maximum 160 characters) |
+| `POST` | `/api/sessions/:id/rename` | Update session title (body: `{ title: string }`, maximum 160 characters) |
 | `POST` | `/api/:providerId/sessions/:id/kill-pty` | Kill the active provider-scoped PTY for a session without archiving it |
 | `POST` | `/api/sessions/:id/kill-pty` | Kill the active PTY for a session without archiving it |
 | `DELETE` | `/api/:providerId/sessions/:id` | Archive a provider session — kills PTY, hides from active list (reversible) |

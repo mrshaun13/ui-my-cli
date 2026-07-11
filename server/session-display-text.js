@@ -8,14 +8,34 @@
 
 const MAXIMUM_SESSION_TITLE = 160;
 
+function validateSessionTitle(value) {
+  if (typeof value !== 'string') {
+    throw new Error('title must be a string');
+  }
+  const title = value.trim();
+  if (!title || Array.from(title).length > MAXIMUM_SESSION_TITLE || /[\u0000-\u001f\u007f]/.test(title)) {
+    throw new Error(`title must be 1-${MAXIMUM_SESSION_TITLE} characters without control characters`);
+  }
+  return title;
+}
+
 function singleLine(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
 function sessionDisplayTitle(value, fallback = 'Untitled session') {
   const normalized = singleLine(value) || singleLine(fallback) || 'Untitled session';
-  if (normalized.length <= MAXIMUM_SESSION_TITLE) return normalized;
-  return `${normalized.slice(0, MAXIMUM_SESSION_TITLE - 1).trimEnd()}…`;
+  const characters = Array.from(normalized);
+  if (characters.length <= MAXIMUM_SESSION_TITLE) return normalized;
+  return `${characters.slice(0, MAXIMUM_SESSION_TITLE - 1).join('').trimEnd()}…`;
+}
+
+function sessionCanonicalTitle(value, fallback = 'Untitled session') {
+  const title = String(value || '');
+  if (title.trim() && Array.from(title).length <= MAXIMUM_SESSION_TITLE && !/[\u0000-\u001f\u007f]/.test(title)) {
+    return title;
+  }
+  return sessionDisplayTitle(title, fallback);
 }
 
 function isSyntheticUserMessage(value) {
@@ -27,6 +47,8 @@ function isSyntheticUserMessage(value) {
 
 module.exports = {
   MAXIMUM_SESSION_TITLE,
+  validateSessionTitle,
+  sessionCanonicalTitle,
   sessionDisplayTitle,
   isSyntheticUserMessage,
 };

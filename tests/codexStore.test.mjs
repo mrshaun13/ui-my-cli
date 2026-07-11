@@ -51,7 +51,11 @@ test('native Codex rename validation resolves a title without writing Codex stat
     assert.equal(db.prepare('SELECT title FROM threads WHERE id = ?').get(threadId).title, 'Old title')
     db.close()
     assert.throws(() => resolveNativeRenameTitle(threadId, 'bad\nname'), /control characters/)
-    assert.throws(() => resolveNativeRenameTitle(threadId, 'x'.repeat(201)), /1-200 characters/)
+    assert.throws(() => resolveNativeRenameTitle(threadId, 'x'.repeat(161)), /1-160 characters/)
+    assert.deepEqual(resolveNativeRenameTitle(threadId, '🙂'.repeat(160)), {
+      id: threadId,
+      title: '🙂'.repeat(160),
+    })
 
     const writablePrompt = new Database(statePath)
     writablePrompt.prepare(`
@@ -63,6 +67,23 @@ test('native Codex rename validation resolves a title without writing Codex stat
     assert.equal(getSession(threadId).firstUserPrompt, null)
     assert.equal(resolveNativeRenameTitle(threadId, null).title, 'safe fallback')
     assert.equal(latestPrompt().prompt, 'safe fallback')
+
+    const writableMetadata = new Database(statePath)
+    writableMetadata.prepare(`
+      UPDATE threads
+      SET title = ?, first_user_message = ?, preview = ?
+      WHERE id = ?
+    `).run(
+      '<environment_context>injected title</environment_context>',
+      'safe prompt',
+      '<codex_internal_context>injected preview</codex_internal_context>',
+      threadId,
+    )
+    writableMetadata.close()
+    const sanitizedSession = getSession(threadId)
+    assert.equal(sanitizedSession.title, 'safe prompt')
+    assert.equal(sanitizedSession.snippet, 'safe prompt')
+    assert.equal(latestPrompt().title, 'safe prompt')
 
     const expectedRollout = path.join(dir, 'expected.jsonl')
     const unrelatedRollout = path.join(dir, 'unrelated.jsonl')

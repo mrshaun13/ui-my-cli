@@ -239,27 +239,7 @@ Check("dashboard compatibility probes distinguish mismatches from outages", () =
     var incompatible = DashboardApiProbeResult.FromResponse(true, DashboardApiCompatibility.RequiredVersion + 1);
     Equal(DashboardApiProbeState.Incompatible, incompatible.State);
     Equal(false, incompatible.IsCompatible);
-    Equal(true, incompatible.DescribeMismatch(7577).Contains("requires v2"));
-    Equal(true, incompatible.CanReplaceOwnedService(ownsService: true));
-    Equal(false, incompatible.CanReplaceOwnedService(ownsService: false));
-    Equal(false, compatible.CanReplaceOwnedService(ownsService: true));
-    Equal(false, DashboardApiProbeResult.FromResponse(true, 3, activePtys: 1).CanReplaceOwnedService(true));
-
-    Equal(DashboardApiProbeState.Unreachable, DashboardApiProbeResult.Unreachable().State);
-    Equal(DashboardApiProbeState.Unreachable, DashboardApiProbeResult.FromResponse(false, 99).State);
-});
-
-Check("dashboard compatibility probes distinguish mismatches from outages", () =>
-{
-    var compatible = DashboardApiProbeResult.FromResponse(true, DashboardApiCompatibility.RequiredVersion, 3, "owned");
-    Equal(DashboardApiProbeState.Compatible, compatible.State);
-    Equal(true, compatible.IsCompatible);
-    Equal(3, compatible.ActivePtys);
-
-    var incompatible = DashboardApiProbeResult.FromResponse(true, DashboardApiCompatibility.RequiredVersion + 1);
-    Equal(DashboardApiProbeState.Incompatible, incompatible.State);
-    Equal(false, incompatible.IsCompatible);
-    Equal(true, incompatible.DescribeMismatch(7577).Contains("requires v2"));
+    Equal(true, incompatible.DescribeMismatch(7577).Contains($"requires v{DashboardApiCompatibility.RequiredVersion}"));
     Equal(true, incompatible.CanReplaceOwnedService(ownsService: true));
     Equal(false, incompatible.CanReplaceOwnedService(ownsService: false));
     Equal(false, compatible.CanReplaceOwnedService(ownsService: true));
@@ -293,6 +273,14 @@ Check("session display text cannot expand sidebar rows or tab headers", () =>
     var prompt = SessionDisplayText.PromptPreview($"line one\nline two {new string('p', 600)}");
     Equal(false, prompt.Contains('\n'));
     Equal(SessionDisplayText.MaximumPromptPreviewLength, prompt.Length);
+
+    Equal(
+        "Preserve  internal   spaces",
+        SessionDisplayText.CanonicalTitleOrDisplay("Preserve  internal   spaces"));
+
+    var emojiTitle = SessionDisplayText.Title($"{new string('x', SessionDisplayText.MaximumTitleLength)}🙂");
+    Equal(false, emojiTitle.Contains('\ufffd'));
+    Equal(SessionDisplayText.MaximumTitleLength, emojiTitle.Length);
 });
 
 Check("release downloads are restricted to GitHub HTTPS hosts", () =>
