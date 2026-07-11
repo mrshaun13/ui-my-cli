@@ -68,6 +68,8 @@ UI-owned and end when their tab or the app closes.
   `Cmd+C` on macOS copies the selection without interrupting the session,
   macOS `Ctrl+C` remains SIGINT, and `Alt`+drag remains available for raw TUI
   mouse input.
+- Multiline and long session titles are compacted only in constrained native
+  views; renaming and workspace persistence retain the complete title.
 - Unlimited horizontally scrollable terminal panes, each with its own tab strip
   and independently resizable context/configuration panel. Session and new-run
   pickers can target any pane, and the complete pane workspace is restored.

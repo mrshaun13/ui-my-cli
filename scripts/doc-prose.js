@@ -24,6 +24,7 @@ module.exports = {
     '**Provider switch** — top-level Codex / Devin toggle in the browser and native Agent selector; sessions, repo filters, tabs, stats, archives, and terminals are scoped to the selected provider on both surfaces',
     '**Native Windows and macOS frontend (development preview)** — Avalonia dashboard with a persistent Agent provider switcher (`/api/providers`), provider-scoped REST/WebSocket/tabs/session actions, push updates, deferred crash-safe conversation search, a compact functional project/age/visibility filter, actionable rich previews, responsive header and pane sizing, theme-aware control chrome and pane scrollbars, a custom pixel-art app identity, a rich compact session rail, a searchable agent-or-local-shell project launcher, automatic terminal-bridge reconnect, toggleable keyboard-accessible cohort analytics (Codex credit rollups only when Codex is selected), latest-prompt navigation, context composition, Codex subagent timelines, keyboard shortcuts, provider/quota health, and persistent provider terminal reattachment; the current desktop package still requires a prepared local ui-my-cli checkout and is not a standalone distribution, while macOS signing, notarization, and production updater distribution remain incomplete and macOS must be treated as experimental',
     '**Real terminals** — xterm.js + node-pty: identical to running the selected provider CLI in your shell (`codex resume <id>` or `devin --resume <id>`)',
+    '**Native terminal selection** — plain drag selects text even when an agent TUI enables mouse reporting; `Ctrl+C` copies on Windows/Linux, `Cmd+C` copies on macOS, macOS `Ctrl+C` remains SIGINT, and `Alt`+drag sends raw mouse input to the TUI',
     '**Click to switch** — click any agent in the sidebar to attach its live terminal; ' +
       'switching is instant with scrollback preserved',
     '**New session** — floating "+" button in the sidebar lets you start a new Codex or Devin session ' +
@@ -31,7 +32,7 @@ module.exports = {
     '**Session preview** — click the status badge to open a read-only view of any session\'s ' +
       'chat history without spawning a PTY',
     '**Inline rename** — double-click any session title to rename it ' +
-      '(native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)',
+      '(native constrained views compact multiline and long titles without changing the saved title; native Codex titles are written to Codex state so CLI, VS Code, and this dashboard stay aligned; external headless titles use dashboard metadata)',
     '**Needs-your-input filter** — one click to show only agents waiting for a reply',
     '**Project filter** — compact count-labelled project selection replaces the unbounded native pill wall; selection persists across reloads',
     '**Persistent native terminals** — provider-scoped PTYs stay in the independent dashboard service when the desktop UI closes; reopening the native app reattaches with buffered scrollback. On macOS the private service is launched through `nohup`, window close hides to the menu bar, and the menu-bar icon can reopen, reconnect, stop an idle app-managed service, or quit',
