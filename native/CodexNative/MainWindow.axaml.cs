@@ -1559,8 +1559,9 @@ public sealed partial class MainWindow : Window
         _openTabs.Remove(OpenTabRegistryKey(state));
         state.Key = realId;
         state.Session = session;
+        state.RawTitle = session?.DisplayTitle ?? state.RawTitle;
         state.TitleBlock.Text = session is null
-            ? SessionTitleDisplay.Compact(state.TitleBlock.Text)
+            ? SessionTitleDisplay.Compact(state.RawTitle)
             : session.CompactDisplayTitle;
         AutomationProperties.SetName(state.Tab, state.TitleBlock.Text ?? ProviderNoun(state.ProviderId));
         state.RenameBox.Text = session?.DisplayTitle ?? state.RenameBox.Text;
@@ -1804,6 +1805,7 @@ public sealed partial class MainWindow : Window
             _openTabs.Remove(OpenTabRegistryKey(state));
             state.Key = candidate.Id;
             state.Session = candidate;
+            state.RawTitle = candidate.DisplayTitle;
             state.TitleBlock.Text = candidate.CompactDisplayTitle;
             AutomationProperties.SetName(state.Tab, candidate.CompactDisplayTitle);
             state.RenameBox.Text = candidate.DisplayTitle;
@@ -2109,7 +2111,7 @@ public sealed partial class MainWindow : Window
                 state.Key,
                 state.Session?.Id,
                 state.WorkingDirectory,
-                state.TitleBlock.Text ?? state.Key,
+                state.RawTitle,
                 state.LaunchedAt,
                 string.IsNullOrWhiteSpace(state.ProviderId) ? null : state.ProviderId);
         }
@@ -2370,7 +2372,7 @@ public sealed partial class MainWindow : Window
         LatestPromptButton.Tag = latest;
         if (latest is null) return;
         LatestPromptText.Text = latest.LastUserPrompt.Replace('\n', ' ').Replace('\r', ' ').Trim();
-        LatestPromptMetaText.Text = $"{latest.DisplayTitle} · {latest.Project} · {latest.LastActivityAgo}";
+        LatestPromptMetaText.Text = $"{latest.CompactDisplayTitle} · {latest.Project} · {latest.LastActivityAgo}";
         ToolTip.SetTip(LatestPromptButton, latest.LastUserPrompt);
     }
 
@@ -2531,7 +2533,7 @@ public sealed partial class MainWindow : Window
                             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
                             Children =
                             {
-                                new TextBlock { Text = entry.Title, Foreground = ResourceBrush("PrimaryBrush"), TextTrimming = TextTrimming.CharacterEllipsis },
+                                new TextBlock { Text = SessionTitleDisplay.Compact(entry.Title), Foreground = ResourceBrush("PrimaryBrush"), MaxLines = 1, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
                                 LeaderValue($"{FormatNumber(visibleTotal)} · {CreditEstimate(entry)}"),
                             },
                         },
@@ -2622,7 +2624,7 @@ public sealed partial class MainWindow : Window
                             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
                             Children =
                             {
-                                new TextBlock { Text = entry.Title, Foreground = ResourceBrush("PrimaryBrush"), TextTrimming = TextTrimming.CharacterEllipsis },
+                                new TextBlock { Text = SessionTitleDisplay.Compact(entry.Title), Foreground = ResourceBrush("PrimaryBrush"), MaxLines = 1, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
                                 LeaderValue(display(entry)),
                             },
                         },
@@ -3793,8 +3795,7 @@ public sealed partial class MainWindow : Window
             ReferenceEquals(candidate.Terminal, terminal));
         var selection = terminalView.Terminal.Selection;
 
-        if (IsPrimaryModifierKey(args.Key)
-            && (selection.HasSelection || !string.IsNullOrEmpty(state?.TerminalSelectedText)))
+        if (IsPrimaryModifierKey(args.Key) && selection.HasSelection)
         {
             // Keep the terminal library from clearing its selection when the
             // standalone Ctrl/Cmd key event arrives before the copy shortcut.
@@ -3805,9 +3806,7 @@ public sealed partial class MainWindow : Window
 
         if (standardCopy)
         {
-            var selectedText = selection.HasSelection
-                ? selection.GetSelectionText()
-                : state?.TerminalSelectedText;
+            var selectedText = selection.HasSelection ? selection.GetSelectionText() : null;
             if (!string.IsNullOrEmpty(selectedText))
             {
                 // Mark the tunneled event handled before awaiting the clipboard.
@@ -3819,7 +3818,6 @@ public sealed partial class MainWindow : Window
                     var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
                         ?? throw new InvalidOperationException("The system clipboard is unavailable.");
                     await clipboard.SetTextAsync(selectedText);
-                    if (state is not null) state.TerminalSelectedText = selectedText;
                     SetStatus("Terminal selection copied to clipboard", RunningBrush);
                 }
                 catch (Exception ex)
@@ -3831,8 +3829,18 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        if (!IsModifierKey(args.Key) && state is not null)
-            state.TerminalSelectedText = null;
+        if (OperatingSystem.IsMacOS()
+            && args.Key == Key.C
+            && control
+            && !meta
+            && !shift
+            && !alt)
+        {
+            selection.ClearSelection();
+            terminalView.InvalidateVisual();
+            return;
+        }
+
         if (!standardPaste && !terminalPaste) return;
 
         args.Handled = true;
@@ -3853,12 +3861,6 @@ public sealed partial class MainWindow : Window
             SetStatus($"Paste failed: {ex.Message}", ErrorBrush);
         }
     }
-
-    private static bool IsModifierKey(Key key) => key is
-        Key.LeftCtrl or Key.RightCtrl
-        or Key.LeftShift or Key.RightShift
-        or Key.LeftAlt or Key.RightAlt
-        or Key.LWin or Key.RWin;
 
     private static bool IsPrimaryModifierKey(Key key) => OperatingSystem.IsMacOS()
         ? key is Key.LWin or Key.RWin
@@ -4618,8 +4620,8 @@ public sealed partial class MainWindow : Window
     {
         if (state.Session is null)
         {
-            state.TitleBlock.Text = SessionTitleDisplay.Compact(
-                state.RenameBox.Text?.Trim() ?? state.TitleBlock.Text);
+            state.RawTitle = state.RenameBox.Text?.Trim() ?? state.RawTitle;
+            state.TitleBlock.Text = SessionTitleDisplay.Compact(state.RawTitle);
             AutomationProperties.SetName(
                 state.Tab,
                 state.TitleBlock.Text ?? (state.Kind == TerminalSessionKind.LocalShell
@@ -4635,6 +4637,7 @@ public sealed partial class MainWindow : Window
         try
         {
             await _api.RenameAsync(state.Session.Id, title, providerId: state.ProviderId);
+            state.RawTitle = title;
             state.TitleBlock.Text = SessionTitleDisplay.Compact(title);
             AutomationProperties.SetName(state.Tab, state.TitleBlock.Text);
             await RefreshAllAsync();
@@ -6020,7 +6023,6 @@ public sealed partial class MainWindow : Window
         state.TerminalSelectionAnchor = cell;
         state.TerminalSelectionActive = true;
         state.TerminalSelectionStarted = args.ClickCount > 1;
-        state.TerminalSelectedText = null;
         if (state.TerminalSelectionStarted)
         {
             var mode = args.ClickCount >= 3
@@ -6067,7 +6069,6 @@ public sealed partial class MainWindow : Window
         {
             var selection = terminalView.Terminal.Selection;
             selection.EndSelection();
-            state.TerminalSelectedText = selection.GetSelectionText();
             terminalView.InvalidateVisual();
         }
         state.TerminalSelectionActive = false;
@@ -6761,7 +6762,7 @@ public sealed partial class MainWindow : Window
         public TerminalCell TerminalSelectionAnchor { get; set; }
         public bool TerminalSelectionActive { get; set; }
         public bool TerminalSelectionStarted { get; set; }
-        public string? TerminalSelectedText { get; set; }
+        public string RawTitle { get; set; } = session?.DisplayTitle ?? renameBox.Text ?? titleBlock.Text ?? key;
         public Color MutedTextColor { get; set; } = Colors.Gray;
         public Border Inspector { get; } = inspector;
         public ScrollViewer InspectorBody { get; } = inspectorBody;

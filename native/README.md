@@ -65,8 +65,9 @@ UI-owned and end when their tab or the app closes.
 - Multiple simultaneous session tabs backed by persistent platform PTYs.
 - Selection-first terminal mouse behavior: plain drag highlights text even when
   the agent TUI has mouse reporting enabled, `Ctrl+C` on Windows/Linux or
-  `Cmd+C` on macOS copies the selection without interrupting the session, and
-  `Alt`+drag remains available for raw TUI mouse input.
+  `Cmd+C` on macOS copies the selection without interrupting the session,
+  macOS `Ctrl+C` remains SIGINT, and `Alt`+drag remains available for raw TUI
+  mouse input.
 - Unlimited horizontally scrollable terminal panes, each with its own tab strip
   and independently resizable context/configuration panel. Session and new-run
   pickers can target any pane, and the complete pane workspace is restored.
