@@ -114,5 +114,11 @@ export function useStatusFeed(providerId) {
     }
   }, [connect])
 
-  return { sessions, connected, error, latestPrompt, rekeyMap, expiredPending }
+  const updateSessionTitle = useCallback((sessionId, title) => {
+    setSessions(prev => prev.map(session =>
+      session.id === sessionId ? { ...session, title } : session))
+    setLatestPrompt(prev => prev?.sessionId === sessionId ? { ...prev, title } : prev)
+  }, [])
+
+  return { sessions, connected, error, latestPrompt, rekeyMap, expiredPending, updateSessionTitle }
 }

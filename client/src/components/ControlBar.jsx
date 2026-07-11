@@ -9,10 +9,11 @@
  *   - Archive session button (hides from dashboard, kills PTY — reversible via sidebar drawer)
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import ContextPieChart from './ContextPieChart.jsx'
 import { shortcutHintsForProvider } from '../lib/codexShortcuts.js'
 import { isHeadless, displayTitle, HEADLESS_ICON } from '../lib/headless.js'
+import { sessionTitleValidationError } from '../lib/sessionTitles.js'
 
 function statusExplanation(providerLabel) {
   return {
@@ -33,12 +34,16 @@ const STATUS_COLOR = {
 export default function ControlBar({ providerId, providerLabel = 'Agent', session, sessionId, onRename, onRemove }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState('')
+  const [renameError, setRenameError] = useState('')
+  const [renamePending, setRenamePending] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const renamePendingRef = useRef(false)
 
   // Reset transient UI state when switching sessions
   useEffect(() => {
     setConfirming(false)
     setRenaming(false)
+    setRenameError('')
   }, [sessionId])
 
   if (!session) {
@@ -58,18 +63,35 @@ export default function ControlBar({ providerId, providerLabel = 'Agent', sessio
     // the user almost certainly doesn't want to edit the `headless-MMDDYYYY-`
     // prefix character-by-character. They can still type it back if they want.
     setNameValue(headless ? displayTitle(session) : session.title)
+    setRenameError('')
     setRenaming(true)
   }
 
-  const commitRename = () => {
-    setRenaming(false)
-    const trimmed = nameValue.trim()
-    if (trimmed) onRename(session.id, trimmed)
+  const commitRename = async () => {
+    if (renamePendingRef.current) return
+    if (nameValue.trim() === session.title) {
+      setRenaming(false)
+      setRenameError('')
+      return
+    }
+    renamePendingRef.current = true
+    setRenamePending(true)
+    setRenameError('')
+    try {
+      const savedTitle = await onRename(session.id, nameValue)
+      setNameValue(savedTitle)
+      setRenaming(false)
+    } catch (error) {
+      setRenameError(error.message || 'Failed to rename session')
+    } finally {
+      renamePendingRef.current = false
+      setRenamePending(false)
+    }
   }
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter') commitRename()
-    if (e.key === 'Escape') setRenaming(false)
+    if (e.key === 'Escape') { setRenaming(false); setRenameError('') }
   }
 
   const handleArchive = () => {
@@ -133,16 +155,21 @@ export default function ControlBar({ providerId, providerLabel = 'Agent', sessio
           <div className="controlbar-divider" />
           {renaming ? (
             <>
-              <input
-                autoFocus
-                className="controlbar-rename-input"
-                value={nameValue}
-                onChange={e => setNameValue(e.target.value)}
-                onBlur={commitRename}
-                onKeyDown={onKeyDown}
-              />
-              <button className="btn btn-primary" onClick={commitRename}>Save</button>
-              <button className="btn" onClick={() => setRenaming(false)}>Cancel</button>
+              <div className="rename-editor controlbar-rename-editor">
+                <input
+                  autoFocus
+                  className="controlbar-rename-input"
+                  value={nameValue}
+                  onChange={e => { setNameValue(e.target.value); setRenameError(sessionTitleValidationError(e.target.value)) }}
+                  onKeyDown={onKeyDown}
+                  aria-invalid={Boolean(renameError)}
+                  aria-describedby={renameError ? 'controlbar-rename-error' : undefined}
+                  disabled={renamePending}
+                />
+                {renameError && <span id="controlbar-rename-error" className="rename-error" role="alert">{renameError}</span>}
+              </div>
+              <button className="btn btn-primary" onClick={commitRename} disabled={renamePending}>Save</button>
+              <button className="btn" onClick={() => { setRenaming(false); setRenameError('') }} disabled={renamePending}>Cancel</button>
             </>
           ) : (
             <>

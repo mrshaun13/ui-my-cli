@@ -25,7 +25,9 @@
 - Added platform-native selection copying: `Ctrl+C` copies on Windows and
   Linux, `Cmd+C` copies on macOS, and macOS `Ctrl+C` still sends SIGINT.
 - Enforced a 160-character durable session-title limit for new renames, while
-  retaining compact legacy-title rendering only in constrained views.
+  retaining compact legacy-title rendering only in constrained views; browser
+  rename editors now show validation/server errors and apply only canonical
+  titles returned after a successful save.
 - Fixed the confirmed Windows updater handoff failure that left v1.1.3 in
   place after repeated v1.1.4 downloads. The helper now waits for UI-owned
   terminal hosts, retries transient install-directory locks, verifies the

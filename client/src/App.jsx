@@ -11,6 +11,7 @@ import { isHeadless } from './lib/headless.js'
 import { DEFAULT_PROVIDER_ID, providerApiPath, providerStorageKey } from './lib/providers.js'
 import { DASHBOARD_STYLES, applyDashboardStyle, loadDashboardStyle, saveDashboardStyle } from './lib/dashboardStyles.js'
 import { TEXT_SIZES, applyTextSize, loadTextSize, saveTextSize } from './lib/textSizes.js'
+import { renameSessionTitle } from './lib/sessionTitles.js'
 // ContextPieChart is rendered inside ControlBar (not imported here)
 
 /**
@@ -372,7 +373,7 @@ export default function App() {
   const providerId = selectedProvider?.id || DEFAULT_PROVIDER_ID
   const providerLabel = selectedProvider?.label || providerId
   const providerCommand = selectedProvider?.command || providerId
-  const { sessions, connected, error, latestPrompt, rekeyMap, expiredPending } = useStatusFeed(providerId)
+  const { sessions, connected, error, latestPrompt, rekeyMap, expiredPending, updateSessionTitle } = useStatusFeed(providerId)
   const providerSessionsReady = sessions.length > 0 && sessions.every(s => !s.provider || s.provider === providerId)
   const [filterNeedsYou, setFilterNeedsYou] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadCollapsed)
@@ -602,12 +603,13 @@ export default function App() {
   }, [expiredPending])
 
   const handleRename = useCallback(async (id, title) => {
-    await fetch(providerApiPath(providerId, `sessions/${id}/rename`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
-    })
-  }, [providerId])
+    const savedTitle = await renameSessionTitle(
+      providerApiPath(providerId, `sessions/${id}/rename`),
+      title,
+    )
+    updateSessionTitle(id, savedTitle)
+    return savedTitle
+  }, [providerId, updateSessionTitle])
 
   const handleRemove = useCallback(async (id) => {
     // Optimistically close the tab
