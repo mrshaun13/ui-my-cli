@@ -261,7 +261,8 @@ Additional release/runtime capabilities preserved from v1.1.2:
   skipped instead of trapping startup in a port-conflict loop.
 - Checks stable GitHub Releases for a newer platform package. Checks are
   coalesced, cached for up to 30 minutes, and revalidated with GitHub ETags;
-  a manual **Check updates** action forces a fresh request. Updates are
+  malformed cached ETags are discarded so a damaged cache cannot break later
+  checks, and a manual **Check updates** action forces a fresh request. Updates are
   bounded, SHA-256 verified, staged outside the installation, and installed
   only after a wait of at most two minutes and two consecutive checks find no
   active provider sessions from any dashboard-tracked client or local-shell

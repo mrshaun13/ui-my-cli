@@ -7,9 +7,9 @@ with an appropriate HTTP status code.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/api/native/compatibility` | Fast native startup probe — returns API version, service instance identity, and active PTY count without database or provider CLI checks. |
-| `GET` | `/api/native/update-readiness` | Authenticated native update gate — returns the exact service identity plus fail-closed active PTY and provider-session counts, including explicitly in-flight Codex turns. |
-| `POST` | `/api/native/shutdown` | Gracefully stop the exact private dashboard service only after blocking new attachments and revalidating its control capability, identity, active PTYs, and provider sessions. |
+| `GET` | `/api/native/compatibility` | Fast native startup probe — returns `{ ok, apiVersion, service, instanceId, activePtys, controlAuthenticated }` without database or provider CLI checks; the control flag reflects the optional `X-UI-My-CLI-Control` header. |
+| `GET` | `/api/native/update-readiness` | Authenticated native update gate — requires `X-UI-My-CLI-Control` and returns the exact service identity plus `activePtys`, fail-closed `blockingSessions`, and activity/authentication status. |
+| `POST` | `/api/native/shutdown` | Gracefully stop the exact private dashboard service; requires `X-UI-My-CLI-Control` and body `{ instanceId }`, blocks new mutations, then revalidates identity, active PTYs, and provider sessions before returning `202`. |
 | `GET` | `/api/status` | Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds |
 | `GET` | `/api/providers` | Provider catalog — returns Codex/Devin labels, commands, availability, version, and UI metadata |
 | `GET` | `/api/native/launch/status` | Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching. |
@@ -44,8 +44,8 @@ with an appropriate HTTP status code.
 | `GET` | `/api/sessions/:id/config` | Compatibility alias for default provider config. |
 | `GET` | `/api/:providerId/sessions/:id` | Single provider session with `ptyActive` flag |
 | `GET` | `/api/sessions/:id` | Single session with `ptyActive` flag |
-| `POST` | `/api/:providerId/sessions/:id/rename` | Update a provider session title (body: `{ title: string }`, maximum 160 characters) |
-| `POST` | `/api/sessions/:id/rename` | Update session title (body: `{ title: string }`, maximum 160 characters) |
+| `POST` | `/api/:providerId/sessions/:id/rename` | Update or reset a provider session title (body: `{ title: string | null }`; strings must be 1-160 control-free characters). Returns the canonical `{ id, title }` saved by the provider. |
+| `POST` | `/api/sessions/:id/rename` | Compatibility alias for default-provider title update/reset; accepts `{ title: string | null }` and returns canonical `{ id, title }`. |
 | `POST` | `/api/:providerId/sessions/:id/kill-pty` | Kill the active provider-scoped PTY for a session without archiving it |
 | `POST` | `/api/sessions/:id/kill-pty` | Kill the active PTY for a session without archiving it |
 | `DELETE` | `/api/:providerId/sessions/:id` | Archive a provider session — kills PTY, hides from active list (reversible) |

@@ -40,7 +40,7 @@ module.exports = {
     '**Durable blank terminals and live context** — newly opened Codex tabs remain available until their first prompt persists the thread, while open native inspectors follow model, reasoning-effort, and context changes from manual `/model` selection or Adaptive routing',
     '**Project-root-safe native sessions** — each new Codex TUI receives the directory selected in the native chooser as an explicit working root, including when it connects through the shared app-server control plane',
     '**Local native voice-to-text** — each native terminal has a microphone control that captures through a dedicated cross-platform audio helper, trims speech with Silero VAD, transcribes locally with Whisper base.en, and inserts the result into either terminal input or the initiating pane\'s Adaptive composer without auto-submitting',
-    '**Verified native updates** — cached and ETag-revalidated stable GitHub Release checks verify exact package size and SHA-256, require an authenticated app-owned private dashboard service instead of stopping a shared port-7575 service, wait up to two minutes for dashboard-tracked active provider sessions and local shells to drain, retain quiet visible or archived Codex turns, unresolved Devin tool calls, and transcript-pipeline headless runs as blockers while explicitly in flight, expire abandoned in-flight work after 24 hours, then hand the exact private-service PID, loopback endpoint, and instance identity to an external rollback-capable helper that revalidates all provider activity and active PTYs before graceful service shutdown, holds an install-scoped lock through replacement and rollback, transfers that lock to the replacement through framework initialization and its ready handshake, and leaves every unrelated process untouched',
+    '**Verified native updates** — cached and ETag-revalidated stable GitHub Release checks discard malformed cached validators, verify exact package size and SHA-256, require an authenticated app-owned private dashboard service instead of stopping a shared port-7575 service, wait up to two minutes for dashboard-tracked active provider sessions and local shells to drain, retain quiet visible or archived Codex turns, unresolved Devin tool calls, and transcript-pipeline headless runs as blockers while explicitly in flight, expire abandoned in-flight work after 24 hours, then hand the exact private-service PID, loopback endpoint, and instance identity to an external rollback-capable helper that revalidates all provider activity and active PTYs before graceful service shutdown, holds an install-scoped lock through replacement and rollback, transfers that lock to the replacement through framework initialization and its ready handshake, and leaves every unrelated process untouched',
     '**Hot/cold grouping** — recent sessions at top, old idle ones behind a configurable day divider',
     '**Archive / restore** — hide sessions from the list without deleting them; ' +
       'restore from the collapsible drawer at the bottom of the sidebar',
@@ -237,9 +237,9 @@ module.exports = {
 
   // Descriptions for REST routes — keyed as "METHOD /path"
   routeDescriptions: {
-    'GET /api/native/compatibility': 'Fast native startup probe — returns API version, service instance identity, and active PTY count without database or provider CLI checks.',
-    'GET /api/native/update-readiness': 'Authenticated native update gate — returns the exact service identity plus fail-closed active PTY and provider-session counts, including explicitly in-flight Codex turns.',
-    'POST /api/native/shutdown': 'Gracefully stop the exact private dashboard service only after blocking new attachments and revalidating its control capability, identity, active PTYs, and provider sessions.',
+    'GET /api/native/compatibility': 'Fast native startup probe — returns `{ ok, apiVersion, service, instanceId, activePtys, controlAuthenticated }` without database or provider CLI checks; the control flag reflects the optional `X-UI-My-CLI-Control` header.',
+    'GET /api/native/update-readiness': 'Authenticated native update gate — requires `X-UI-My-CLI-Control` and returns the exact service identity plus `activePtys`, fail-closed `blockingSessions`, and activity/authentication status.',
+    'POST /api/native/shutdown': 'Gracefully stop the exact private dashboard service; requires `X-UI-My-CLI-Control` and body `{ instanceId }`, blocks new mutations, then revalidates identity, active PTYs, and provider sessions before returning `202`.',
     'GET /api/native/launch/status': 'Capability probe used by the native dashboard to find a browser dashboard that supports reciprocal launching.',
     'POST /api/native/launch':       'Focus or start the installed Codex Native app through Windows/WSL2 PowerShell or macOS LaunchServices.',
     'GET /api/status':               'Server health check — returns `ok`, API compatibility version, default provider, provider availability, active PTY count, uptime seconds',
@@ -274,8 +274,8 @@ module.exports = {
     'GET /api/sessions/:id/config': 'Compatibility alias for default provider config.',
     'GET /api/:providerId/sessions/:id': 'Single provider session with `ptyActive` flag',
     'GET /api/sessions/:id':         'Single session with `ptyActive` flag',
-    'POST /api/:providerId/sessions/:id/rename': 'Update a provider session title (body: `{ title: string }`, maximum 160 characters)',
-    'POST /api/sessions/:id/rename': 'Update session title (body: `{ title: string }`, maximum 160 characters)',
+    'POST /api/:providerId/sessions/:id/rename': 'Update or reset a provider session title (body: `{ title: string | null }`; strings must be 1-160 control-free characters). Returns the canonical `{ id, title }` saved by the provider.',
+    'POST /api/sessions/:id/rename': 'Compatibility alias for default-provider title update/reset; accepts `{ title: string | null }` and returns canonical `{ id, title }`.',
     'POST /api/:providerId/sessions/:id/kill-pty': 'Kill the active provider-scoped PTY for a session without archiving it',
     'POST /api/sessions/:id/kill-pty': 'Kill the active PTY for a session without archiving it',
     'DELETE /api/:providerId/sessions/:id': 'Archive a provider session — kills PTY, hides from active list (reversible)',

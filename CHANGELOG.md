@@ -52,8 +52,9 @@
 - Kept successful browser renames stable across stale status-feed frames while
   the provider's canonical title persistence catches up.
 - Added cached and coalesced GitHub release checks with ETag revalidation,
-  friendly 403/429 reset times, and optional authentication only through the
-  explicitly supplied `CODEX_NATIVE_GITHUB_TOKEN` environment variable.
+  malformed cached-validator recovery, friendly 403/429 reset times, and
+  optional authentication only through the explicitly supplied
+  `CODEX_NATIVE_GITHUB_TOKEN` environment variable.
 - Fixed new-session prompt loss in both browser and native clients. A pending
   session remains live through UI detach/restart until its PTY exits or is
   explicitly canceled, with exact Codex origin correlation and process-owned

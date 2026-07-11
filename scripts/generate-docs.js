@@ -191,11 +191,18 @@ function collect() {
     { name: 'server/codex-token-activity.js', src: codexTokenActivitySrc },
     { name: 'server/dashboard-store.js', src: dashboardStoreSrc },
     { name: 'server/transcript-headless-store.js', src: transcriptHeadlessStoreSrc },
+    { name: 'server/native-service-control.js', src: tryRead('server/native-service-control.js') },
+    { name: 'server/native-update-activity.js', src: tryRead('server/native-update-activity.js') },
+    { name: 'server/native-update-gate.js', src: tryRead('server/native-update-gate.js') },
+    { name: 'server/pending-session-lifecycle.js', src: tryRead('server/pending-session-lifecycle.js') },
+    { name: 'server/session-display-text.js', src: tryRead('server/session-display-text.js') },
     { name: 'server/providers/index.js', src: providerIndexSrc },
     { name: 'server/providers/codex/index.js', src: providerCodexSrc },
     { name: 'server/providers/codex/executable.js', src: providerCodexExecutableSrc },
+    { name: 'server/providers/codex/rename.js', src: tryRead('server/providers/codex/rename.js') },
     { name: 'server/providers/devin/index.js', src: providerDevinSrc },
     { name: 'server/providers/devin/paths.js', src: providerDevinPathsSrc },
+    { name: 'server/providers/devin/store.js', src: tryRead('server/providers/devin/store.js') },
   ];
 
   const clientKeyFiles = [
@@ -217,14 +224,17 @@ function collect() {
     'client/src/components/ControlBar.jsx',
     'client/src/components/DashboardSplash.jsx',
     'client/src/components/SessionPreview.jsx',
+    'client/src/components/TabBar.jsx',
     'client/src/hooks/useStatusFeed.js',
+    'client/src/lib/sessionTitles.js',
+    'client/src/lib/tabState.js',
   ]) {
     fileDescs[rel] = moduleOneliner(tryRead(rel));
   }
   fileDescs['native/CodexNative/App.axaml.cs'] =
     'Avalonia application entry; on macOS configures the menu-bar icon for open, service start/reconnect, managed stop, and quit.';
   fileDescs['native/CodexNative/MainWindow.axaml.cs'] =
-    'Cross-platform native dashboard shell with Agent provider switcher, provider-scoped persistent session tabs, local voice input, direct local shell tabs, responsive header/pane layout, themed pane scrollbars, macOS hide-to-menu-bar lifecycle, push telemetry, cohort analytics, latest-prompt navigation, search, and preferences.';
+    'Cross-platform native dashboard shell with Agent provider switcher, provider-scoped persistent session tabs, selection-first terminal mouse handling, platform-safe clipboard actions, local voice input, direct local shell tabs, responsive layout, macOS hide-to-menu-bar lifecycle, analytics, search, and preferences.';
   fileDescs['native/CodexNative/MainWindow.axaml'] =
     'Native dashboard layout with Agent provider selector, theme-aware control chrome, and the in-app pixel C identity.';
   fileDescs['native/CodexNative/Assets/codex-native-icon.png'] =
@@ -232,15 +242,17 @@ function collect() {
   fileDescs['native/CodexNative/Assets/codex-native-icon.ico'] =
     'Multi-resolution Windows executable and title-bar icon bundle.';
   fileDescs['native/CodexNative/DashboardApiClient.cs'] =
-    'Typed localhost client that loads `/api/providers` and scopes sessions, terminals, repos, stats, context, configuration, rename, and archive calls to the selected provider.';
+    'Typed localhost client for provider-scoped session APIs plus authenticated native-service compatibility, update-readiness, and shutdown calls.';
   fileDescs['native/CodexNative/DashboardTheme.cs'] =
     'Native equivalents of the browser dashboard themes and text-size choices.';
   fileDescs['native/CodexNative/DashboardServiceManager.cs'] =
-    'Starts the local ui-my-cli service in WSL2 or macOS when port 7575 is unavailable; on macOS launches through nohup and can stop an app-owned idle service.';
+    'Starts, identifies, persists, and safely re-adopts an app-owned private ui-my-cli service in WSL2 or macOS without claiming a shared port-7575 service.';
+  fileDescs['native/CodexNative.Core/DashboardServiceOwnership.cs'] =
+    'Validated private-service PID, start time, port, instance identity, and control capability used for safe re-adoption and update handoff.';
   fileDescs['native/CodexNative.Core/NativeLaunchBuilder.cs'] =
-    'Validated launch specifications for the loopback terminal bridge, local shells, and private Windows/macOS service.';
+    'Validated launch specifications for authenticated loopback terminal bridges, local shells, and private Windows/macOS services.';
   fileDescs['native/CodexNative.TerminalHost/Program.cs'] =
-    'Cross-platform console companion for persistent server-terminal bridging and Windows WSL startup.';
+    'Cross-platform console companion that forwards private-service capability only to its authenticated persistent terminal bridge.';
   fileDescs['native/CodexNative.TerminalHost/TerminalBridge.cs'] =
     'Bidirectional console/WebSocket bridge that lets native terminal views reattach to persistent server PTYs.';
   fileDescs['native/CodexNative.SpeechHost/SpeechHostApplication.cs'] =
@@ -256,7 +268,7 @@ function collect() {
   fileDescs['native/CodexNative.Core/DashboardRepositoryLocator.cs'] =
     'Finds a ready ui-my-cli checkout (sources plus express/node-pty) from configuration, app location, or conventional home paths, preferring dependency-ready paths over stale configured ones.';
   fileDescs['native/CodexNative.Core/DashboardApiCompatibility.cs'] =
-    'Exact native-client/server API compatibility policy that rejects stale services with incomplete analytics contracts.';
+    'Exact native-client/server API policy that requires the v6 authenticated, fail-closed update-readiness contract.';
   fileDescs['native/CodexNative.Core/DashboardServicePorts.cs'] =
     'Bounded private-service port policy used to bypass incompatible or orphaned loopback services safely.';
   fileDescs['native/CodexNative.Core/TerminalPaneLayoutMath.cs'] =
@@ -268,19 +280,33 @@ function collect() {
   fileDescs['native/CodexNative.Core/NativeUpdatePackage.cs'] =
     'Downloads bounded release assets, verifies SHA-256, and rejects traversal, links, or incomplete native payloads.';
   fileDescs['native/CodexNative.Core/NativeInstallRequest.cs'] =
-    'Validated structured update handoff arguments, related terminal-host process IDs, and installed-app layout resolution.';
+    'Validated update handoff for the exact owned dashboard process, terminal-host processes, control capability, and installed-app layout.';
   fileDescs['native/CodexNative.Core/NativeInstallProcessPolicy.cs'] =
     'Confirms that a candidate terminal host or app process belongs to the current native installation before updater cleanup or restart checks.';
+  fileDescs['native/CodexNative.Core/NativeInstallLock.cs'] =
+    'Install-scoped exclusive lock that serializes native starts, replacement, rollback, and the authorized post-update restart.';
+  fileDescs['native/CodexNative.Core/NativeDashboardUpdatePolicy.cs'] =
+    'Fail-closed ownership, activity, and authenticated shutdown policy for handing an exact private dashboard service to the updater.';
+  fileDescs['native/CodexNative.Core/NativeStartupHealthHandshake.cs'] =
+    'Framework-ready startup handshake used to transfer the install lock to a verified replacement process.';
   fileDescs['native/CodexNative.Core/NativeUpdateInstallationState.cs'] =
-    'Marks an installation while post-restart update validation is in progress so the previous payload is not removed too early.';
+    'Tracks post-restart validation without preserving a stale marker that could block future native starts.';
+  fileDescs['native/CodexNative.Core/NativeUpdatePolicy.cs'] =
+    'Shared updater drain timeout, rollback-backup requirement, and failure aggregation policy.';
   fileDescs['native/CodexNative.Core/NativeUpdateResultStore.cs'] =
     'Persists one bounded updater result for display on the next native launch.';
   fileDescs['native/CodexNative.Core/SessionDisplayText.cs'] =
     'Normalizes and length-bounds native session titles and prompt previews for fixed dashboard layouts.';
+  fileDescs['native/CodexNative.Core/SessionRenameGuard.cs'] =
+    'Temporarily preserves a successful canonical rename while stale status-feed frames catch up.';
+  fileDescs['native/CodexNative.Core/SessionTitleDisplay.cs'] =
+    'Compacts oversized legacy session titles only for constrained native display surfaces.';
   fileDescs['native/CodexNative.Core/TerminalClipboardShortcut.cs'] =
     'Maps platform-safe terminal copy, copy-all, and paste shortcuts without taking ordinary shell control keys.';
+  fileDescs['native/CodexNative.Core/TerminalSelectionGeometry.cs'] =
+    'Maps native terminal pointer coordinates to bounded text cells for selection-first drag handling.';
   fileDescs['native/CodexNative/NativeUpdateService.cs'] =
-    'Coalesced cached native release checks, verified staging, and external updater launch orchestration.';
+    'Coalesced cached native release checks with safe ETag recovery, verified staging, and external updater launch orchestration.';
   fileDescs['native/CodexNative.Updater/Program.cs'] =
     'Out-of-process retrying installation, version/startup validation, rollback, result reporting, and native-app restart helper.';
   fileDescs['native/CodexNative/DashboardStatusFeed.cs'] =
@@ -292,11 +318,45 @@ function collect() {
   fileDescs['native/CodexNative/DashboardModels.cs'] =
     'Typed multi-provider dashboard, bounded session-display, context, analytics, conversation, rate-limit, provider-catalog, and subagent payload models.';
   fileDescs['native/CodexNative/NativeSettings.cs'] =
-    'Persisted native preferences including selected provider, pane layouts, and per-tab provider identity.';
+    'Persisted native preferences plus the private dashboard ownership record needed for exact service re-adoption.';
+  fileDescs['client/src/lib/sessionTitles.js'] =
+    'Shared browser title validation, canonical rename response handling, and stale-feed reconciliation.';
+  fileDescs['client/src/lib/tabState.js'] =
+    'Separates canonical session identity from temporary terminal transport identity during pending-session collisions.';
+  fileDescs['client/src/App.jsx'] =
+    'Browser dashboard shell coordinating provider sessions, canonical/transport tab identities, and durable title updates.';
+  fileDescs['client/src/components/AgentCard.jsx'] =
+    'Sidebar session row with validated canonical rename handling.';
+  fileDescs['client/src/components/ControlBar.jsx'] =
+    'Selected-session context strip with validated canonical rename handling.';
+  fileDescs['client/src/components/SessionPreview.jsx'] =
+    'Read-only session detail panel with validated canonical rename handling.';
+  fileDescs['client/src/components/TabBar.jsx'] =
+    'Browser tab strip that preserves separate pending transport tabs during canonical-session collisions.';
+  fileDescs['client/src/hooks/useStatusFeed.js'] =
+    'Provider status WebSocket with pending re-key/expiry handling and stale-title reconciliation.';
+  fileDescs['server/index.js'] =
+    'Express/WebSocket dashboard API with provider routing, durable renames, pending-session lifecycle, and authenticated native update control.';
+  fileDescs['server/codex-store.js'] =
+    'Codex state adapter with safe prompt metadata, explicit in-flight detection, native title resolution, and archive behavior.';
+  fileDescs['server/pty-manager.js'] =
+    'Persistent provider PTYs with detached-pending retention, collision-safe transport identity, buffered reattachment, and spawn-helper repair.';
+  fileDescs['server/transcript-headless-store.js'] =
+    'Read-only transcript-pipeline ledger adapter with safe prompt metadata and in-flight run detection.';
+  fileDescs['server/native-service-control.js'] =
+    'Constant-time validation of the one-service native update control capability.';
+  fileDescs['server/native-update-activity.js'] =
+    'Fail-closed all-provider activity snapshot for native update readiness, including archived and explicitly in-flight work.';
+  fileDescs['server/native-update-gate.js'] =
+    'Serializes session mutations with native shutdown so update readiness cannot race a new mutation.';
   fileDescs['server/pending-session-lifecycle.js'] =
     'Pending-session lifecycle policy for safe re-keying, live-PTY retention through client detachment, exit expiry, and exact provider-owned correlation.';
   fileDescs['server/session-display-text.js'] =
     'Shared bounded session-title formatting and filtering of injected Codex context from user-prompt metadata.';
+  fileDescs['server/providers/codex/rename.js'] =
+    'Persists native Codex titles through the app-server and keeps external headless titles in dashboard metadata.';
+  fileDescs['server/providers/devin/store.js'] =
+    'Devin state adapter with process-owned pending-session correlation, unresolved-tool activity detection, titles, and archive metadata.';
 
   const statusJsdoc  = extractStatusJsdoc(sessionsSrc);
   const statusRows   = parseStatusTable(statusJsdoc);
@@ -501,8 +561,9 @@ CODEX_HOME=/custom/codex-home npm start
 CODEX_STATE_DB_PATH=/custom/path/state_5.sqlite npm start
 \`\`\`
 
-Session title renames are dashboard-local. Codex-owned state is read-only
-except archive/restore operations performed through the Codex CLI.
+Native Codex title renames are persisted through the Codex app-server so the
+CLI, VS Code, and dashboard share one title. Transcript-pipeline headless titles
+remain dashboard-local. Codex archive/restore uses the Codex CLI.
 Override Devin with \`DEVIN_DB_PATH\` or \`DEVIN_DASHBOARD_DB_PATH\`.
 
 ### All Environment Variables
@@ -759,7 +820,7 @@ The Codex logic lives in \`server/codex-store.js\`; the Devin logic lives in
 
 | Data | Location | Access |
 |------|----------|--------|
-| Session metadata | Codex \`~/.codex/state_*.sqlite\` | Read-only |
+| Session metadata and native titles | Codex \`~/.codex/state_*.sqlite\` | Read-only except durable title rename through the Codex app-server |
 | Message history and tool events | Codex rollout JSONL under \`~/.codex/sessions/\` | Read-only |
 | Archive state | Codex CLI \`archive\` / \`unarchive\` commands | Codex-owned |
 | Transcript-pipeline Codex headless ledgers | \`TRANSCRIPT_PIPELINE_HEADLESS_SESSIONS_DIR\` or \`~/git/ai-tell-my-story/transcript-pipeline/data/headless-sessions\` | Read-only |
