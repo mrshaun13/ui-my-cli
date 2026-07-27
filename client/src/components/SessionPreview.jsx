@@ -16,7 +16,6 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import SubagentTimeline from './SubagentTimeline'
 import { providerApiPath } from '../lib/providers.js'
-import { sessionTitleValidationError } from '../lib/sessionTitles.js'
 
 const STATUS_LABEL = {
   question: 'Needs your input',
@@ -391,10 +390,7 @@ export default function SessionPreview({ providerId, providerLabel = 'Agent', se
   const [error, setError]     = useState(null)
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState('')
-  const [renameError, setRenameError] = useState('')
-  const [renamePending, setRenamePending] = useState(false)
   const inputRef = useRef(null)
-  const renamePendingRef = useRef(false)
 
   // ── Full conversation viewer state ──────────────────────────────────────────
   const INITIAL_BATCH = 50
@@ -418,7 +414,6 @@ export default function SessionPreview({ providerId, providerLabel = 'Agent', se
     setData(null)
     setError(null)
     setRenaming(false)
-    setRenameError('')
     // Reset conversation viewer state when switching sessions
     setConvoTurns([])
     setConvoTotal(0)
@@ -481,36 +476,21 @@ export default function SessionPreview({ providerId, providerLabel = 'Agent', se
   const startRename = (e) => {
     e?.stopPropagation()
     setNameValue(data?.title || '')
-    setRenameError('')
     setRenaming(true)
   }
 
-  const commitRename = async () => {
-    if (renamePendingRef.current) return
-    if (nameValue.trim() === data?.title) {
-      setRenaming(false)
-      setRenameError('')
-      return
-    }
-    renamePendingRef.current = true
-    setRenamePending(true)
-    setRenameError('')
-    try {
-      const savedTitle = await onRename(data.id, nameValue)
-      setData(prev => prev ? { ...prev, title: savedTitle } : prev)
-      setNameValue(savedTitle)
-      setRenaming(false)
-    } catch (error) {
-      setRenameError(error.message || 'Failed to rename session')
-    } finally {
-      renamePendingRef.current = false
-      setRenamePending(false)
+  const commitRename = () => {
+    setRenaming(false)
+    const trimmed = nameValue.trim()
+    if (trimmed && trimmed !== data?.title) {
+      onRename && onRename(data.id, trimmed)
+      setData(prev => prev ? { ...prev, title: trimmed } : prev)
     }
   }
 
   const onTitleKeyDown = (e) => {
     if (e.key === 'Enter') commitRename()
-    if (e.key === 'Escape') { setRenaming(false); setNameValue(data?.title || ''); setRenameError('') }
+    if (e.key === 'Escape') { setRenaming(false); setNameValue(data?.title || '') }
     e.stopPropagation()
   }
 
@@ -586,21 +566,15 @@ export default function SessionPreview({ providerId, providerLabel = 'Agent', se
         <div className="preview-header-top">
           <div className="preview-title-group">
             {renaming ? (
-              <div className="rename-editor">
-                <input
-                  ref={inputRef}
-                  className="preview-rename-input"
-                  value={nameValue}
-                  onChange={e => { setNameValue(e.target.value); setRenameError(sessionTitleValidationError(e.target.value)) }}
-                  onBlur={commitRename}
-                  onKeyDown={onTitleKeyDown}
-                  onClick={e => e.stopPropagation()}
-                  aria-invalid={Boolean(renameError)}
-                  aria-describedby={renameError ? 'preview-rename-error' : undefined}
-                  disabled={renamePending}
-                />
-                {renameError && <span id="preview-rename-error" className="rename-error" role="alert">{renameError}</span>}
-              </div>
+              <input
+                ref={inputRef}
+                className="preview-rename-input"
+                value={nameValue}
+                onChange={e => setNameValue(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={onTitleKeyDown}
+                onClick={e => e.stopPropagation()}
+              />
             ) : (
               <span
                 className="preview-title"

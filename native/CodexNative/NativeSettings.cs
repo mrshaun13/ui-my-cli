@@ -28,8 +28,7 @@ public sealed record NativeSettings(
     string? ScreenshotCaptureDirectory = null,
     int ScreenshotRetentionDays = 3,
     int ScreenshotMaximumMegapixels = 32,
-    string ProviderId = "codex",
-    DashboardServiceOwnership? DashboardServiceOwnership = null)
+    string ProviderId = "codex")
 {
     public static NativeSettings Default { get; } = CreateDefault();
 
@@ -181,12 +180,6 @@ public sealed class NativeSettingsStore(string? path = null)
                 {
                     await JsonSerializer.SerializeAsync(stream, settings, cancellationToken: cancellationToken);
                     await stream.FlushAsync(cancellationToken);
-                }
-                if (!OperatingSystem.IsWindows())
-                {
-                    File.SetUnixFileMode(
-                        temporaryPath,
-                        UnixFileMode.UserRead | UnixFileMode.UserWrite);
                 }
 
                 for (var attempt = 0; ; attempt++)

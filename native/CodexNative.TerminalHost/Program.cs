@@ -33,7 +33,6 @@ internal static class Program
             }
 
             PopulateWindowsEnvironment(startInfo);
-            ForwardDashboardControlCapability(startInfo, request.Mode);
             HostLog.Write($"Starting {spec.Process} for {request.Mode} in {request.Distribution}.");
 
             using var process = Process.Start(startInfo)
@@ -49,23 +48,6 @@ internal static class Program
             Console.Error.WriteLine($"CodexNative terminal host failed: {ex.Message}");
             return 1;
         }
-    }
-
-    private static void ForwardDashboardControlCapability(
-        ProcessStartInfo startInfo,
-        NativeLaunchMode mode)
-    {
-        if (mode != NativeLaunchMode.DashboardService) return;
-        var capability = Environment.GetEnvironmentVariable(
-            DashboardServiceOwnership.ControlCapabilityEnvironmentVariable);
-        if (!DashboardServiceOwnership.IsValidControlCapability(capability))
-            throw new InvalidOperationException("Dashboard service control capability is missing or invalid.");
-        startInfo.Environment[DashboardServiceOwnership.ControlCapabilityEnvironmentVariable] = capability;
-        var inherited = Environment.GetEnvironmentVariable("WSLENV");
-        var entry = DashboardServiceOwnership.ControlCapabilityEnvironmentVariable;
-        startInfo.Environment["WSLENV"] = string.IsNullOrWhiteSpace(inherited)
-            ? entry
-            : $"{inherited}:{entry}";
     }
 
     private static void PopulateWindowsEnvironment(ProcessStartInfo startInfo)

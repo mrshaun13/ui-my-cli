@@ -14,8 +14,7 @@ public sealed record WslHostRequest(
     string Distribution,
     string? WorkingDirectory = null,
     string? SessionId = null,
-    int? Port = null,
-    string? InstanceId = null);
+    int? Port = null);
 
 public sealed record NativeLaunchSpec(
     string Process,
@@ -68,19 +67,14 @@ public static class NativeLaunchBuilder
         string hostExecutable,
         string distribution,
         string workingDirectory,
-        int port = DashboardServicePorts.FirstPrivate,
-        string? instanceId = null)
-    {
-        instanceId ??= Guid.NewGuid().ToString("D");
-        return BuildHostSpec(
+        int port = DashboardServicePorts.FirstPrivate) =>
+        BuildHostSpec(
             hostExecutable,
             new WslHostRequest(
                 NativeLaunchMode.DashboardService,
                 distribution,
                 workingDirectory,
-                Port: port,
-                InstanceId: instanceId));
-    }
+                Port: port));
 
     public static NativeLaunchSpec DashboardService(
         NativePlatform platform,
@@ -88,12 +82,10 @@ public static class NativeLaunchBuilder
         string distribution,
         string workingDirectory,
         string? nodeExecutable = null,
-        int port = DashboardServicePorts.FirstPrivate,
-        string? instanceId = null)
+        int port = DashboardServicePorts.FirstPrivate)
     {
-        instanceId ??= Guid.NewGuid().ToString("D");
         if (platform == NativePlatform.Windows)
-            return DashboardService(hostExecutable, distribution, workingDirectory, port, instanceId);
+            return DashboardService(hostExecutable, distribution, workingDirectory, port);
         if (!DashboardServicePorts.IsPrivateCandidate(port))
             throw new ArgumentOutOfRangeException(
                 nameof(port),
@@ -114,7 +106,6 @@ public static class NativeLaunchBuilder
             {
                 ["NODE_ENV"] = "production",
                 ["PORT"] = port.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["UI_MY_CLI_NATIVE_INSTANCE_ID"] = ValidateInstanceId(instanceId),
             });
     }
 
@@ -157,7 +148,6 @@ public static class NativeLaunchBuilder
         string? distribution = null;
         string? workingDirectory = null;
         string? sessionId = null;
-        string? instanceId = null;
         int? port = null;
         NativeLaunchMode? mode = null;
 
@@ -197,9 +187,6 @@ public static class NativeLaunchBuilder
                         throw new ArgumentException("Dashboard service port must be an integer.", nameof(arguments));
                     port = parsedPort;
                     break;
-                case "--instance-id":
-                    instanceId = value;
-                    break;
                 default:
                     throw new ArgumentException($"Unknown host argument '{name}'.", nameof(arguments));
             }
@@ -210,8 +197,7 @@ public static class NativeLaunchBuilder
             distribution ?? throw new ArgumentException("Missing --distribution.", nameof(arguments)),
             workingDirectory,
             sessionId,
-            port,
-            instanceId));
+            port));
     }
 
     public static NativeLaunchSpec BuildWslSpec(WslHostRequest request, string windowsSystemDirectory)
@@ -261,7 +247,7 @@ public static class NativeLaunchBuilder
             NativeLaunchMode.NewSession => codexNewSession,
             NativeLaunchMode.ResumeSession => codexResumeSession,
             NativeLaunchMode.DashboardService =>
-                $"export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT={request.Port} UI_MY_CLI_NATIVE_INSTANCE_ID={ValidateInstanceId(request.InstanceId)}; exec node server/index.js",
+                $"export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT={request.Port}; exec node server/index.js",
             _ => throw new ArgumentOutOfRangeException(nameof(request)),
         });
 
@@ -324,11 +310,6 @@ public static class NativeLaunchBuilder
             arguments.Add("--port");
             arguments.Add(request.Port.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
-        if (request.InstanceId is not null)
-        {
-            arguments.Add("--instance-id");
-            arguments.Add(ValidateInstanceId(request.InstanceId));
-        }
 
         return new NativeLaunchSpec(hostExecutable, arguments);
     }
@@ -367,18 +348,12 @@ public static class NativeLaunchBuilder
                     $"Dashboard service port must be between {DashboardServicePorts.FirstPrivate} and {DashboardServicePorts.LastPrivate}.",
                     nameof(request));
             }
-            ValidateInstanceId(request.InstanceId);
         }
-        else if (request.Port is not null || request.InstanceId is not null)
+        else if (request.Port is not null)
         {
-            throw new ArgumentException("Only dashboard service requests may specify a port or instance ID.", nameof(request));
+            throw new ArgumentException("Only dashboard service requests may specify a port.", nameof(request));
         }
 
         return request;
     }
-
-    private static string ValidateInstanceId(string? value) =>
-        Guid.TryParseExact(value, "D", out var instanceId)
-            ? instanceId.ToString("D")
-            : throw new ArgumentException("Dashboard service instance ID must be a UUID.");
 }

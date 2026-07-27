@@ -10,10 +10,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { providerWsPath } from '../lib/providers.js'
-import {
-  reconcileSessionTitle,
-  SESSION_TITLE_RECONCILIATION_MS,
-} from '../lib/sessionTitles.js'
 
 const WS_BASE = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
 const INITIAL_BACKOFF = 500
@@ -26,16 +22,12 @@ export function useStatusFeed(providerId) {
   const [error, setError] = useState(null)
   // rekeyMap: { [tempKey]: realId } — pending sessions that have been re-keyed
   const [rekeyMap, setRekeyMap] = useState({})
-  const [collisionPending, setCollisionPending] = useState(() => new Set())
-  // expiredPending: Set of temp keys whose PTY exited before session registration
+  // expiredPending: Set of temp keys whose terminal exited before persistence
   const [expiredPending, setExpiredPending] = useState(() => new Set())
-  const [collisionNotice, setCollisionNotice] = useState('')
   const wsRef = useRef(null)
   const backoffRef = useRef(INITIAL_BACKOFF)
   const retryRef = useRef(null)
   const feedTokenRef = useRef(0)
-  const pendingTitleRenamesRef = useRef(new Map())
-  const collisionNoticeTimerRef = useRef(null)
 
   const connect = useCallback(() => {
     const token = feedTokenRef.current
@@ -62,13 +54,7 @@ export function useStatusFeed(providerId) {
             if (!prev.length) return msg.data
             const prevMap = new Map(prev.map(s => [s.id, s]))
             let changed = prev.length !== msg.data.length
-            const next = msg.data.map(incoming => {
-              const title = reconcileSessionTitle(
-                incoming.id,
-                incoming.title,
-                pendingTitleRenamesRef.current,
-              )
-              const s = title === incoming.title ? incoming : { ...incoming, title }
+            const next = msg.data.map(s => {
               const old = prevMap.get(s.id)
               if (old
                 && old.status === s.status
@@ -85,22 +71,9 @@ export function useStatusFeed(providerId) {
             return changed ? next : prev
           })
         }
-        else if (msg.type === 'latest-prompt') {
-          const title = reconcileSessionTitle(
-            msg.data?.sessionId,
-            msg.data?.title,
-            pendingTitleRenamesRef.current,
-          )
-          setLatestPrompt(title === msg.data?.title ? msg.data : { ...msg.data, title })
-        }
+        else if (msg.type === 'latest-prompt') setLatestPrompt(msg.data)
         else if (msg.type === 'rekey' && msg.tempKey && msg.realId) {
           setRekeyMap(prev => ({ ...prev, [msg.tempKey]: msg.realId }))
-          if (msg.collision) {
-            setCollisionPending(prev => new Set(prev).add(msg.tempKey))
-            setCollisionNotice('Session already had a canonical terminal; redundant terminal cleanup occurs only after its client detaches.')
-            clearTimeout(collisionNoticeTimerRef.current)
-            collisionNoticeTimerRef.current = setTimeout(() => setCollisionNotice(''), 8000)
-          }
         }
         else if (msg.type === 'pending-expired' && msg.tempKey) {
           setExpiredPending(prev => new Set(prev).add(msg.tempKey))
@@ -132,28 +105,14 @@ export function useStatusFeed(providerId) {
     setLatestPrompt(null)
     setError(null)
     setRekeyMap({})
-    setCollisionPending(new Set())
     setExpiredPending(new Set())
-    setCollisionNotice('')
-    pendingTitleRenamesRef.current.clear()
     connect()
     return () => {
       feedTokenRef.current += 1
       clearTimeout(retryRef.current)
-      clearTimeout(collisionNoticeTimerRef.current)
       wsRef.current?.close()
     }
   }, [connect])
 
-  const updateSessionTitle = useCallback((sessionId, title) => {
-    pendingTitleRenamesRef.current.set(sessionId, {
-      title,
-      expiresAt: Date.now() + SESSION_TITLE_RECONCILIATION_MS,
-    })
-    setSessions(prev => prev.map(session =>
-      session.id === sessionId ? { ...session, title } : session))
-    setLatestPrompt(prev => prev?.sessionId === sessionId ? { ...prev, title } : prev)
-  }, [])
-
-  return { sessions, connected, error, latestPrompt, rekeyMap, collisionPending, expiredPending, collisionNotice, updateSessionTitle }
+  return { sessions, connected, error, latestPrompt, rekeyMap, expiredPending }
 }

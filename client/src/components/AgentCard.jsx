@@ -15,7 +15,6 @@
 
 import { useState, useRef, useEffect, memo } from 'react'
 import { isHeadless, displayTitle, displayProject, HEADLESS_ICON } from '../lib/headless.js'
-import { sessionTitleValidationError } from '../lib/sessionTitles.js'
 
 // Re-exported so Sidebar.jsx can keep its single import-from-AgentCard line
 // alongside STATUS_ICON / STATUS_LABEL.  The canonical definition lives in
@@ -48,10 +47,7 @@ export function StatusBadge({ status }) {
 export default memo(function AgentCard({ session, isActive, isPreview, isOld, isArchived, compact, onClick, onPreview, onRename, onArchive, onRestore }) {
   const [renaming, setRenaming] = useState(false)
   const [nameValue, setNameValue] = useState(session.title)
-  const [renameError, setRenameError] = useState('')
-  const [renamePending, setRenamePending] = useState(false)
   const inputRef = useRef(null)
-  const renamePendingRef = useRef(false)
 
   const headless = isHeadless(session)
   const shownTitle = headless ? displayTitle(session) : session.title
@@ -82,35 +78,18 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, is
   const startRename = (e) => {
     e.stopPropagation()
     setNameValue(session.title)
-    setRenameError('')
     setRenaming(true)
   }
 
-  const commitRename = async () => {
-    if (renamePendingRef.current) return
-    if (nameValue.trim() === session.title) {
-      setRenaming(false)
-      setRenameError('')
-      return
-    }
-    renamePendingRef.current = true
-    setRenamePending(true)
-    setRenameError('')
-    try {
-      const savedTitle = await onRename(session.id, nameValue)
-      setNameValue(savedTitle)
-      setRenaming(false)
-    } catch (error) {
-      setRenameError(error.message || 'Failed to rename session')
-    } finally {
-      renamePendingRef.current = false
-      setRenamePending(false)
-    }
+  const commitRename = () => {
+    setRenaming(false)
+    const trimmed = nameValue.trim()
+    if (trimmed) onRename(session.id, trimmed)
   }
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter') commitRename()
-    if (e.key === 'Escape') { setRenaming(false); setNameValue(session.title); setRenameError('') }
+    if (e.key === 'Escape') { setRenaming(false); setNameValue(session.title) }
     e.stopPropagation()
   }
 
@@ -144,21 +123,15 @@ export default memo(function AgentCard({ session, isActive, isPreview, isOld, is
 
       <div className="agent-title-row">
         {renaming ? (
-          <div className="rename-editor">
-            <input
-              ref={inputRef}
-              className="agent-rename-input"
-              value={nameValue}
-              onChange={e => { setNameValue(e.target.value); setRenameError(sessionTitleValidationError(e.target.value)) }}
-              onBlur={commitRename}
-              onKeyDown={onKeyDown}
-              onClick={e => e.stopPropagation()}
-              aria-invalid={Boolean(renameError)}
-              aria-describedby={renameError ? `rename-error-${session.id}` : undefined}
-              disabled={renamePending}
-            />
-            {renameError && <span id={`rename-error-${session.id}`} className="rename-error" role="alert">{renameError}</span>}
-          </div>
+          <input
+            ref={inputRef}
+            className="agent-rename-input"
+            value={nameValue}
+            onChange={e => setNameValue(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={onKeyDown}
+            onClick={e => e.stopPropagation()}
+          />
         ) : (
           <span
             className="agent-title"

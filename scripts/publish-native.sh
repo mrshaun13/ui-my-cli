@@ -36,20 +36,10 @@ publish_args=(
   -p:EnableCompressionInSingleFile=true
 )
 
-publish_project() {
-  local project="$1"
-  local output="$2"
-  # Each project shares Core intermediates. Restore the requested RID
-  # explicitly so sequential all-platform publishes cannot reuse assets from
-  # the preceding runtime.
-  dotnet restore "$project" -r "$rid"
-  dotnet publish "$project" "${publish_args[@]}" --no-restore -o "$output"
-}
-
-publish_project "$app_project" "$staging/app"
-publish_project "$host_project" "$staging/host"
-publish_project "$speech_project" "$staging/speech"
-publish_project "$updater_project" "$staging/updater"
+dotnet publish "$app_project" "${publish_args[@]}" -o "$staging/app"
+dotnet publish "$host_project" "${publish_args[@]}" -o "$staging/host"
+dotnet publish "$speech_project" "${publish_args[@]}" -o "$staging/speech"
+dotnet publish "$updater_project" "${publish_args[@]}" -o "$staging/updater"
 
 if [[ "$rid" == osx-* ]]; then
   contents="$artifact/CodexNative.app/Contents"

@@ -26,11 +26,18 @@ function withProviderList(list) {
   return Array.isArray(list) ? list.map(withProviderSession) : list;
 }
 
-function buildCommand(sessionId) {
-  const args = [];
-  if (sessionId) args.push('--resume', sessionId);
-  args.push('--respect-workspace-trust', 'false');
-  return { command: 'devin', args };
+function quoteShellArg(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function buildCommand(sessionId, { shell, platform } = {}) {
+  const bin = 'devin';
+  const base = sessionId
+    ? `${bin} --resume ${quoteShellArg(sessionId)} --respect-workspace-trust false`
+    : `${bin} --respect-workspace-trust false`;
+
+  if (platform === 'win32') return { command: 'cmd.exe', args: ['/k', base] };
+  return { command: shell, args: ['-lc', base] };
 }
 
 let cachedVersion;
@@ -66,8 +73,6 @@ module.exports = {
   watchPaths,
   listSessions: () => withProviderList(store.listSessions()),
   listArchivedSessions: () => withProviderList(store.listArchivedSessions()),
-  isSessionInFlight: store.isSessionInFlight,
-  listInFlightSessionIds: store.listInFlightSessionIds,
   getSession: id => withProviderSession(store.getSession(id)),
   getSessionPreview: store.getSessionPreview,
   getSessionConversation: store.getSessionConversation,

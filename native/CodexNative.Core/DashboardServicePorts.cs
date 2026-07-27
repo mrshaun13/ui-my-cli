@@ -2,7 +2,6 @@ namespace CodexNative.Core;
 
 public static class DashboardServicePorts
 {
-    public const int Shared = 7575;
     public const int FirstPrivate = 7577;
     public const int LastPrivate = 7596;
 

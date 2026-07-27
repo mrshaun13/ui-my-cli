@@ -22,7 +22,6 @@ public sealed class DashboardApiClient : IDisposable
     };
 
     public int ConnectedPort => _service.Port;
-    public Uri ServiceBaseUri => _service;
     public string ProviderId => _providerId;
     public Uri StatusWebSocketUri => new(
         $"ws://127.0.0.1:{_service.Port}/ws/{Uri.EscapeDataString(_providerId)}/status");
@@ -44,7 +43,7 @@ public sealed class DashboardApiClient : IDisposable
 
     public async Task<bool> TryUseExistingServiceAsync(CancellationToken cancellationToken = default)
     {
-        if ((await ProbeAsync(SharedService, TimeSpan.FromSeconds(3), cancellationToken)).IsCompatible)
+        if (await ProbeAsync(SharedService, TimeSpan.FromSeconds(10), cancellationToken))
         {
             _service = SharedService;
             return true;
@@ -52,7 +51,7 @@ public sealed class DashboardApiClient : IDisposable
         foreach (var port in DashboardServicePorts.PrivateCandidates)
         {
             var candidate = PrivateService(port);
-            if (!(await ProbeAsync(candidate, TimeSpan.FromMilliseconds(500), cancellationToken)).IsCompatible) continue;
+            if (!await ProbeAsync(candidate, TimeSpan.FromMilliseconds(400), cancellationToken)) continue;
             _service = candidate;
             return true;
         }
@@ -67,171 +66,31 @@ public sealed class DashboardApiClient : IDisposable
     }
 
     public Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default) =>
-        IsCurrentServiceCompatibleAsync(cancellationToken);
-
-    private async Task<bool> IsCurrentServiceCompatibleAsync(CancellationToken cancellationToken) =>
-        (await ProbeCurrentServiceAsync(cancellationToken)).IsCompatible;
-
-    public Task<DashboardApiProbeResult> ProbeCurrentServiceAsync(
-        CancellationToken cancellationToken = default) =>
         ProbeAsync(_service, TimeSpan.FromSeconds(2), cancellationToken);
 
-    public Task<DashboardApiProbeResult> ProbeOwnedServiceAsync(
-        DashboardServiceOwnership ownership,
-        CancellationToken cancellationToken = default)
-    {
-        if (!ownership.IsStructurallyValid() || ownership.Port != _service.Port)
-            return Task.FromResult(DashboardApiProbeResult.Unreachable());
-        return ProbeAsync(
-            _service,
-            TimeSpan.FromSeconds(2),
-            cancellationToken,
-            ownership.ControlCapability);
-    }
-
-    public async Task<DashboardApiProbeResult> ProbeOwnedUpdateReadinessAsync(
-        DashboardServiceOwnership ownership,
-        CancellationToken cancellationToken = default)
-    {
-        if (!ownership.IsStructurallyValid() || ownership.Port != _service.Port)
-            return DashboardApiProbeResult.Unreachable();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(2));
-        try
-        {
-            using var request = new HttpRequestMessage(
-                HttpMethod.Get,
-                new Uri(_service, "native/update-readiness"));
-            using var response = await SendCompatibilityRequestAsync(
-                request,
-                ownership.ControlCapability,
-                timeout.Token);
-            if (!response.IsSuccessStatusCode
-                || response.Content.Headers.ContentType?.MediaType != "application/json")
-                return DashboardApiProbeResult.Unreachable();
-            var readiness = await response.Content.ReadFromJsonAsync<DashboardCompatibilityStatus>(
-                JsonOptions,
-                timeout.Token);
-            if (readiness?.Service != "ui-my-cli-dashboard")
-                return DashboardApiProbeResult.Unreachable();
-            return DashboardApiProbeResult.FromResponse(
-                readiness.Ok,
-                readiness.ApiVersion,
-                readiness.ActivePtys,
-                readiness.InstanceId,
-                readiness.ControlAuthenticated,
-                readiness.BlockingSessions,
-                readiness.ActivityCheckOk);
-        }
-        catch (HttpRequestException)
-        {
-            return DashboardApiProbeResult.Unreachable();
-        }
-        catch (JsonException)
-        {
-            return DashboardApiProbeResult.Unreachable();
-        }
-        catch (NotSupportedException)
-        {
-            return DashboardApiProbeResult.Unreachable();
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return DashboardApiProbeResult.Unreachable();
-        }
-    }
-
-    private async Task<DashboardApiProbeResult> ProbeAsync(
+    private async Task<bool> ProbeAsync(
         Uri service,
         TimeSpan timeoutDuration,
-        CancellationToken cancellationToken,
-        string? controlCapability = null)
+        CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(timeoutDuration);
         try
         {
-            using (var request = new HttpRequestMessage(
-                       HttpMethod.Get,
-                       new Uri(service, "native/compatibility")))
-            using (var response = await SendCompatibilityRequestAsync(
-                       request,
-                       controlCapability,
-                       timeout.Token))
-            {
-                if (response.IsSuccessStatusCode
-                    && response.Content.Headers.ContentType?.MediaType == "application/json")
-                {
-                    try
-                    {
-                        var compatibility = await response.Content.ReadFromJsonAsync<DashboardCompatibilityStatus>(
-                            JsonOptions,
-                            timeout.Token);
-                        if (compatibility is not null)
-                        {
-                            if (compatibility.Service != "ui-my-cli-dashboard")
-                                return DashboardApiProbeResult.Unreachable();
-                            return DashboardApiProbeResult.FromResponse(
-                                compatibility.Ok,
-                                compatibility.ApiVersion,
-                                compatibility.ActivePtys,
-                                compatibility.InstanceId,
-                                compatibility.ControlAuthenticated);
-                        }
-                    }
-                    catch (JsonException)
-                    {
-                        // Older services may route this unknown path to the SPA.
-                    }
-                    catch (NotSupportedException)
-                    {
-                        // Fall back to the legacy status contract below.
-                    }
-                }
-            }
-
-            using var legacyResponse = await _http.GetAsync(new Uri(service, "status"), timeout.Token);
-            if (!legacyResponse.IsSuccessStatusCode) return DashboardApiProbeResult.Unreachable();
-            var status = await legacyResponse.Content.ReadFromJsonAsync<DashboardStatus>(JsonOptions, timeout.Token);
-            return status is null
-                ? DashboardApiProbeResult.Unreachable()
-                : DashboardApiProbeResult.FromResponse(
-                    status.Ok,
-                    status.ApiVersion,
-                    status.ActivePtys);
+            using var response = await _http.GetAsync(new Uri(service, "status"), timeout.Token);
+            if (!response.IsSuccessStatusCode) return false;
+            var status = await response.Content.ReadFromJsonAsync<DashboardStatus>(JsonOptions, timeout.Token);
+            if (status is not { Ok: true }) return false;
+            return DashboardApiCompatibility.IsCompatible(status.ApiVersion);
         }
         catch (HttpRequestException)
         {
-            return DashboardApiProbeResult.Unreachable();
-        }
-        catch (JsonException)
-        {
-            return DashboardApiProbeResult.Unreachable();
-        }
-        catch (NotSupportedException)
-        {
-            return DashboardApiProbeResult.Unreachable();
+            return false;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return DashboardApiProbeResult.Unreachable();
+            return false;
         }
-    }
-
-    private Task<HttpResponseMessage> SendCompatibilityRequestAsync(
-        HttpRequestMessage request,
-        string? controlCapability,
-        CancellationToken cancellationToken)
-    {
-        if (controlCapability is not null)
-        {
-            if (!DashboardServiceOwnership.IsValidControlCapability(controlCapability))
-                throw new ArgumentException("Dashboard control capability is invalid.", nameof(controlCapability));
-            request.Headers.TryAddWithoutValidation(
-                DashboardServiceOwnership.ControlCapabilityHeader,
-                controlCapability);
-        }
-        return _http.SendAsync(request, cancellationToken);
     }
 
     public Task<List<ProviderStatus>> GetProvidersAsync(CancellationToken cancellationToken = default) =>
@@ -419,7 +278,7 @@ public sealed class DashboardApiClient : IDisposable
         string? providerId = null) =>
         GetProviderAsync<List<SubagentData>>($"sessions/{Uri.EscapeDataString(sessionId)}/subagents", cancellationToken, providerId);
 
-    public async Task<SessionRenameResult> RenameAsync(
+    public async Task RenameAsync(
         string sessionId,
         string title,
         CancellationToken cancellationToken = default,
@@ -429,23 +288,7 @@ public sealed class DashboardApiClient : IDisposable
             ProviderUri($"sessions/{Uri.EscapeDataString(sessionId)}/rename", providerId),
             new { title },
             cancellationToken);
-        if (!response.IsSuccessStatusCode)
-        {
-            string? message = null;
-            try
-            {
-                using var body = await JsonDocument.ParseAsync(
-                    await response.Content.ReadAsStreamAsync(cancellationToken),
-                    cancellationToken: cancellationToken);
-                message = body.RootElement.TryGetProperty("error", out var error)
-                    ? error.GetString()
-                    : null;
-            }
-            catch (JsonException) { }
-            throw new InvalidOperationException(message ?? $"Session rename failed ({(int)response.StatusCode}).");
-        }
-        return await response.Content.ReadFromJsonAsync<SessionRenameResult>(JsonOptions, cancellationToken)
-            ?? throw new InvalidDataException("Dashboard returned no session rename result.");
+        response.EnsureSuccessStatusCode();
     }
 
     public async Task ArchiveAsync(

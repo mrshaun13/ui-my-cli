@@ -1,15 +1,11 @@
 using CodexNative.Core;
 using System.IO.Compression;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 
 var failures = new List<string>();
 const string host = @"C:\Apps\CodexNative.TerminalHost.exe";
-const string dashboardInstanceId = "7e79f66b-b194-45cd-b640-95065d4fb183";
-const string dashboardControlCapability = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
-const long dashboardServiceStartTime = 1_752_000_000_123;
 
 if (args is ["--verify-release-artifacts", var artifactDirectory, .. var runtimeIdentifiers])
 {
@@ -67,58 +63,6 @@ Check("conversation search safely handles every prefix of a multi-character quer
         ConversationSearch.Normalize(new string('x', ConversationSearch.MaximumQueryLength + 20)).Length);
 });
 
-Check("session titles are compacted for constrained native chrome", () =>
-{
-    Equal("Untitled session", SessionTitleDisplay.Compact(" \r\n\t "));
-    Equal(
-        "I want to continue a read-only reconciliation between AWS Direct Connect costs and Kentik.",
-        SessionTitleDisplay.Compact(
-            "I want to continue a read-only reconciliation\r\n\r\n  between AWS Direct Connect costs\n  and Kentik."));
-
-    var compact = SessionTitleDisplay.Compact(new string('x', 200));
-    Equal(SessionTitleDisplay.MaximumLength, compact.Length);
-    Equal(true, compact.EndsWith('…'));
-    Equal(false, compact.Contains('\n'));
-});
-
-Check("pending session rename resists stale status titles only during its guard window", () =>
-{
-    var now = DateTimeOffset.Parse("2026-07-10T12:00:00Z");
-    var pending = new PendingSessionRename("New durable title", now.AddSeconds(12));
-    Equal("New durable title", SessionRenameGuard.ResolveTitle("Old title", pending, now.AddSeconds(3)));
-    Equal("New durable title", SessionRenameGuard.ResolveTitle("New durable title", pending, now.AddSeconds(3)));
-    Equal("Another client title", SessionRenameGuard.ResolveTitle("Another client title", pending, now.AddSeconds(12)));
-});
-
-Check("rollback requires the previous installation backup before replacement", () =>
-{
-    NativeUpdatePolicy.RequireRollbackBackup(hadPreviousInstall: true, backupExists: true);
-    NativeUpdatePolicy.RequireRollbackBackup(hadPreviousInstall: false, backupExists: false);
-    var missing = ThrowsMessage<InvalidOperationException>(() =>
-        NativeUpdatePolicy.RequireRollbackBackup(hadPreviousInstall: true, backupExists: false));
-    Equal(true, missing.Contains("failed installation was left in place", StringComparison.Ordinal));
-});
-
-Check("rollback failures retain update and recovery diagnostics", () =>
-{
-    var updateFailure = new InvalidDataException("installed payload failed validation");
-    var recoveryFailure = new IOException("backup remained at .previous");
-    var combined = NativeUpdatePolicy.RollbackFailure(updateFailure, recoveryFailure);
-    Equal(2, combined.InnerExceptions.Count);
-    Equal(updateFailure, combined.InnerExceptions[0]);
-    Equal(recoveryFailure, combined.InnerExceptions[1]);
-    Equal(true, combined.Message.Contains("could not be restored automatically", StringComparison.Ordinal));
-});
-
-Check("terminal selection geometry maps and clamps pointer positions", () =>
-{
-    Equal(new TerminalCell(0, 0), TerminalSelectionGeometry.CellAt(0, 0, 1200, 600, 120, 30));
-    Equal(new TerminalCell(60, 15), TerminalSelectionGeometry.CellAt(605, 305, 1200, 600, 120, 30));
-    Equal(new TerminalCell(119, 29), TerminalSelectionGeometry.CellAt(2000, 900, 1200, 600, 120, 30));
-    Equal(new TerminalCell(0, 0), TerminalSelectionGeometry.CellAt(-20, -10, 1200, 600, 120, 30));
-    Throws<ArgumentOutOfRangeException>(() => TerminalSelectionGeometry.CellAt(0, 0, 0, 600, 120, 30));
-});
-
 Check("macOS local shell uses a structured env launch without shell interpolation", () =>
 {
     var spec = NativeLaunchBuilder.LocalShell(
@@ -147,14 +91,12 @@ Check("macOS dashboard service uses structured process settings", () =>
         host,
         "Ubuntu",
         "/Users/tester/ui-my-cli",
-        "/opt/homebrew/bin/node",
-        instanceId: dashboardInstanceId);
+        "/opt/homebrew/bin/node");
     Equal("/opt/homebrew/bin/node", spec.Process);
     Equal("/Users/tester/ui-my-cli", spec.WorkingDirectory);
     SequenceEqual(["server/index.js"], spec.Arguments);
     Equal("production", spec.Environment!["NODE_ENV"]);
     Equal("7577", spec.Environment["PORT"]);
-    Equal(dashboardInstanceId, spec.Environment["UI_MY_CLI_NATIVE_INSTANCE_ID"]);
 
     var alternate = NativeLaunchBuilder.DashboardService(
         NativePlatform.MacOS,
@@ -162,31 +104,18 @@ Check("macOS dashboard service uses structured process settings", () =>
         "Ubuntu",
         "/Users/tester/ui-my-cli",
         "/opt/homebrew/bin/node",
-        7584,
-        dashboardInstanceId);
+        7584);
     Equal("7584", alternate.Environment!["PORT"]);
 });
 
 Check("private dashboard ports are bounded and ordered", () =>
 {
-    Equal(7575, DashboardServicePorts.Shared);
     Equal(7577, DashboardServicePorts.PrivateCandidates.First());
     Equal(7596, DashboardServicePorts.PrivateCandidates.Last());
     Equal(20, DashboardServicePorts.PrivateCandidates.Count);
     Equal(true, DashboardServicePorts.IsPrivateCandidate(7584));
     Equal(false, DashboardServicePorts.IsPrivateCandidate(7576));
     Equal(false, DashboardServicePorts.IsPrivateCandidate(7597));
-});
-
-Check("native updates require an owned private dashboard service", () =>
-{
-    NativeDashboardUpdatePolicy.RequireOwnedPrivateService(7577, ownsConnectedService: true);
-    var shared = ThrowsMessage<InvalidOperationException>(() =>
-        NativeDashboardUpdatePolicy.RequireOwnedPrivateService(7575, ownsConnectedService: false));
-    Equal(true, shared.Contains("Stop that shared service", StringComparison.Ordinal));
-    var unowned = ThrowsMessage<InvalidOperationException>(() =>
-        NativeDashboardUpdatePolicy.RequireOwnedPrivateService(7578, ownsConnectedService: false));
-    Equal(true, unowned.Contains("does not own", StringComparison.Ordinal));
 });
 
 Check("node resolver prefers an explicit executable then PATH", () =>
@@ -257,35 +186,14 @@ Check("macOS dashboard repository recovery skips stale checkouts without depende
     Equal(false, stale.IsReady);
 });
 
-Check("dashboard API v6 requires authoritative native update readiness", () =>
+Check("dashboard API v5 requires remote sessions to preserve their selected root", () =>
 {
     Equal(false, DashboardApiCompatibility.IsCompatible(0));
     Equal(false, DashboardApiCompatibility.IsCompatible(1));
     Equal(false, DashboardApiCompatibility.IsCompatible(2));
     Equal(false, DashboardApiCompatibility.IsCompatible(3));
     Equal(false, DashboardApiCompatibility.IsCompatible(4));
-    Equal(false, DashboardApiCompatibility.IsCompatible(5));
-    Equal(true, DashboardApiCompatibility.IsCompatible(6));
-});
-
-Check("dashboard compatibility probes distinguish mismatches from outages", () =>
-{
-    var compatible = DashboardApiProbeResult.FromResponse(true, DashboardApiCompatibility.RequiredVersion, 3, "owned");
-    Equal(DashboardApiProbeState.Compatible, compatible.State);
-    Equal(true, compatible.IsCompatible);
-    Equal(3, compatible.ActivePtys);
-
-    var incompatible = DashboardApiProbeResult.FromResponse(true, DashboardApiCompatibility.RequiredVersion + 1);
-    Equal(DashboardApiProbeState.Incompatible, incompatible.State);
-    Equal(false, incompatible.IsCompatible);
-    Equal(true, incompatible.DescribeMismatch(7577).Contains($"requires v{DashboardApiCompatibility.RequiredVersion}"));
-    Equal(true, incompatible.CanReplaceOwnedService(ownsService: true));
-    Equal(false, incompatible.CanReplaceOwnedService(ownsService: false));
-    Equal(false, compatible.CanReplaceOwnedService(ownsService: true));
-    Equal(false, DashboardApiProbeResult.FromResponse(true, 3, activePtys: 1).CanReplaceOwnedService(true));
-
-    Equal(DashboardApiProbeState.Unreachable, DashboardApiProbeResult.Unreachable().State);
-    Equal(DashboardApiProbeState.Unreachable, DashboardApiProbeResult.FromResponse(false, 99).State);
+    Equal(true, DashboardApiCompatibility.IsCompatible(5));
 });
 
 Check("token activity input and output share one truthful chart scale", () =>
@@ -302,34 +210,6 @@ Check("native versions compare stable release tags", () =>
     Equal(false, NativeVersion.TryParse("1.2", out _));
 });
 
-Check("session display text cannot expand sidebar rows or tab headers", () =>
-{
-    var title = SessionDisplayText.Title($"Large session\n\n{new string('x', 300)}");
-    Equal(false, title.Contains('\n'));
-    Equal(SessionDisplayText.MaximumTitleLength, title.Length);
-    Equal(true, title.EndsWith('…'));
-
-    var prompt = SessionDisplayText.PromptPreview($"line one\nline two {new string('p', 600)}");
-    Equal(false, prompt.Contains('\n'));
-    Equal(SessionDisplayText.MaximumPromptPreviewLength, prompt.Length);
-    Equal(false, prompt.Any(char.IsControl));
-    Equal("safe prompt", SessionDisplayText.PromptPreview("safe\0\u0085prompt"));
-    Equal(string.Empty, SessionDisplayText.PromptPreview(null));
-
-    Equal(
-        "Preserve  internal   spaces",
-        SessionDisplayText.CanonicalTitleOrDisplay("Preserve  internal   spaces"));
-
-    var emojiTitle = SessionDisplayText.Title($"{new string('x', SessionDisplayText.MaximumTitleLength)}🙂");
-    Equal(false, emojiTitle.Contains('\ufffd'));
-    Equal(SessionDisplayText.MaximumTitleLength, emojiTitle.Length);
-});
-
-Check("legacy session display titles replace every control character", () =>
-{
-    Equal("safe title", SessionDisplayText.CanonicalTitleOrDisplay("safe\0\u001b\u0085title"));
-});
-
 Check("release downloads are restricted to GitHub HTTPS hosts", () =>
 {
     Equal(true, GitHubReleaseClient.IsTrustedDownloadUri(
@@ -344,7 +224,6 @@ Check("release downloads are restricted to GitHub HTTPS hosts", () =>
 
 Check("update drain blocks all active Codex work and local shells", () =>
 {
-    Equal(TimeSpan.FromMinutes(2), NativeUpdatePolicy.DrainTimeout);
     var sessions = new[]
     {
         (Status: "active", IsHeadless: false),
@@ -418,384 +297,6 @@ Check("updater request preserves paths as structured arguments", () =>
             "/Applications/CodexNative.app/Contents/MacOS"));
 });
 
-Check("updater request carries terminal bridges and owned dashboard identity", () =>
-{
-    var oldRequest = NativeInstallRequest.Parse(
-    [
-        "--parent-pid", "123", "--platform", "windows",
-        "--source", "/updates/payload", "--target", "/apps/CodexNative",
-    ]);
-    Equal<IReadOnlyList<int>?>(null, oldRequest.RelatedProcessIds);
-
-    var request = new NativeInstallRequest(
-        123,
-        NativePlatform.Windows,
-        "/updates/payload",
-        "/apps/CodexNative",
-        [456, 789, 456],
-        900,
-        dashboardServiceStartTime,
-        "http://127.0.0.1:7577/api/",
-        dashboardInstanceId,
-        dashboardControlCapability);
-    var parsed = NativeInstallRequest.Parse(request.ToArguments(), dashboardControlCapability);
-    SequenceEqual(new[] { 456, 789 }, parsed.RelatedProcessIds ?? []);
-    Equal(900, parsed.DashboardServiceProcessId);
-    Equal(dashboardServiceStartTime, parsed.DashboardServiceStartTimeUnixMilliseconds);
-    Equal("http://127.0.0.1:7577/api/", parsed.DashboardEndpoint);
-    Equal(dashboardInstanceId, parsed.DashboardInstanceId);
-    Equal(dashboardControlCapability, parsed.DashboardControlCapability);
-    Equal(false, request.ToArguments().Contains(dashboardControlCapability));
-    Throws<ArgumentException>(() => NativeInstallRequest.Parse(request.ToArguments()));
-    Throws<ArgumentException>(() => NativeInstallRequest.Parse(
-    [
-        "--parent-pid", "123", "--platform", "windows",
-        "--source", "/updates/payload", "--target", "/apps/CodexNative",
-        "--wait-pids", "123",
-    ]));
-    Throws<ArgumentException>(() => NativeInstallRequest.Parse(
-    [
-        "--parent-pid", "123", "--platform", "windows",
-        "--source", "/updates/payload", "--target", "/apps/CodexNative",
-        "--dashboard-service-pid", "900",
-    ]));
-    Throws<ArgumentException>(() => NativeInstallRequest.Parse(
-    [
-        "--parent-pid", "123", "--platform", "windows",
-        "--source", "/updates/payload", "--target", "/apps/CodexNative",
-        "--dashboard-service-pid", "900",
-        "--dashboard-endpoint", "https://example.com/api/",
-        "--dashboard-instance-id", dashboardInstanceId,
-    ]));
-});
-
-Check("dashboard ownership requires PID, start time, instance, and capability", () =>
-{
-    var ownership = new DashboardServiceOwnership(
-        456,
-        dashboardServiceStartTime,
-        7577,
-        dashboardInstanceId,
-        dashboardControlCapability);
-    Equal(true, ownership.IsStructurallyValid());
-    Equal(false, (ownership with { ProcessStartTimeUnixMilliseconds = 0 }).IsStructurallyValid());
-    Equal(false, (ownership with { Port = 7575 }).IsStructurallyValid());
-    Equal(false, (ownership with { InstanceId = "wrong" }).IsStructurallyValid());
-    Equal(false, (ownership with { ControlCapability = new string('A', 63) }).IsStructurallyValid());
-});
-
-Check("updater accepts only the explicitly owned dashboard service process", () =>
-{
-    Equal(true, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        456,
-        456,
-        "/apps/CodexNative/CodexNative.TerminalHost.exe",
-        dashboardServiceStartTime,
-        dashboardServiceStartTime));
-    Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        456,
-        789,
-        "/apps/CodexNative/CodexNative.TerminalHost.exe",
-        dashboardServiceStartTime,
-        dashboardServiceStartTime));
-    Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        456,
-        456,
-        "/other/CodexNative.TerminalHost.exe",
-        dashboardServiceStartTime,
-        dashboardServiceStartTime));
-    Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        456,
-        456,
-        "/apps/CodexNative/CodexNative.exe",
-        dashboardServiceStartTime,
-        dashboardServiceStartTime));
-    Equal(true, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
-        NativePlatform.MacOS,
-        "/Applications/CodexNative.app",
-        456,
-        456,
-        "/opt/homebrew/bin/node",
-        dashboardServiceStartTime,
-        dashboardServiceStartTime));
-    Equal(false, NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
-        NativePlatform.MacOS,
-        "/Applications/CodexNative.app",
-        456,
-        456,
-        "/opt/homebrew/bin/node",
-        dashboardServiceStartTime,
-        dashboardServiceStartTime + 1));
-    Equal(true, NativeInstallProcessPolicy.IsMainApplication(
-        NativePlatform.MacOS,
-        "/Applications/CodexNative.app",
-        "/Applications/CodexNative.app/Contents/MacOS/CodexNative"));
-    Equal(true, NativeInstallProcessPolicy.IsUpdateBlocker(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        789,
-        "/apps/CodexNative/CodexNative.exe",
-        456));
-    Equal(true, NativeInstallProcessPolicy.IsUpdateBlocker(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        789,
-        "/apps/CodexNative/CodexNative.TerminalHost.exe",
-        456));
-    Equal(false, NativeInstallProcessPolicy.IsUpdateBlocker(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        456,
-        "/apps/CodexNative/CodexNative.TerminalHost.exe",
-        456));
-    Equal(false, NativeInstallProcessPolicy.IsUpdateBlocker(
-        NativePlatform.Windows,
-        "/apps/CodexNative",
-        789,
-        "/other/CodexNative.TerminalHost.exe",
-        456));
-});
-
-await CheckAsync("owned dashboard handoff revalidates before stopping", async () =>
-{
-    var calls = new List<string>();
-    NativeDashboardUpdatePolicy.RequireOwnedActivitySnapshot(
-        dashboardInstanceId,
-        DashboardApiProbeResult.FromResponse(
-            true,
-            DashboardApiCompatibility.RequiredVersion,
-            activePtys: 2,
-            instanceId: dashboardInstanceId,
-            controlAuthenticated: true,
-            blockingSessions: 3,
-            activityCheckOk: true));
-    await NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
-        dashboardInstanceId,
-        _ =>
-        {
-            calls.Add("probe");
-            return Task.FromResult(DashboardApiProbeResult.FromResponse(
-                true,
-                DashboardApiCompatibility.RequiredVersion,
-                0,
-                dashboardInstanceId,
-                controlAuthenticated: true,
-                activityCheckOk: true));
-        },
-        _ =>
-        {
-            calls.Add("stop");
-            return Task.CompletedTask;
-        });
-    SequenceEqual(new[] { "probe", "stop" }, calls);
-
-    var stopped = false;
-    await ThrowsAsync<InvalidOperationException>(() =>
-        NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
-            dashboardInstanceId,
-            _ => Task.FromResult(DashboardApiProbeResult.FromResponse(
-                true,
-                DashboardApiCompatibility.RequiredVersion,
-                1,
-                dashboardInstanceId,
-                controlAuthenticated: true,
-                activityCheckOk: true)),
-            _ =>
-            {
-                stopped = true;
-                return Task.CompletedTask;
-            }));
-    Equal(false, stopped);
-
-    await ThrowsAsync<InvalidOperationException>(() =>
-        NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
-            dashboardInstanceId,
-            _ => Task.FromResult(DashboardApiProbeResult.FromResponse(
-                true,
-                DashboardApiCompatibility.RequiredVersion,
-                0,
-                "6ced4140-c8c6-4290-b467-2cc5613af732",
-                controlAuthenticated: true,
-                activityCheckOk: true)),
-            _ =>
-            {
-                stopped = true;
-                return Task.CompletedTask;
-            }));
-    Equal(false, stopped);
-
-    await ThrowsAsync<InvalidOperationException>(() =>
-        NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
-            dashboardInstanceId,
-            _ => Task.FromResult(DashboardApiProbeResult.FromResponse(
-                true,
-                DashboardApiCompatibility.RequiredVersion,
-                0,
-                dashboardInstanceId,
-                controlAuthenticated: true,
-                blockingSessions: 1,
-                activityCheckOk: true)),
-            _ =>
-            {
-                stopped = true;
-                return Task.CompletedTask;
-            }));
-    Equal(false, stopped);
-
-    await ThrowsAsync<InvalidOperationException>(() =>
-        NativeDashboardUpdatePolicy.RevalidateThenStopAsync(
-            dashboardInstanceId,
-            _ => Task.FromResult(DashboardApiProbeResult.FromResponse(
-                true,
-                DashboardApiCompatibility.RequiredVersion,
-                0,
-                dashboardInstanceId)),
-            _ =>
-            {
-                stopped = true;
-                return Task.CompletedTask;
-            }));
-    Equal(false, stopped);
-});
-
-Check("updater result is bounded, persisted, and consumed once", () =>
-{
-    var root = Path.Combine(Path.GetTempPath(), $"codex-native-result-{Guid.NewGuid():N}");
-    Directory.CreateDirectory(root);
-    try
-    {
-        NativeUpdateResultStore.Write(
-            root,
-            new NativeUpdateResult(true, "1.1.5", new string('x', 3000), DateTimeOffset.UtcNow));
-        var result = NativeUpdateResultStore.Take(root);
-        Equal(true, result!.Succeeded);
-        Equal("1.1.5", result.Version);
-        Equal(2048, result.Message.Length);
-        Equal<NativeUpdateResult?>(null, NativeUpdateResultStore.Take(root));
-    }
-    finally
-    {
-        Directory.Delete(root, recursive: true);
-    }
-});
-
-Check("updater marker validates live process identity", () =>
-{
-    var root = Path.Combine(Path.GetTempPath(), $"codex-native-marker-{Guid.NewGuid():N}");
-    Directory.CreateDirectory(root);
-    try
-    {
-        Equal(false, NativeUpdateInstallationState.IsInProgress(root));
-        NativeUpdateInstallationState.MarkInProgress(root);
-        Equal(true, NativeUpdateInstallationState.IsInProgress(root));
-        NativeUpdateInstallationState.Clear(root);
-        Equal(false, NativeUpdateInstallationState.IsInProgress(root));
-
-        var marker = Path.Combine(root, ".codex-native-update-in-progress");
-        File.WriteAllText(marker, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        Equal(true, NativeUpdateInstallationState.IsInProgress(root));
-        NativeUpdateInstallationState.Clear(root);
-
-        File.WriteAllText(marker, $"{Environment.ProcessId}\n0");
-        Equal(false, NativeUpdateInstallationState.IsInProgress(root));
-        Equal(false, File.Exists(marker));
-
-        File.WriteAllText(marker, int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        Equal(false, NativeUpdateInstallationState.IsInProgress(root));
-        Equal(false, File.Exists(marker));
-    }
-    finally
-    {
-        Directory.Delete(root, recursive: true);
-    }
-});
-
-Check("native install lock is target-specific and exclusive", () =>
-{
-    var parent = Path.Combine(Path.GetTempPath(), $"codex-native-lock-{Guid.NewGuid():N}");
-    var first = Path.Combine(parent, "CodexNative");
-    var second = Path.Combine(parent, "OtherNative");
-    Directory.CreateDirectory(first);
-    Directory.CreateDirectory(second);
-    try
-    {
-        Equal(false, NativeInstallLock.IsHeld(first));
-        using (NativeInstallLock.Acquire(first, TimeSpan.FromSeconds(1)))
-        {
-            Equal(true, NativeInstallLock.IsHeld(first));
-            Equal(false, NativeInstallLock.IsHeld(second));
-            Throws<TimeoutException>(() => NativeInstallLock.Acquire(first, TimeSpan.FromMilliseconds(20)));
-        }
-        Equal(false, NativeInstallLock.IsHeld(first));
-        Equal(
-            Path.Combine(parent, ".CodexNative.update.lock"),
-            NativeInstallLock.LockPath(first));
-    }
-    finally
-    {
-        Directory.Delete(parent, recursive: true);
-    }
-});
-
-Check("native startup rejects arbitrary launches during an update lock", () =>
-{
-    Equal(true, NativeInstallLock.CanStart(
-        lockHeld: false,
-        updateInProgress: false,
-        hasStartupHealthToken: false,
-        []));
-    Equal(false, NativeInstallLock.CanStart(
-        lockHeld: true,
-        updateInProgress: true,
-        hasStartupHealthToken: false,
-        [NativeInstallLock.AuthorizedRestartArgument]));
-    Equal(false, NativeInstallLock.CanStart(
-        lockHeld: false,
-        updateInProgress: true,
-        hasStartupHealthToken: false,
-        []));
-    Equal(true, NativeInstallLock.CanStart(
-        lockHeld: true,
-        updateInProgress: true,
-        hasStartupHealthToken: true,
-        [NativeInstallLock.AuthorizedRestartArgument]));
-});
-
-Check("native startup health requires framework-ready signal", () =>
-{
-    var parent = Path.Combine(Path.GetTempPath(), $"codex-native-health-{Guid.NewGuid():N}");
-    var install = Path.Combine(parent, "CodexNative");
-    Directory.CreateDirectory(install);
-    try
-    {
-        var token = NativeStartupHealthHandshake.CreateToken();
-        Equal(token, NativeStartupHealthHandshake.ParseToken(
-            [NativeStartupHealthHandshake.Argument, token]));
-        Equal(0, NativeStartupHealthHandshake.RemoveArguments(
-            [NativeStartupHealthHandshake.Argument, token]).Count);
-        Equal(false, NativeStartupHealthHandshake.IsReady(install, token, Environment.ProcessId));
-        NativeStartupHealthHandshake.SignalReady(install, token);
-        Equal(false, NativeStartupHealthHandshake.IsReady(install, token, Environment.ProcessId + 1));
-        Equal(true, NativeStartupHealthHandshake.IsReady(install, token, Environment.ProcessId));
-        NativeStartupHealthHandshake.Clear(install, token);
-        Equal(false, NativeStartupHealthHandshake.IsReady(install, token, Environment.ProcessId));
-        Throws<ArgumentException>(() => NativeStartupHealthHandshake.ParseToken(
-            [NativeStartupHealthHandshake.Argument, "invalid"]));
-    }
-    finally
-    {
-        Directory.Delete(parent, recursive: true);
-    }
-});
-
 await CheckAsync("GitHub release selection requires the matching runtime and checksum", async () =>
 {
     const string json = """
@@ -824,102 +325,6 @@ await CheckAsync("missing GitHub release is treated as no available update", asy
     using var http = new HttpClient(new StaticHttpHandler(HttpStatusCode.NotFound, "{}"));
     using var client = new GitHubReleaseClient(http);
     Equal<NativeReleaseInfo?>(null, await client.GetLatestAsync(new NativeVersion(1, 0, 0), "win-x64"));
-});
-
-await CheckAsync("GitHub rate limits expose the server reset time", async () =>
-{
-    var reset = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds());
-    using var http = new HttpClient(new StaticHttpHandler(
-        HttpStatusCode.Forbidden,
-        "{}",
-        response => response.Headers.Add("X-RateLimit-Reset", reset.ToUnixTimeSeconds().ToString())));
-    using var client = new GitHubReleaseClient(http);
-    try
-    {
-        await client.GetLatestAsync(new NativeVersion(1, 0, 0), "win-x64");
-        throw new InvalidOperationException("Expected GitHubRateLimitException.");
-    }
-    catch (GitHubRateLimitException ex)
-    {
-        Equal(reset, ex.RetryAt);
-    }
-});
-
-await CheckAsync("GitHub checks send only an explicitly supplied token", async () =>
-{
-    AuthenticationHeaderValue? observed = null;
-    using var http = new HttpClient(new CallbackHttpHandler(request =>
-    {
-        observed = request.Headers.Authorization;
-        return new HttpResponseMessage(HttpStatusCode.NotFound)
-        {
-            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
-        };
-    }));
-    using var client = new GitHubReleaseClient(http, "explicit-test-token");
-    await client.GetLatestAsync(new NativeVersion(1, 0, 0), "win-x64");
-    Equal("Bearer", observed?.Scheme);
-    Equal("explicit-test-token", observed?.Parameter);
-});
-
-await CheckAsync("GitHub release checks reuse cached ETags", async () =>
-{
-    using var http = new HttpClient(new CallbackHttpHandler(request =>
-    {
-        Equal("\"release-v1\"", request.Headers.IfNoneMatch.Single().ToString());
-        return new HttpResponseMessage(HttpStatusCode.NotModified);
-    }));
-    using var client = new GitHubReleaseClient(http);
-    var query = await client.QueryLatestAsync(
-        "win-x64",
-        "\"release-v1\"");
-    Equal(true, query.NotModified);
-    Equal("\"release-v1\"", query.EntityTag);
-});
-
-Check("malformed cached GitHub ETags are discarded before update checks", () =>
-{
-    Equal(true, GitHubReleaseClient.SanitizeEntityTag("malformed etag") is null);
-    Equal("\"release-v1\"", GitHubReleaseClient.SanitizeEntityTag("\"release-v1\"")?.ToString());
-});
-
-await CheckAsync("GitHub ETag cache retains the latest release across a downgrade", async () =>
-{
-    const string json = """
-        {
-          "tag_name": "v1.1.6",
-          "name": "Native 1.1.6",
-          "draft": false,
-          "prerelease": false,
-          "html_url": "https://github.com/mrshaun13/ui-my-cli/releases/tag/v1.1.6",
-          "assets": [
-            { "name": "CodexNative-v1.1.6-win-x64.zip", "browser_download_url": "https://github.com/mrshaun13/ui-my-cli/releases/download/v1.1.6/CodexNative-v1.1.6-win-x64.zip", "size": 100 },
-            { "name": "CodexNative-v1.1.6-win-x64.zip.sha256", "browser_download_url": "https://github.com/mrshaun13/ui-my-cli/releases/download/v1.1.6/CodexNative-v1.1.6-win-x64.zip.sha256", "size": 80 }
-          ]
-        }
-        """;
-    var requests = 0;
-    using var http = new HttpClient(new CallbackHttpHandler(request =>
-    {
-        requests++;
-        if (requests == 1)
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json"),
-            };
-            response.Headers.ETag = new EntityTagHeaderValue("\"release-v1.1.6\"");
-            return response;
-        }
-        Equal("\"release-v1.1.6\"", request.Headers.IfNoneMatch.Single().ToString());
-        return new HttpResponseMessage(HttpStatusCode.NotModified);
-    }));
-    using var client = new GitHubReleaseClient(http);
-    var initial = await client.QueryLatestAsync("win-x64");
-    Equal(new NativeVersion(1, 1, 6), initial.Release!.Version);
-    var revalidated = await client.QueryLatestAsync("win-x64", initial.EntityTag);
-    var cached = revalidated.NotModified ? initial.Release : revalidated.Release;
-    Equal(true, cached!.Version > new NativeVersion(1, 1, 5));
 });
 
 await CheckAsync("checksum verification rejects changed update bytes", async () =>
@@ -1051,8 +456,7 @@ Check("distribution and path validation reject command injection", () =>
 
 Check("dashboard service is launched inside its validated WSL directory", () =>
 {
-    var hostSpec = NativeLaunchBuilder.DashboardService(
-        host, "Ubuntu", "/home/tester/ui-my-cli", 7584, dashboardInstanceId);
+    var hostSpec = NativeLaunchBuilder.DashboardService(host, "Ubuntu", "/home/tester/ui-my-cli", 7584);
     var request = NativeLaunchBuilder.ParseHostArguments(hostSpec.Arguments);
     Equal(7584, request.Port);
     var wsl = NativeLaunchBuilder.BuildWslSpec(request, @"C:\Windows\System32");
@@ -1060,7 +464,7 @@ Check("dashboard service is launched inside its validated WSL directory", () =>
         [
             "--distribution", "Ubuntu", "--cd", "/home/tester/ui-my-cli",
             "--exec", "/bin/bash", "-lc",
-            $"export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT=7584 UI_MY_CLI_NATIVE_INSTANCE_ID={dashboardInstanceId}; exec node server/index.js",
+            "export NVM_DIR=\"$HOME/.nvm\"; if [ -s \"$NVM_DIR/nvm.sh\" ]; then . \"$NVM_DIR/nvm.sh\"; nvm use --silent 20 >/dev/null; fi; export NODE_ENV=production PORT=7584; exec node server/index.js",
         ],
         wsl.Arguments);
     Throws<ArgumentException>(() =>
@@ -1170,31 +574,6 @@ Check("terminal wheel scrolling moves and clamps the viewport", () =>
     Equal(0, TerminalViewportScroll.Next(1, 100, 1));
     Equal(100, TerminalViewportScroll.Next(99, 100, -1));
     Equal(0, TerminalViewportScroll.Next(0, -1, -1));
-});
-
-Check("terminal clipboard shortcuts preserve shell control keys", () =>
-{
-    Equal(
-        TerminalClipboardAction.CopySelection,
-        TerminalClipboardShortcut.Resolve(NativePlatform.Windows, "C", true, false, true, false));
-    Equal(
-        TerminalClipboardAction.CopyAll,
-        TerminalClipboardShortcut.Resolve(NativePlatform.Windows, "A", true, false, true, false));
-    Equal(
-        TerminalClipboardAction.None,
-        TerminalClipboardShortcut.Resolve(NativePlatform.Windows, "A", true, false, false, false));
-    Equal(
-        TerminalClipboardAction.CopySelection,
-        TerminalClipboardShortcut.Resolve(NativePlatform.MacOS, "C", false, true, false, false));
-    Equal(
-        TerminalClipboardAction.CopyAll,
-        TerminalClipboardShortcut.Resolve(NativePlatform.MacOS, "A", false, true, false, false));
-    Equal(
-        TerminalClipboardAction.Paste,
-        TerminalClipboardShortcut.Resolve(NativePlatform.Windows, "Insert", false, false, true, false));
-    Equal(
-        TerminalClipboardAction.Paste,
-        TerminalClipboardShortcut.Resolve(NativePlatform.Windows, "V", true, false, false, false));
 });
 
 Check("cold-day grouping includes only idle sessions at the selected boundary", () =>
@@ -1398,20 +777,6 @@ static void Throws<TException>(Action action) where TException : Exception
     throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
 }
 
-static string ThrowsMessage<TException>(Action action) where TException : Exception
-{
-    try
-    {
-        action();
-    }
-    catch (TException ex)
-    {
-        return ex.Message;
-    }
-
-    throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
-}
-
 static async Task ThrowsAsync<TException>(Func<Task> action) where TException : Exception
 {
     try
@@ -1499,27 +864,13 @@ static async Task VerifyReleaseArtifactsAsync(
     }
 }
 
-sealed class StaticHttpHandler(
-    HttpStatusCode statusCode,
-    string body,
-    Action<HttpResponseMessage>? configure = null) : HttpMessageHandler
+sealed class StaticHttpHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
 {
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
-    {
-        var response = new HttpResponseMessage(statusCode)
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new HttpResponseMessage(statusCode)
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
-        };
-        configure?.Invoke(response);
-        return Task.FromResult(response);
-    }
-}
-
-sealed class CallbackHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> callback) : HttpMessageHandler
-{
-    protected override Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request,
-        CancellationToken cancellationToken) => Task.FromResult(callback(request));
+        });
 }

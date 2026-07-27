@@ -6,31 +6,6 @@ namespace CodexNative;
 public sealed class DashboardServiceManager : IDisposable
 {
     private Process? _process;
-    private int? _ownedPort;
-    private string? _ownedInstanceId;
-    private string? _controlCapability;
-    private long? _processStartTimeUnixMilliseconds;
-
-    public int? OwnedPort => OwnsRunningService ? _ownedPort : null;
-    public int? OwnedProcessId => OwnsRunningService ? _process?.Id : null;
-    public string? OwnedInstanceId => OwnsRunningService ? _ownedInstanceId : null;
-    public DashboardServiceOwnership? Ownership =>
-        OwnsRunningService
-        && _process is not null
-        && _ownedPort is { } port
-        && _ownedInstanceId is { } instanceId
-        && _controlCapability is { } controlCapability
-        && _processStartTimeUnixMilliseconds is { } processStartTime
-            ? new DashboardServiceOwnership(
-                _process.Id,
-                processStartTime,
-                port,
-                instanceId,
-                controlCapability)
-            : null;
-
-    public bool OwnsServiceOnPort(int port) =>
-        OwnsRunningService && _ownedPort == port;
 
     public bool OwnsRunningService
     {
@@ -56,7 +31,7 @@ public sealed class DashboardServiceManager : IDisposable
         }
     }
 
-    public DashboardServiceOwnership EnsureStarted(
+    public void EnsureStarted(
         NativePlatform platform,
         string hostExecutable,
         string distribution,
@@ -66,20 +41,16 @@ public sealed class DashboardServiceManager : IDisposable
     {
         if (_process is { HasExited: false })
         {
-            return Ownership
-                ?? throw new InvalidOperationException("Dashboard service ownership is incomplete.");
+            return;
         }
 
-        var instanceId = Guid.NewGuid().ToString("D");
-        var controlCapability = DashboardServiceOwnership.CreateControlCapability();
         var spec = NativeLaunchBuilder.DashboardService(
             platform,
             hostExecutable,
             distribution,
             dashboardDirectory,
             nodeExecutable,
-            port,
-            instanceId);
+            port);
         var startInfo = new ProcessStartInfo
         {
             // LaunchServices can tear down children that remain attached to a
@@ -106,7 +77,6 @@ public sealed class DashboardServiceManager : IDisposable
         {
             startInfo.Environment[variable.Key] = variable.Value;
         }
-        startInfo.Environment[DashboardServiceOwnership.ControlCapabilityEnvironmentVariable] = controlCapability;
 
         _process?.Dispose();
         var process = new Process
@@ -150,63 +120,9 @@ public sealed class DashboardServiceManager : IDisposable
             throw;
         }
         _process = process;
-        _ownedPort = port;
-        _ownedInstanceId = instanceId;
-        _controlCapability = controlCapability;
-        _processStartTimeUnixMilliseconds = new DateTimeOffset(process.StartTime.ToUniversalTime())
-            .ToUnixTimeMilliseconds();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         NativeLog.Write($"Dashboard service host started with PID {process.Id}.");
-        return Ownership
-            ?? throw new InvalidOperationException("Dashboard service ownership could not be recorded.");
-    }
-
-    public bool TryAdopt(
-        NativePlatform platform,
-        string targetDirectory,
-        DashboardServiceOwnership ownership)
-    {
-        if (!ownership.IsStructurallyValid()) return false;
-        Process? process = null;
-        try
-        {
-            process = Process.GetProcessById(ownership.ProcessId);
-            var executable = process.MainModule?.FileName;
-            var startTime = new DateTimeOffset(process.StartTime.ToUniversalTime())
-                .ToUnixTimeMilliseconds();
-            if (!NativeInstallProcessPolicy.IsVerifiedOwnedDashboardService(
-                    platform,
-                    targetDirectory,
-                    ownership.ProcessId,
-                    process.Id,
-                    executable,
-                    ownership.ProcessStartTimeUnixMilliseconds,
-                    startTime))
-            {
-                process.Dispose();
-                return false;
-            }
-
-            process.EnableRaisingEvents = true;
-            _process?.Dispose();
-            _process = process;
-            _ownedPort = ownership.Port;
-            _ownedInstanceId = ownership.InstanceId;
-            _controlCapability = ownership.ControlCapability;
-            _processStartTimeUnixMilliseconds = ownership.ProcessStartTimeUnixMilliseconds;
-            process = null;
-            NativeLog.Write($"Re-adopted dashboard service host PID {ownership.ProcessId} on port {ownership.Port}.");
-            return true;
-        }
-        catch (Exception ex) when (ex is ArgumentException
-            or InvalidOperationException
-            or System.ComponentModel.Win32Exception)
-        {
-            process?.Dispose();
-            NativeLog.Write($"Dashboard service re-adoption rejected: {ex.Message}");
-            return false;
-        }
     }
 
     public bool StopOwnedService()
@@ -251,24 +167,8 @@ public sealed class DashboardServiceManager : IDisposable
     private void ClearOwnedProcess(Process process)
     {
         if (ReferenceEquals(_process, process))
-        {
             _process = null;
-            _ownedPort = null;
-            _ownedInstanceId = null;
-            _controlCapability = null;
-            _processStartTimeUnixMilliseconds = null;
-        }
         process.Dispose();
-    }
-
-    public void ReleaseOwnership()
-    {
-        _process?.Dispose();
-        _process = null;
-        _ownedPort = null;
-        _ownedInstanceId = null;
-        _controlCapability = null;
-        _processStartTimeUnixMilliseconds = null;
     }
 
     public void Dispose()
@@ -276,6 +176,6 @@ public sealed class DashboardServiceManager : IDisposable
         // The dashboard service owns the persistent WSL PTYs. Detaching the
         // native UI must not kill that service or its Codex processes; the
         // next native/browser client can reconnect to the same loopback port.
-        ReleaseOwnership();
+        _process?.Dispose();
     }
 }

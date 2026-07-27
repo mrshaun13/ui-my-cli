@@ -849,28 +849,6 @@ html, body, #root {
   min-width: 0;
 }
 
-.rename-editor {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.rename-error {
-  color: var(--red);
-  font-family: var(--font-mono);
-  font-size: calc(9px * var(--text-scale));
-  font-weight: 500;
-  line-height: 1.25;
-}
-
-.agent-rename-input[aria-invalid="true"],
-.controlbar-rename-input[aria-invalid="true"],
-.preview-rename-input[aria-invalid="true"] {
-  border-color: var(--red);
-}
-
 /* ─── Status Badge ──────────────────────────────────────────────────── */
 .status-badge {
   display: inline-flex;
@@ -1096,10 +1074,6 @@ html, body, #root {
   padding: 4px 8px;
   outline: none;
   width: 200px;
-}
-
-.controlbar-rename-editor {
-  flex: 0 1 260px;
 }
 
 .controlbar-actions {

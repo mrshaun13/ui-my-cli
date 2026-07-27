@@ -82,7 +82,7 @@ npm run pm2:stop</code></pre>
       <li>Codex conversation and tool history from <code>~/.codex/sessions/**/*.jsonl</code>.</li>
       <li>Codex CLI and VS Code extension sessions from the same local Codex thread store.</li>
       <li>Devin session metadata and message history from Devin <code>sessions.db</code>.</li>
-      <li>Dashboard metadata for external headless titles/hide state and Devin archive state.</li>
+      <li>Provider-scoped dashboard metadata for title overrides and archive state.</li>
     </ul>
 
     <h2>What It Changes</h2>
@@ -92,17 +92,13 @@ npm run pm2:stop</code></pre>
       <li>Existing Devin sessions resume with <code>devin --resume &lt;session-id&gt; --respect-workspace-trust false</code>.</li>
       <li>Codex archive and restore call <code>codex archive</code> and <code>codex unarchive</code>.</li>
       <li>Devin archive and restore use dashboard-local archive metadata.</li>
-      <li>Native Codex renames persist through the Codex app-server; external headless titles remain dashboard-local.</li>
-      <li>Devin renames update Devin's session title field.</li>
-      <li>New titles must contain 1–160 characters and no control characters.</li>
+      <li>Codex session renames are dashboard-local; Devin renames update Devin's session title field.</li>
     </ul>
 
     <h2>Native Desktop</h2>
     <ul>
       <li>New Codex terminals keep the project selected in the native chooser, including sessions using the shared app-server control plane.</li>
-      <li>A healthy pending provider terminal survives UI detach/restart until its session persists, its PTY exits, or it is explicitly canceled.</li>
-      <li>Plain terminal drag selects text under TUI mouse reporting; hold <code>Alt</code> to send raw mouse input. Copy with <code>Ctrl+C</code> on Windows/Linux or <code>Cmd+C</code> on macOS.</li>
-      <li>The terminal <strong>Copy all</strong> action copies the complete scrollback.</li>
+      <li>A healthy blank Codex terminal remains open until its first prompt persists the session; only a terminal that exits is dismissed.</li>
       <li>Compatible Codex terminals can switch Adaptive routing on or off without restarting the persistent PTY.</li>
       <li>The microphone button records for up to two minutes, transcribes locally with checksum-verified Whisper and Silero VAD models, and inserts text without submitting it.</li>
     </ul>

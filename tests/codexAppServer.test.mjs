@@ -60,22 +60,3 @@ test('the first Adaptive prompt rejects missing working directories and thread I
     /did not create an Adaptive thread/,
   )
 })
-
-test('app-server response errors preserve protocol codes for capability handling', async () => {
-  const appServer = new CodexAppServer({ executable: () => 'codex' })
-  const rejected = new Promise((resolve, reject) => {
-    appServer.pending.set(42, { resolve, reject, timeout: setTimeout(() => {}, 1000) })
-  })
-
-  appServer._onMessage(JSON.stringify({
-    id: 42,
-    error: { code: -32601, message: 'Method not found', data: { method: 'thread/name/set' } },
-  }))
-
-  await assert.rejects(
-    rejected,
-    error => error.code === -32601
-      && error.data.method === 'thread/name/set'
-      && error.message === 'Method not found',
-  )
-})

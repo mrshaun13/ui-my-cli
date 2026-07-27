@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using CodexNative.Core;
 
 namespace CodexNative;
 
@@ -32,13 +31,7 @@ public class DashboardSession
         || Source.Contains("transcript", StringComparison.OrdinalIgnoreCase);
 
     [JsonIgnore]
-    public string DisplayTitle => SessionDisplayText.CanonicalTitleOrDisplay(Title);
-
-    [JsonIgnore]
-    public string DisplayPrompt => SessionDisplayText.PromptPreview(LastUserPrompt);
-
-    [JsonIgnore]
-    public string CompactDisplayTitle => SessionTitleDisplay.Compact(DisplayTitle);
+    public string DisplayTitle => string.IsNullOrWhiteSpace(Title) ? "Untitled session" : Title;
 
     [JsonIgnore]
     public string DisplayMeta => $"{Project} · {LastActivityAgo}".Trim(' ', '·');
@@ -60,12 +53,6 @@ public sealed class DashboardRepo
     public string WorkingDir { get; set; } = string.Empty;
     public string Project { get; set; } = string.Empty;
     public override string ToString() => string.IsNullOrWhiteSpace(Project) ? WorkingDir : Project;
-}
-
-public sealed class SessionRenameResult
-{
-    public string Id { get; set; } = string.Empty;
-    public string Title { get; set; } = string.Empty;
 }
 
 public sealed class DashboardStats
@@ -104,18 +91,6 @@ public sealed class DashboardStatus
     public int ActivePtys { get; set; }
     public long Uptime { get; set; }
     public List<ProviderStatus> Providers { get; set; } = [];
-}
-
-public sealed class DashboardCompatibilityStatus
-{
-    public bool Ok { get; set; }
-    public int ApiVersion { get; set; }
-    public string Service { get; set; } = string.Empty;
-    public string? InstanceId { get; set; }
-    public int ActivePtys { get; set; }
-    public int BlockingSessions { get; set; }
-    public bool ActivityCheckOk { get; set; }
-    public bool ControlAuthenticated { get; set; }
 }
 
 public sealed class ProviderStatus

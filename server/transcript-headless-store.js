@@ -12,7 +12,6 @@ const dashboardStore = require('./dashboard-store');
 
 const ID_PREFIX = 'tp:';
 const DEFAULT_CONTEXT = 200000;
-const IN_FLIGHT_RUN_STALE_SEC = 24 * 60 * 60;
 
 function formatDuration(sec) {
   if (!Number.isFinite(sec) || sec < 0) sec = 0;
@@ -220,13 +219,10 @@ function normalizeRecord(record, overrides = dashboardStore.titleOverrides(), hi
     || run?.prompt
     || null;
 
-  let activityStatus = 'idle';
-  if (run && !run.endedAt && exitCode == null
-    && Math.floor(Date.now() / 1000) - lastActivityAt <= IN_FLIGHT_RUN_STALE_SEC) {
-    activityStatus = 'active';
-  }
-  else if (exitCode === 0) activityStatus = 'finished';
-  const state = hidden ? 'archived' : activityStatus;
+  let state = 'idle';
+  if (hidden) state = 'archived';
+  else if (run && !run.endedAt && exitCode == null) state = 'active';
+  else if (exitCode === 0) state = 'finished';
 
   return {
     id,
@@ -242,7 +238,6 @@ function normalizeRecord(record, overrides = dashboardStore.titleOverrides(), hi
     approvalMode: runtime.spawn_args?.includes('--dangerously-bypass-approvals-and-sandbox') ? 'danger-full-access' : 'never',
     memoryMode: null,
     status: state,
-    ...(hidden ? { activityStatus } : {}),
     snippet: truncate(snippet),
     firstUserPrompt: truncate(run?.prompt),
     lastUserPrompt: truncate(run?.prompt),

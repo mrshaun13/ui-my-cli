@@ -14,17 +14,6 @@ public sealed record NativeReleaseInfo(
     NativeReleaseAsset Package,
     NativeReleaseAsset Checksum);
 
-public sealed record GitHubReleaseQueryResult(
-    NativeReleaseInfo? Release,
-    string? EntityTag,
-    bool NotModified);
-
-public sealed class GitHubRateLimitException(DateTimeOffset retryAt)
-    : HttpRequestException($"GitHub update checks are rate limited. Try again after {retryAt.ToLocalTime():g}.")
-{
-    public DateTimeOffset RetryAt { get; } = retryAt;
-}
-
 public sealed class GitHubReleaseClient : IDisposable
 {
     public const long MaximumPackageBytes = 500L * 1024 * 1024;
@@ -42,7 +31,7 @@ public sealed class GitHubReleaseClient : IDisposable
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
 
-    public GitHubReleaseClient(HttpClient? httpClient = null, string? accessToken = null)
+    public GitHubReleaseClient(HttpClient? httpClient = null)
     {
         _ownsClient = httpClient is null;
         _http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
@@ -50,13 +39,6 @@ public sealed class GitHubReleaseClient : IDisposable
             _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CodexNative", "1.0"));
         _http.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        accessToken ??= Environment.GetEnvironmentVariable("CODEX_NATIVE_GITHUB_TOKEN");
-        if (!string.IsNullOrWhiteSpace(accessToken))
-        {
-            if (accessToken.Length > 512 || accessToken.Any(char.IsControl))
-                throw new ArgumentException("The explicitly supplied GitHub token is invalid.", nameof(accessToken));
-            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-        }
     }
 
     public async Task<NativeReleaseInfo?> GetLatestAsync(
@@ -64,33 +46,12 @@ public sealed class GitHubReleaseClient : IDisposable
         string runtimeIdentifier,
         CancellationToken cancellationToken = default)
     {
-        var release = (await QueryLatestAsync(runtimeIdentifier, null, cancellationToken)).Release;
-        return release is not null && release.Version > currentVersion ? release : null;
-    }
-
-    public async Task<GitHubReleaseQueryResult> QueryLatestAsync(
-        string runtimeIdentifier,
-        string? entityTag = null,
-        CancellationToken cancellationToken = default)
-    {
         ValidateRuntimeIdentifier(runtimeIdentifier);
-        using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseApi);
-        if (!string.IsNullOrWhiteSpace(entityTag))
-        {
-            if (SanitizeEntityTag(entityTag) is not { } parsedTag)
-                throw new ArgumentException("Cached GitHub entity tag is invalid.", nameof(entityTag));
-            request.Headers.IfNoneMatch.Add(parsedTag);
-        }
-        using var response = await _http.SendAsync(
-            request,
+        using var response = await _http.GetAsync(
+            LatestReleaseApi,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotModified)
-            return new GitHubReleaseQueryResult(null, entityTag, NotModified: true);
-        if (response.StatusCode == HttpStatusCode.NotFound)
-            return new GitHubReleaseQueryResult(null, response.Headers.ETag?.ToString(), NotModified: false);
-        if (IsRateLimited(response))
-            throw new GitHubRateLimitException(RateLimitReset(response));
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode();
 
         var metadata = await ReadBoundedAsync(
@@ -100,13 +61,12 @@ public sealed class GitHubReleaseClient : IDisposable
             cancellationToken);
         using var json = JsonDocument.Parse(metadata, new JsonDocumentOptions { MaxDepth = 32 });
         var root = json.RootElement;
-        if (root.TryGetProperty("draft", out var draft) && draft.GetBoolean())
-            return new GitHubReleaseQueryResult(null, response.Headers.ETag?.ToString(), NotModified: false);
-        if (root.TryGetProperty("prerelease", out var prerelease) && prerelease.GetBoolean())
-            return new GitHubReleaseQueryResult(null, response.Headers.ETag?.ToString(), NotModified: false);
+        if (root.TryGetProperty("draft", out var draft) && draft.GetBoolean()) return null;
+        if (root.TryGetProperty("prerelease", out var prerelease) && prerelease.GetBoolean()) return null;
 
         var tag = RequiredString(root, "tag_name", 64);
         var version = NativeVersion.Parse(tag);
+        if (version <= currentVersion) return null;
 
         var packageName = PackageAssetName(runtimeIdentifier, version);
         var checksumName = $"{packageName}.sha256";
@@ -139,40 +99,7 @@ public sealed class GitHubReleaseClient : IDisposable
         var displayName = root.TryGetProperty("name", out var nameElement)
             ? Truncate(nameElement.GetString() ?? tag, 128)
             : tag;
-        return new GitHubReleaseQueryResult(
-            new NativeReleaseInfo(version, tag, displayName, releasePage, package, checksum),
-            response.Headers.ETag?.ToString(),
-            NotModified: false);
-    }
-
-    private static bool IsRateLimited(HttpResponseMessage response)
-    {
-        if (response.StatusCode == HttpStatusCode.TooManyRequests) return true;
-        if (response.StatusCode != HttpStatusCode.Forbidden) return false;
-        return response.Headers.Contains("X-RateLimit-Reset")
-            || response.Headers.TryGetValues("X-RateLimit-Remaining", out var remaining)
-            && remaining.Any(value => value == "0");
-    }
-
-    private static DateTimeOffset RateLimitReset(HttpResponseMessage response)
-    {
-        var now = DateTimeOffset.UtcNow;
-        DateTimeOffset? candidate = null;
-        if (response.Headers.TryGetValues("X-RateLimit-Reset", out var resetValues)
-            && long.TryParse(resetValues.FirstOrDefault(), out var resetSeconds))
-        {
-            try { candidate = DateTimeOffset.FromUnixTimeSeconds(resetSeconds); }
-            catch (ArgumentOutOfRangeException) { }
-        }
-        candidate ??= response.Headers.RetryAfter?.Date;
-        if (candidate is null && response.Headers.RetryAfter?.Delta is { } retryDelay)
-            candidate = now + retryDelay;
-        candidate ??= now.AddMinutes(15);
-        return candidate <= now
-            ? now.AddMinutes(1)
-            : candidate > now.AddDays(1)
-                ? now.AddDays(1)
-                : candidate.Value;
+        return new NativeReleaseInfo(version, tag, displayName, releasePage, package, checksum);
     }
 
     public static string PackageAssetName(string runtimeIdentifier, NativeVersion version)
@@ -186,13 +113,6 @@ public sealed class GitHubReleaseClient : IDisposable
         && uri.Scheme == Uri.UriSchemeHttps
         && uri.IsDefaultPort
         && TrustedDownloadHosts.Contains(uri.Host);
-
-    public static EntityTagHeaderValue? SanitizeEntityTag(string? entityTag)
-    {
-        if (string.IsNullOrWhiteSpace(entityTag)) return null;
-        if (entityTag.Length > 256 || entityTag.Any(char.IsControl)) return null;
-        return EntityTagHeaderValue.TryParse(entityTag, out var parsedTag) ? parsedTag : null;
-    }
 
     private static void ValidateRuntimeIdentifier(string runtimeIdentifier)
     {
