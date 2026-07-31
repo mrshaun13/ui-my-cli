@@ -21,6 +21,8 @@ const path = require('path');
 
 const ROOT  = path.resolve(__dirname, '..');
 const CHECK = process.argv.includes('--check');
+const AGENTS_MANAGED_START = '<!-- adopt-multi-agent-dev:start -->';
+const AGENTS_MANAGED_END = '<!-- adopt-multi-agent-dev:end -->';
 
 // ── File helpers ──────────────────────────────────────────────────────────────
 
@@ -30,6 +32,26 @@ function read(rel) {
 
 function tryRead(rel, fallback = '') {
   try { return read(rel); } catch { return fallback; }
+}
+
+function preserveManagedAgentsBlock(generated) {
+  const existing = tryRead('AGENTS.md');
+  const startMatches = [...existing.matchAll(new RegExp(`^${AGENTS_MANAGED_START}$`, 'gm'))];
+  const endMatches = [...existing.matchAll(new RegExp(`^${AGENTS_MANAGED_END}$`, 'gm'))];
+
+  if (startMatches.length === 0 && endMatches.length === 0) return generated;
+  if (startMatches.length !== 1 || endMatches.length !== 1) {
+    throw new Error('AGENTS.md must contain exactly one complete managed workflow block');
+  }
+
+  const start = startMatches[0].index;
+  const end = endMatches[0].index;
+  if (start > end) {
+    throw new Error('AGENTS.md managed workflow block markers are reversed');
+  }
+
+  const block = existing.slice(start, end + AGENTS_MANAGED_END.length);
+  return `${generated.trimEnd()}\n\n${block}\n`;
 }
 
 // ── Extractors ────────────────────────────────────────────────────────────────
@@ -939,8 +961,9 @@ ${nonGoals}
 ## Docs System
 
 All documentation (\`README.md\`, \`docs/api.md\`, \`docs/architecture.md\`,
-\`AGENTS.md\`) is auto-generated. **Never edit those files directly** — your
-changes will be overwritten on the next \`npm run docs\` run.
+\`AGENTS.md\`) is auto-generated. **Never edit those files directly**, except
+for the marker-bounded multi-agent workflow block in \`AGENTS.md\`; changes
+outside that block will be overwritten on the next \`npm run docs\` run.
 
 To update docs:
 1. Change source code or edit \`scripts/doc-prose.js\` (for prose/descriptions)
@@ -949,6 +972,11 @@ To update docs:
 
 The pre-commit hook runs \`npm run docs:check\` and blocks the commit if any
 generated doc is out of sync with the current source.
+
+The marker-bounded multi-agent workflow block is maintained separately and
+preserved verbatim by the documentation generator. Duplicate, incomplete, or
+reversed boundary markers make generation fail instead of silently discarding
+instructions.
 
 ## Testing (Playwright E2E)
 
@@ -990,7 +1018,7 @@ const OUTPUTS = [
   { rel: 'README.md',              build: buildReadme       },
   { rel: 'docs/api.md',            build: buildApiDoc       },
   { rel: 'docs/architecture.md',   build: buildArchitectureDoc },
-  { rel: 'AGENTS.md',              build: buildAgentsMd     },
+  { rel: 'AGENTS.md',              build: d => preserveManagedAgentsBlock(buildAgentsMd(d)) },
 ];
 
 // ── Main ──────────────────────────────────────────────────────────────────────

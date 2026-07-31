@@ -190,8 +190,9 @@ User-facing native (and related server) work is not done when the feature compil
 ## Docs System
 
 All documentation (`README.md`, `docs/api.md`, `docs/architecture.md`,
-`AGENTS.md`) is auto-generated. **Never edit those files directly** — your
-changes will be overwritten on the next `npm run docs` run.
+`AGENTS.md`) is auto-generated. **Never edit those files directly**, except
+for the marker-bounded multi-agent workflow block in `AGENTS.md`; changes
+outside that block will be overwritten on the next `npm run docs` run.
 
 To update docs:
 1. Change source code or edit `scripts/doc-prose.js` (for prose/descriptions)
@@ -200,6 +201,11 @@ To update docs:
 
 The pre-commit hook runs `npm run docs:check` and blocks the commit if any
 generated doc is out of sync with the current source.
+
+The marker-bounded multi-agent workflow block is maintained separately and
+preserved verbatim by the documentation generator. Duplicate, incomplete, or
+reversed boundary markers make generation fail instead of silently discarding
+instructions.
 
 ## Testing (Playwright E2E)
 
