@@ -268,3 +268,57 @@ await browser.close();
 ```
 
 Save as a `.mjs` file and run with `node script.mjs`. Playwright is installed as a project devDependency so `import 'playwright'` resolves correctly.
+
+<!-- adopt-multi-agent-dev:start -->
+## Multi-agent development workflow
+
+### Project purpose
+- Goal: Maintain a local browser dashboard and native Windows/macOS client for managing Codex and Devin sessions through shared REST/WebSocket contracts, persistent server-owned PTYs, status, search, analytics, and session metadata.
+- Primary users/operators: The documented primary user and operator is the single developer who built the project; downstream systems include local Codex and Devin state, PM2, browser clients, and the Avalonia desktop application.
+- Lifecycle stage: Production overall, with the native frontend documented as a development preview and macOS documented as experimental.
+- Canonical evidence: `README.md`, `docs/architecture.md`, `native/README.md`, `.github/workflows/native-release.yml`, and `Directory.Build.props`.
+- Unresolved: Confirm whether the production classification includes the preview native/macOS surfaces when that distinction would change task risk or release verification.
+
+### Orchestration
+- The main thread owns requirements, the plan, shared state, integration, user decisions, and the final response.
+- Delegate only concrete, bounded, independently useful work with explicit inputs, outputs, ownership, and verification.
+- Prefer parallel read-only discovery. Use one writer for overlapping files; multiple writers require isolated worktrees and disjoint ownership.
+- Wait for required agent results and reconcile them against repository evidence before integrating changes.
+
+### Agent selection
+- Start in the main thread and activate only the roles justified by safe independent workstreams.
+- Use the built-in explorer for read-heavy architecture, dependency, and command discovery.
+- Use the built-in worker for assigned implementation after acceptance criteria and file ownership are clear.
+- Use the project reviewer after material changes and for high-risk analysis.
+- Project concurrency cap: 4 spawned threads because recurring read/review lanes exist for server/provider code, browser code, native code, and tests/release documentation. Normal tasks should use only 2–3 active agents.
+- Conditional roles:
+  - `test_analyst`: activate for changes involving tests, PTYs, session state, browser/native integration, or CI.
+  - `release_reviewer`: activate for native, updater, packaging, release workflow, server/native contract, or release-facing documentation changes.
+  - `security_reviewer`: activate for process or PTY launch, mutable endpoints, provider storage, downloads, updates, external URLs, filesystem handling, or another trust boundary.
+- API compatibility remains part of reviewer/release-reviewer scope; UI accessibility remains a task-specific review prompt until project-specific tooling justifies a separate role.
+- Archivist: not installed because Git history, generated architecture/API documentation, the changelog, tests, and tracked plans currently reconstruct state without a second canonical memory layer.
+
+### Ownership and result contract
+- Do not let agents edit the same files concurrently without isolated worktrees and explicit ownership.
+- Workers return: result, evidence, files touched, checks run, confidence, and open questions.
+- Reviewers return exactly one verdict—`PASS`, `REPAIR`, `REPLAN`, or `ESCALATE`—followed by concrete evidence and the smallest next action.
+- Read-only specialists do not start services, inspect real session contents, access secrets, or take external actions.
+
+### Verification and stopping
+- Always run `node scripts/generate-docs.js --check` and `node scripts/check-native-version.mjs` for workflow or generated-instruction changes.
+- The dependency-free baseline is `node --test tests/adaptiveRouter.test.mjs tests/codexControlPlane.test.mjs tests/codexShortcuts.test.mjs tests/nativeLauncher.test.mjs tests/pendingSessionTracker.test.mjs tests/unit/codex-executable.test.js tests/unit/codex-token-activity.test.js tests/unit/codex-usage-rollups.test.js`.
+- Run the broader Node, Playwright, .NET, build, packaging, or artifact checks only when the task requires them and their documented dependencies and isolation conditions are satisfied. Playwright targets a live PM2 service and real persistent PTYs; never treat it as an isolated default check.
+- Limit review/repair to two loops.
+- Stop when acceptance criteria pass, the loop limit or budget is reached, a new failure appears, or user input or permission is required.
+- Preserve unrelated and pre-existing changes.
+
+### Production safety
+- Begin production workflow adoption in audit-only mode and write only after explicit approval on a clean non-default feature branch or isolated worktree.
+- Record the baseline commit and safe check results before adoption and compare the same checks after adoption.
+- Keep the adoption commit limited to `AGENTS.md` and `.codex` workflow configuration and role profiles; add a canonical memory layer only after separate approval and evidence that the archivist gate passes.
+- Do not modify application code, dependencies, tests, CI, deployment, infrastructure, migrations, generated artifacts, or production data during workflow adoption.
+- Do not push, merge, deploy, release, access production data, or alter production systems without separate explicit authorization.
+- Roll back the isolated adoption commit with `git revert --no-edit` followed by the verified adoption commit hash reported in the adoption handoff.
+- Treat rollback as tracked-file recovery; compare the original safe checks afterward and inspect any generated or ignored artifacts separately.
+- Do not begin product development under the adopted workflow until the user accepts the verified adoption commit. Rollback cannot undo later decisions or commits influenced by these instructions, and later edits can make a revert conflict.
+<!-- adopt-multi-agent-dev:end -->
