@@ -12,18 +12,20 @@
  *   - Tab persistence survives page reload
  */
 import { test, expect } from '@playwright/test';
-import { ensureServerRunning, waitForSessions, SELECTORS } from './helpers.js';
+import { assertIsolationGuards, ensureIsolatedServer, waitForSessions, SELECTORS } from './helpers.js';
 
-test.beforeAll(ensureServerRunning);
+test.beforeAll(ensureIsolatedServer);
+test.afterAll(assertIsolationGuards);
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('agent-dash:codex:cold-days', '3650');
+    localStorage.setItem('agent-dash:codex:visible-repos', JSON.stringify({
+      alpha: 'active',
+      beta: 'active',
+    }));
   });
 });
-
-// Screenshot directory
-const SCREENSHOT_DIR = '/tmp/tab-test-screenshots';
 
 test.describe('Tab bar tests', () => {
 
@@ -33,12 +35,10 @@ test.describe('Tab bar tests', () => {
     // Tab bar should be empty (no tab items)
     const tabCount = await page.locator(SELECTORS.tabItem).count();
     expect(tabCount).toBe(0);
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/01-empty-tab-bar.png`, fullPage: true });
   });
 
   test('clicking a session opens a tab', async ({ page }) => {
     await waitForSessions(page);
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/02a-before-click.png`, fullPage: true });
 
     // Click the first session card
     await page.locator(SELECTORS.agentCard).first().click();
@@ -50,7 +50,7 @@ test.describe('Tab bar tests', () => {
 
     // Terminal should be visible
     await expect(page.locator(SELECTORS.terminal)).toBeVisible({ timeout: 10000 });
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/02b-tab-opened.png`, fullPage: true });
+    await expect(page.locator(SELECTORS.terminal)).toContainText('Synthetic terminal');
   });
 
   test('clicking same session does not create duplicate tab', async ({ page }) => {
@@ -62,23 +62,14 @@ test.describe('Tab bar tests', () => {
     await expect(page.locator(SELECTORS.tabActive)).toBeVisible({ timeout: 5000 });
 
     await firstCard.click();
-    await page.waitForTimeout(500);
-
-    // Still only one tab
-    const tabCount = await page.locator(SELECTORS.tabItem).count();
-    expect(tabCount).toBe(1);
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/03-no-duplicate.png`, fullPage: true });
+    await expect(page.locator(SELECTORS.tabItem)).toHaveCount(1);
   });
 
   test('clicking a second session opens a second tab', async ({ page }) => {
     await waitForSessions(page);
 
     const cards = page.locator(SELECTORS.agentCard);
-    const cardCount = await cards.count();
-    if (cardCount < 2) {
-      test.skip();
-      return;
-    }
+    await expect(cards).toHaveCount(2);
 
     // Open first session
     await cards.nth(0).click();
@@ -92,7 +83,6 @@ test.describe('Tab bar tests', () => {
     const activeTabCount = await page.locator(SELECTORS.tabActive).count();
     expect(activeTabCount).toBe(1);
 
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/04-two-tabs.png`, fullPage: true });
   });
 
   test('clicking X closes a tab', async ({ page }) => {
@@ -112,7 +102,6 @@ test.describe('Tab bar tests', () => {
 
     // Splash should show (no active tab) — check for both loaded and loading states
     await expect(page.locator('.splash, .splash-loading')).toBeVisible({ timeout: 3000 });
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/05-tab-closed.png`, fullPage: true });
   });
 
   test('info icon toggles preview mode', async ({ page }) => {
@@ -121,7 +110,6 @@ test.describe('Tab bar tests', () => {
     // Open a session in terminal mode
     await page.locator(SELECTORS.agentCard).first().click();
     await expect(page.locator(SELECTORS.terminal)).toBeVisible({ timeout: 10000 });
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/06a-terminal-mode.png`, fullPage: true });
 
     // Click the info icon on the active tab to toggle to preview mode
     const activeTab = page.locator(SELECTORS.tabActive);
@@ -132,23 +120,17 @@ test.describe('Tab bar tests', () => {
 
     // Tab should show preview indicator (blue underline)
     await expect(page.locator('.tab-item.tab-active.tab-preview')).toBeVisible();
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/06b-preview-mode.png`, fullPage: true });
 
     // Click the info icon again to toggle back to terminal
     await page.locator(SELECTORS.tabActive).locator(SELECTORS.tabInsightsBtn).click();
     await expect(page.locator(SELECTORS.terminal)).toBeVisible({ timeout: 5000 });
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/06c-back-to-terminal.png`, fullPage: true });
   });
 
   test('switching tabs preserves terminals', async ({ page }) => {
     await waitForSessions(page);
 
     const cards = page.locator(SELECTORS.agentCard);
-    const cardCount = await cards.count();
-    if (cardCount < 2) {
-      test.skip();
-      return;
-    }
+    await expect(cards).toHaveCount(2);
 
     // Open first session
     await cards.nth(0).click();
@@ -174,7 +156,6 @@ test.describe('Tab bar tests', () => {
     const activeTitle = await page.locator(SELECTORS.tabActive).locator('.tab-title').textContent();
     expect(activeTitle).toBe(firstTabTitle);
 
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/07-tab-switching.png`, fullPage: true });
   });
 
   test('logo click shows splash, tabs remain', async ({ page }) => {
@@ -198,7 +179,6 @@ test.describe('Tab bar tests', () => {
     const activeCount = await page.locator(SELECTORS.tabActive).count();
     expect(activeCount).toBe(0);
 
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/08-splash-with-tabs.png`, fullPage: true });
   });
 
   test('tab persistence survives page reload', async ({ page }) => {
@@ -220,18 +200,13 @@ test.describe('Tab bar tests', () => {
     const restoredTitle = await page.locator(SELECTORS.tabItem).locator('.tab-title').textContent();
     expect(restoredTitle).toBe(tabTitle);
 
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/09-tab-persisted.png`, fullPage: true });
   });
 
   test('closing the active tab activates the next tab', async ({ page }) => {
     await waitForSessions(page);
 
     const cards = page.locator(SELECTORS.agentCard);
-    const cardCount = await cards.count();
-    if (cardCount < 2) {
-      test.skip();
-      return;
-    }
+    await expect(cards).toHaveCount(2);
 
     // Open two sessions
     await cards.nth(0).click();
@@ -241,7 +216,6 @@ test.describe('Tab bar tests', () => {
 
     // Activate the first tab
     await page.locator(SELECTORS.tabItem).first().click();
-    await page.waitForTimeout(300);
     const firstTitle = await page.locator(SELECTORS.tabActive).locator('.tab-title').textContent();
 
     // Close the first (active) tab
@@ -255,7 +229,6 @@ test.describe('Tab bar tests', () => {
     const remainingTitle = await page.locator(SELECTORS.tabActive).locator('.tab-title').textContent();
     expect(remainingTitle).not.toBe(firstTitle);
 
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/10-close-activates-next.png`, fullPage: true });
   });
 
 });

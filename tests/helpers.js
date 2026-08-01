@@ -2,66 +2,68 @@
  * Test helpers — shared utilities for all Playwright tests.
  *
  * Usage in a spec file:
- *   import { ensureServerRunning, waitForSessions, SELECTORS } from './helpers.js';
- *   test.beforeAll(ensureServerRunning);
+ *   import { ensureIsolatedServer, waitForSessions, SELECTORS } from './helpers.js';
+ *   test.beforeAll(ensureIsolatedServer);
  */
 import { request } from '@playwright/test';
 
-const PORT = process.env.PORT || 7575;
-const BASE_URL = `http://localhost:${PORT}`;
+const PORT = process.env.PLAYWRIGHT_PORT || 4174;
+const BASE_URL = `http://127.0.0.1:${PORT}`;
+const EXPECTED_CODEX_IDS = ['synthetic-codex-1', 'synthetic-codex-2'];
+
+async function readJsonWithRetry(ctx, path) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await ctx.get(`${BASE_URL}${path}`, { timeout: 5000 });
+      if (!response.ok()) throw new Error(`${path} returned ${response.status()}`);
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError;
+}
 
 /**
- * Call in test.beforeAll() to verify the dashboard is reachable.
- * Fails fast with a helpful message instead of cryptic timeouts.
+ * Fail fast unless Playwright owns the processless synthetic dashboard.
  */
-export async function ensureServerRunning() {
+export async function ensureIsolatedServer() {
   const ctx = await request.newContext();
   try {
-    let res;
-    let lastErr;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        res = await ctx.get(`${BASE_URL}/api/status`, { timeout: 5000 });
-        lastErr = null;
-        break;
-      } catch (err) {
-        lastErr = err;
-        await new Promise(resolve => setTimeout(resolve, 250));
-      }
+    const status = await readJsonWithRetry(ctx, '/api/status');
+    if (status.fixtureMode !== 'isolated-playwright') {
+      throw new Error(`Refusing non-isolated dashboard mode: ${status.fixtureMode || 'missing'}`);
     }
-    if (lastErr) throw lastErr;
-    if (!res.ok()) {
-      throw new Error(`Server returned ${res.status()}`);
+    const counters = status.isolation || {};
+    for (const key of ['blockedLoads', 'filesystemWatches', 'processSpawns', 'realStateReads']) {
+      if (counters[key] !== 0) throw new Error(`Isolation counter ${key} is ${counters[key]}`);
     }
-    // Also verify there are sessions to test against. Retry because full-suite
-    // parallel startup can briefly contend with synchronous SQLite analytics.
-    let sessRes;
-    lastErr = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        sessRes = await ctx.get(`${BASE_URL}/api/sessions`, { timeout: 5000 });
-        lastErr = null;
-        break;
-      } catch (err) {
-        lastErr = err;
-        await new Promise(resolve => setTimeout(resolve, 250));
-      }
-    }
-    if (lastErr) throw lastErr;
-    const sessions = await sessRes.json();
-    if (!Array.isArray(sessions) || sessions.length === 0) {
-      console.warn(
-        'WARNING: No active sessions found. Tests that interact with ' +
-        'session cards will be skipped. Run `codex` to create a session.'
-      );
+
+    const sessions = await readJsonWithRetry(ctx, '/api/sessions');
+    const ids = sessions.map(session => session.id).sort();
+    if (JSON.stringify(ids) !== JSON.stringify(EXPECTED_CODEX_IDS)) {
+      throw new Error(`Unexpected synthetic sessions: ${ids.join(', ')}`);
     }
   } catch (err) {
     throw new Error(
-      `Dashboard not reachable at ${BASE_URL}.\n` +
-      `Start it first:  npm run pm2:start\n` +
-      `Or check:        pm2 list\n` +
+      `Isolated dashboard verification failed at ${BASE_URL}.\n` +
       `Original error:  ${err.message}`
     );
+  } finally {
+    await ctx.dispose();
+  }
+}
+
+export async function assertIsolationGuards() {
+  const ctx = await request.newContext();
+  try {
+    const status = await readJsonWithRetry(ctx, '/api/status');
+    const counters = status.isolation || {};
+    for (const key of ['blockedLoads', 'filesystemWatches', 'processSpawns', 'realStateReads']) {
+      if (counters[key] !== 0) throw new Error(`Isolation counter ${key} is ${counters[key]}`);
+    }
   } finally {
     await ctx.dispose();
   }
@@ -90,6 +92,7 @@ export const SELECTORS = {
   controlbar: '.controlbar',
   searchInput: '.sidebar-search-input',
   newSessionFab: '.new-session-fab',
+  newSessionDropdown: '.new-session-dropdown',
   statusIcon: '.agent-status-icon',
   topbarLogo: '.topbar-logo',
   terminal: '.xterm',

@@ -24,31 +24,68 @@ const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
 
-const { attachClient, killPty, isPtyActive, isPtyControlPlane, activePtySessions, spawnNewSession, rekeyPty, validatePty } = require('./pty-manager');
-const { DEFAULT_PROVIDER_ID, getProvider, safeListProviders } = require('./providers');
-const { isTrustedLaunchRequest, launchNativeDashboard, nativeLaunchCapability } = require('./native-launcher');
-const { CodexAppServer } = require('./codex-app-server');
-const { wantsCodexControlPlane, tryStartCodexControlPlane } = require('./codex-control-plane');
-const { trackPendingSession } = require('./pending-session-tracker');
-
-const PORT = parseInt(process.env.PORT || '7575', 10);
 // v5 passes the user-selected working root explicitly to remote Codex TUIs.
 // Native clients must not reuse a v4 service whose shared app-server causes
 // new sessions to inherit the dashboard checkout.
 const API_VERSION = 5;
-const IS_DEV = process.env.NODE_ENV !== 'production';
-const CLIENT_DIST = path.resolve(__dirname, '..', 'client', 'dist');
+
+function createProductionRuntime() {
+  const ptyManager = require('./pty-manager');
+  const providerRegistry = require('./providers');
+  const nativeLauncher = require('./native-launcher');
+  const { CodexAppServer } = require('./codex-app-server');
+  const controlPlane = require('./codex-control-plane');
+  const { trackPendingSession } = require('./pending-session-tracker');
+  const codexAppServer = new CodexAppServer({
+    executable: () => providerRegistry.getProvider('codex').codexExecutable(),
+  });
+
+  return {
+    ...ptyManager,
+    ...providerRegistry,
+    ...nativeLauncher,
+    ...controlPlane,
+    trackPendingSession,
+    codexAppServer,
+  };
+}
+
+function createDashboardServer({
+  runtime = createProductionRuntime(),
+  isDev = process.env.NODE_ENV !== 'production',
+  clientDist = path.resolve(__dirname, '..', 'client', 'dist'),
+} = {}) {
+const {
+  attachClient,
+  killPty,
+  isPtyActive,
+  isPtyControlPlane,
+  activePtySessions,
+  spawnNewSession,
+  rekeyPty,
+  validatePty,
+  DEFAULT_PROVIDER_ID,
+  getProvider,
+  safeListProviders,
+  isTrustedLaunchRequest,
+  launchNativeDashboard,
+  nativeLaunchCapability,
+  wantsCodexControlPlane,
+  tryStartCodexControlPlane,
+  trackPendingSession,
+  codexAppServer,
+} = runtime;
+const IS_DEV = isDev;
+const CLIENT_DIST = clientDist;
 
 // Server-side map of pending temp keys → real session UUIDs.
 // Populated when the background rekey poll detects the real ID.
 // Used by the DELETE handler so archiving a pending session targets the right ID.
 const pendingToReal = new Map();
+const pendingTrackers = new Set();
 
 const app = express();
 const server = http.createServer(app);
-const codexAppServer = new CodexAppServer({
-  executable: () => getProvider('codex').codexExecutable(),
-});
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
@@ -65,6 +102,9 @@ app.use(cors({
 // ─── REST API ─────────────────────────────────────────────────────────────────
 
 app.get('/api/status', (_req, res) => {
+  const runtimeStatus = typeof runtime.statusMetadata === 'function'
+    ? runtime.statusMetadata()
+    : {};
   res.json({
     ok: true,
     apiVersion: API_VERSION,
@@ -72,6 +112,7 @@ app.get('/api/status', (_req, res) => {
     providers: safeListProviders(),
     activePtys: activePtySessions().length,
     uptime: Math.floor(process.uptime()),
+    ...runtimeStatus,
   });
 });
 
@@ -222,7 +263,8 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
     // A new Codex TUI does not persist its thread until the first turn starts.
     // Keep a healthy pending terminal alive indefinitely: poll quickly for the
     // first three minutes, then back off until it registers or actually exits.
-    trackPendingSession({
+    let tracker = null;
+    tracker = trackPendingSession({
       findSessionId: () => {
         const excluded = new Set(before);
         const providerPrefix = `${provider.id}:`;
@@ -233,6 +275,7 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
       },
       isTerminalActive: () => isPtyActive(provider.id, tempKey),
       onRegistered: realId => {
+        pendingTrackers.delete(tracker);
         pendingToReal.set(pendingKey(provider.id, tempKey), realId);
         if (rekeyPty(provider.id, tempKey, realId)) {
           console.log(`[${provider.id}:create] re-keyed ${tempKey.slice(0, 20)}… → ${realId.slice(0, 8)}…`);
@@ -241,12 +284,14 @@ app.post(['/api/:providerId/sessions/create', '/api/sessions/create'], providerR
         broadcastSessions(provider.id);
       },
       onTerminalEnded: () => {
+        pendingTrackers.delete(tracker);
         console.warn(`[${provider.id}:create] pending terminal ${tempKey.slice(0, 20)}… exited before registering`);
         broadcastPendingExpired(provider.id, tempKey);
       },
       onPollError: error =>
         console.warn(`[${provider.id}:create] pending re-key poll failed: ${error.message}`),
     });
+    pendingTrackers.add(tracker);
 
     res.json({ tempKey, controlPlane: Boolean(remoteEndpoint) });
   } catch (err) {
@@ -530,6 +575,14 @@ function broadcastLatestPrompt(providerId) {
 function watchProvider(provider) {
   let debounceTimer = null;
   const watchers = [];
+  const stop = () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+    for (const watcher of watchers) {
+      try { watcher.close(); } catch { /* ignore */ }
+    }
+    watchers.length = 0;
+  };
   function onDbChange() {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
@@ -543,7 +596,7 @@ function watchProvider(provider) {
     paths = provider.watchPaths ? provider.watchPaths() : [];
   } catch (err) {
     console.warn(`[${provider.id}:watch] disabled:`, err.message);
-    return watchers;
+    return { stop };
   }
 
   for (const p of paths) {
@@ -555,7 +608,7 @@ function watchProvider(provider) {
       }
     }
   }
-  return watchers;
+  return { stop };
 }
 
 wss.on('connection', async (ws, req) => {
@@ -655,75 +708,146 @@ wss.on('connection', async (ws, req) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`\nAgent Dashboard running at http://localhost:${PORT}`);
-  if (IS_DEV) {
-    console.log(`Client dev server: http://localhost:5173`);
-  }
-  console.log(`Press Ctrl+C to stop.\n`);
-  validatePty();
-  const dbWatchers = safeListProviders().flatMap(info => {
-    try {
-      return watchProvider(getProvider(info.id));
-    } catch {
-      return [];
+let listening = false;
+let closingPromise = null;
+let providerWatches = [];
+
+function listen({
+  port = parseInt(process.env.PORT || '7575', 10),
+  host = '127.0.0.1',
+  validatePtyOnStart = false,
+  watchProviders = false,
+} = {}) {
+  if (listening) return Promise.reject(new Error('Dashboard server is already listening'));
+
+  return new Promise((resolve, reject) => {
+    const onError = error => reject(error);
+    server.once('error', onError);
+    server.listen(port, host, () => {
+      server.off('error', onError);
+      listening = true;
+
+      if (validatePtyOnStart) validatePty();
+      if (watchProviders) {
+        providerWatches = safeListProviders().map(info => {
+          try {
+            return watchProvider(getProvider(info.id));
+          } catch {
+            return { stop() {} };
+          }
+        });
+      }
+
+      resolve(server.address());
+    });
+  });
+}
+
+function close() {
+  if (closingPromise) return closingPromise;
+  if (!listening) return Promise.resolve();
+
+  closingPromise = (async () => {
+    for (const tracker of pendingTrackers) {
+      try { tracker.stop(); } catch { /* ignore */ }
     }
+    pendingTrackers.clear();
+
+    for (const watcher of providerWatches) watcher.stop();
+    providerWatches = [];
+
+    for (const entry of activePtySessions()) {
+      try { killPty(entry.providerId, entry.sessionId); } catch { /* ignore */ }
+    }
+
+    if (codexAppServer && typeof codexAppServer.stop === 'function') {
+      codexAppServer.stop();
+    }
+
+    for (const client of wss.clients) {
+      try { client.close(1001, 'Server shutting down'); } catch { /* ignore */ }
+      try { client.terminate(); } catch { /* ignore */ }
+    }
+    for (const clients of statusClients.values()) clients.clear();
+    statusClients.clear();
+
+    await new Promise(resolve => wss.close(() => resolve()));
+    await new Promise((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve());
+    });
+    listening = false;
+  })().finally(() => {
+    closingPromise = null;
   });
 
-  // ── Graceful shutdown ─────────────────────────────────────────────────────
+  return closingPromise;
+}
+
+return {
+  app,
+  server,
+  wss,
+  listen,
+  close,
+  address: () => server.address(),
+};
+}
+
+if (require.main === module) {
+  const dashboard = createDashboardServer({ runtime: createProductionRuntime() });
+  const port = parseInt(process.env.PORT || '7575', 10);
   let shuttingDown = false;
+
+  dashboard.server.on('error', err => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\nPort ${port} is already in use.`);
+      console.error('Set PORT=<number> to use a different port.\n');
+    } else {
+      console.error('Server error:', err);
+    }
+    process.exit(1);
+  });
+
+  dashboard.listen({
+    port,
+    host: '127.0.0.1',
+    validatePtyOnStart: true,
+    watchProviders: true,
+  }).then(() => {
+    console.log(`\nAgent Dashboard running at http://localhost:${port}`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Client dev server: http://localhost:5173');
+    }
+    console.log('Press Ctrl+C to stop.\n');
+  }).catch(error => {
+    console.error(`[startup] ${error.message}`);
+    process.exit(1);
+  });
+
   function shutdown(signal) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n[shutdown] ${signal} received — cleaning up…`);
 
-    // Close fs.watch watchers
-    for (const w of dbWatchers) {
-      try { w.close(); } catch { /* ignore */ }
-    }
-
-    // Kill all PTY processes
-    for (const entry of activePtySessions()) {
-      try { killPty(entry.providerId, entry.sessionId); } catch { /* ignore */ }
-    }
-
-    codexAppServer.stop();
-
-    // Close all WebSocket clients
-    for (const clients of statusClients.values()) {
-      for (const client of clients) {
-        try { client.close(1001, 'Server shutting down'); } catch { /* ignore */ }
-      }
-      clients.clear();
-    }
-    statusClients.clear();
-
-    // Close WebSocket server
-    wss.close(() => {
-      // Close HTTP server
-      server.close(() => {
-        console.log('[shutdown] clean exit');
-        process.exit(0);
-      });
-    });
-
-    // Force exit after 5s if graceful shutdown stalls
-    setTimeout(() => {
+    const forceExit = setTimeout(() => {
       console.warn('[shutdown] forced exit after timeout');
       process.exit(1);
-    }, 5000).unref();
+    }, 5000);
+    forceExit.unref();
+
+    dashboard.close().then(() => {
+      clearTimeout(forceExit);
+      console.log('[shutdown] clean exit');
+      process.exit(0);
+    }).catch(error => {
+      clearTimeout(forceExit);
+      console.error(`[shutdown] ${error.message}`);
+      process.exit(1);
+    });
   }
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT',  () => shutdown('SIGINT'));
-});
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
 
-server.on('error', err => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`\nPort ${PORT} is already in use.`);
-    console.error(`Set PORT=<number> to use a different port.\n`);
-  } else {
-    console.error('Server error:', err);
-  }
-  process.exit(1);
-});
+module.exports = { API_VERSION, createDashboardServer, createProductionRuntime };

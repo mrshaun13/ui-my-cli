@@ -18,9 +18,10 @@ A browser dashboard for managing multiple local headless-agent sessions across C
 - `npm run postinstall` — `npm --prefix client ci`
 - `npm run docs` — `node scripts/generate-docs.js`
 - `npm run docs:check` — `node scripts/generate-docs.js --check`
-- `npm run test` — `npx playwright test`
+- `npm run test` — `npm run test:e2e:isolated`
+- `npm run test:e2e:isolated` — `npm run build && playwright test`
 - `npm run test:unit` — `node --test tests/unit/*.test.js`
-- `npm run test:smoke` — `npx playwright test tests/smoke.spec.js`
+- `npm run test:smoke` — `npm run build && playwright test tests/smoke.spec.js`
 - `npm run native:build` — `dotnet build native/CodexNative/CodexNative.csproj && dotnet build native/CodexNative.TerminalHost/CodexNative.TerminalHost.csproj && dotnet build native/CodexNative.SpeechHost/CodexNative.SpeechHost.csproj && dotnet build native/CodexNative.Updater/CodexNative.Updater.csproj`
 - `npm run native:version:check` — `node scripts/check-native-version.mjs`
 - `npm run native:test` — `dotnet run --project native/CodexNative.CommandTests/CodexNative.CommandTests.csproj`
@@ -190,8 +191,9 @@ User-facing native (and related server) work is not done when the feature compil
 ## Docs System
 
 All documentation (`README.md`, `docs/api.md`, `docs/architecture.md`,
-`AGENTS.md`) is auto-generated. **Never edit those files directly** — your
-changes will be overwritten on the next `npm run docs` run.
+`AGENTS.md`) is auto-generated. **Never edit those files directly**, except
+for the marker-bounded multi-agent workflow block in `AGENTS.md`; changes
+outside that block will be overwritten on the next `npm run docs` run.
 
 To update docs:
 1. Change source code or edit `scripts/doc-prose.js` (for prose/descriptions)
@@ -201,40 +203,45 @@ To update docs:
 The pre-commit hook runs `npm run docs:check` and blocks the commit if any
 generated doc is out of sync with the current source.
 
+The marker-bounded multi-agent workflow block is maintained separately and
+preserved verbatim by the documentation generator. Duplicate, incomplete, or
+reversed boundary markers make generation fail instead of silently discarding
+instructions.
+
 ## Testing (Playwright E2E)
 
-E2E tests use **Playwright** (Chromium only) and run against the **live PM2-managed server** on port 7575. There is no `webServer` block in the Playwright config — tests expect the dashboard to already be running. This matches the real production setup and avoids port conflicts with PM2.
+E2E tests use **Playwright** (Chromium only) against a processless synthetic dashboard on a dedicated loopback port. Playwright starts and stops the fixture server automatically. The fixture provides deterministic providers, sessions, analytics, previews, and terminal output without importing production databases, PTYs, provider CLIs, native launchers, or filesystem watchers.
 
 ### Prerequisites
 
-- Dashboard running via PM2: `npm run pm2:start` (or confirm with `pm2 list`)
-- At least one Codex CLI session must exist (run `codex` once) — default-provider tests interact with session cards
+- Project dependencies installed with `npm ci`
 - Playwright browsers installed: `npx playwright install chromium` (one-time setup)
+- No PM2 service or real Codex/Devin session is required
 
 ### Commands
 
 | Command | Description |
 |---------|-------------|
-| `npm test` | Run the full Playwright test suite |
-| `npm run test:smoke` | Run only the smoke tests (fastest sanity check) |
-| `npx playwright test <file>` | Run a single test file |
-| `npx playwright test --ui` | Open the interactive Playwright UI |
+| `npm test` | Build the client and run the isolated Playwright suite |
+| `npm run test:e2e:isolated` | Build the client and run the isolated Playwright suite explicitly |
+| `npm run test:smoke` | Build the client and run only the isolated smoke tests |
+| `npm run test:e2e:isolated -- --ui` | Open the isolated suite in Playwright UI mode |
 | `npx playwright show-report` | Open the last HTML test report |
 
 ### Gotchas & Pitfalls
 
-- **Server must be running first.** Tests do NOT start the server — they hit `localhost:7575` served by PM2. If the server is down, tests fail with a clear message: "Dashboard not reachable... Start it first: npm run pm2:start".
-- **Session cards arrive via WebSocket**, not in the initial HTML. The sidebar renders "No sessions found" until the provider-scoped `/ws/:providerId/status` WebSocket delivers the first `sessions` message (up to 3 seconds). Use `waitForSessions(page)` from `tests/helpers.js` instead of a bare `page.goto("/")` when you need session cards.
-- **After server code changes**, run `npm run pm2:restart` (not just `npm run build`). PM2 keeps the old process in memory.
-- **Port override:** Set `PORT=XXXX` before running tests if the server is on a non-default port. The Playwright config and helpers both read `process.env.PORT`.
+- **Never point Playwright at port 7575.** The config refuses the production port, starts the fixture with `reuseExistingServer: false`, and verifies the synthetic runtime marker and fixed session IDs before testing.
+- **Session cards arrive via WebSocket**, not in the initial HTML. The sidebar renders "No sessions found" until the provider-scoped `/ws/:providerId/status` WebSocket delivers the first `sessions` message from the fixture. Use `waitForSessions(page)` from `tests/helpers.js` instead of a bare `page.goto("/")` when you need session cards.
+- **Isolation guards are part of the contract.** The fixture fails if code imports `node-pty`, `better-sqlite3`, the real provider/PTY/native-launch modules, `child_process`, or filesystem watches.
+- **Port override:** Set `PLAYWRIGHT_PORT=XXXX` to change the isolated loopback port. Port 7575 is always rejected.
 - **Chromium only.** Firefox and WebKit are not installed. The Playwright config has a single `chromium` project. Run `npx playwright install` to add other browsers.
-- **Serial live-service tests.** Playwright intentionally uses one worker locally and in CI because the suite shares one PM2 service and persistent PTY state; parallel workers can race terminal and navigation assertions.
+- **Synthetic data only.** Tests must assert fixed synthetic session IDs and terminal output. Never add a fixture fallback that reads local provider state or resumes a real terminal.
 
 ### Writing New Tests
 
 - Put test files in `tests/` with the `.spec.js` extension.
-- Import helpers: `import { ensureServerRunning, waitForSessions, SELECTORS } from './helpers.js'`
-- Always call `test.beforeAll(ensureServerRunning)` — it validates the server is reachable and fails fast with a helpful message instead of cryptic connection timeouts.
+- Import helpers: `import { ensureIsolatedServer, assertIsolationGuards, waitForSessions, SELECTORS } from './helpers.js'`
+- Always call `test.beforeAll(ensureIsolatedServer)` and `test.afterAll(assertIsolationGuards)`.
 - Use `waitForSessions(page)` to navigate and wait for session cards to appear (handles the WebSocket timing automatically).
 - Use `SELECTORS` from helpers for consistent CSS selectors across all tests. If you add a new UI element, add its selector to `SELECTORS` so other tests can use it.
 - Failure screenshots are saved automatically to `test-results/` (gitignored).
@@ -243,22 +250,66 @@ E2E tests use **Playwright** (Chromium only) and run against the **live PM2-mana
 
 | File | Description |
 |------|-------------|
-| `playwright.config.js` | Playwright config — baseURL, reporter, project (Chromium) |
-| `tests/helpers.js` | Shared test utilities — `ensureServerRunning`, `waitForSessions`, `SELECTORS` |
+| `playwright.config.js` | Isolated Playwright server, baseURL, reporters, and Chromium project |
+| `tests/helpers.js` | Isolation verification, WebSocket session waiting, and shared selectors |
+| `tests/fixtures/` | Processless providers, terminal transport, launcher, and import/watch guards |
 | `tests/smoke.spec.js` | Smoke tests — server health, sidebar rendering, terminal open, search |
+| `tests/tabs.spec.js` | Two-session tab behavior, terminal persistence, preview, close, and reload coverage |
 
 ### Ad-Hoc Visual Testing
 
-For quick visual checks without writing a spec file, you can use Playwright's API directly via a one-off Node.js script. This is useful for debugging UI issues:
+Use `npm run test:e2e:isolated -- --ui` for interactive visual debugging. This keeps the browser attached to the guarded synthetic runtime and stores failure artifacts under `test-results/`.
 
-```js
-import { chromium } from 'playwright';
-const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage();
-await page.goto('http://localhost:7575');
-await page.waitForSelector('.agent-card', { timeout: 15000 });
-await page.screenshot({ path: '/tmp/dashboard.png', fullPage: true });
-await browser.close();
-```
+<!-- adopt-multi-agent-dev:start -->
+## Multi-agent development workflow
 
-Save as a `.mjs` file and run with `node script.mjs`. Playwright is installed as a project devDependency so `import 'playwright'` resolves correctly.
+### Project purpose
+- Goal: Maintain a local browser dashboard and native Windows/macOS client for managing Codex and Devin sessions through shared REST/WebSocket contracts, persistent server-owned PTYs, status, search, analytics, and session metadata.
+- Primary users/operators: The documented primary user and operator is the single developer who built the project; downstream systems include local Codex and Devin state, PM2, browser clients, and the Avalonia desktop application.
+- Lifecycle stage: Production overall, with the native frontend documented as a development preview and macOS documented as experimental.
+- Canonical evidence: `README.md`, `docs/architecture.md`, `native/README.md`, `.github/workflows/native-release.yml`, and `Directory.Build.props`.
+- Unresolved: Confirm whether the production classification includes the preview native/macOS surfaces when that distinction would change task risk or release verification.
+
+### Orchestration
+- The main thread owns requirements, the plan, shared state, integration, user decisions, and the final response.
+- Delegate only concrete, bounded, independently useful work with explicit inputs, outputs, ownership, and verification.
+- Prefer parallel read-only discovery. Use one writer for overlapping files; multiple writers require isolated worktrees and disjoint ownership.
+- Wait for required agent results and reconcile them against repository evidence before integrating changes.
+
+### Agent selection
+- Start in the main thread and activate only the roles justified by safe independent workstreams.
+- Use the built-in explorer for read-heavy architecture, dependency, and command discovery.
+- Use the built-in worker for assigned implementation after acceptance criteria and file ownership are clear.
+- Use the project reviewer after material changes and for high-risk analysis.
+- Project concurrency cap: 4 spawned threads because recurring read/review lanes exist for server/provider code, browser code, native code, and tests/release documentation. Normal tasks should use only 2–3 active agents.
+- Conditional roles:
+  - `test_analyst`: activate for changes involving tests, PTYs, session state, browser/native integration, or CI.
+  - `release_reviewer`: activate for native, updater, packaging, release workflow, server/native contract, or release-facing documentation changes.
+  - `security_reviewer`: activate for process or PTY launch, mutable endpoints, provider storage, downloads, updates, external URLs, filesystem handling, or another trust boundary.
+- API compatibility remains part of reviewer/release-reviewer scope; UI accessibility remains a task-specific review prompt until project-specific tooling justifies a separate role.
+- Archivist: not installed because Git history, generated architecture/API documentation, the changelog, tests, and tracked plans currently reconstruct state without a second canonical memory layer.
+
+### Ownership and result contract
+- Do not let agents edit the same files concurrently without isolated worktrees and explicit ownership.
+- Workers return: result, evidence, files touched, checks run, confidence, and open questions.
+- Reviewers return exactly one verdict—`PASS`, `REPAIR`, `REPLAN`, or `ESCALATE`—followed by concrete evidence and the smallest next action.
+- Read-only specialists do not start services, inspect real session contents, access secrets, or take external actions.
+
+### Verification and stopping
+- Always run `node scripts/generate-docs.js --check` and `node scripts/check-native-version.mjs` for workflow or generated-instruction changes.
+- The dependency-free baseline is `node --test tests/adaptiveRouter.test.mjs tests/codexControlPlane.test.mjs tests/codexShortcuts.test.mjs tests/nativeLauncher.test.mjs tests/pendingSessionTracker.test.mjs tests/unit/codex-executable.test.js tests/unit/codex-token-activity.test.js tests/unit/codex-usage-rollups.test.js`.
+- Run the broader Node, Playwright, .NET, build, packaging, or artifact checks only when the task requires them and their documented dependencies and isolation conditions are satisfied. The default Playwright suite is isolated: it starts a guarded synthetic dashboard on a dedicated loopback port and must never import provider databases, real PTYs, provider CLIs, native launchers, or filesystem watchers.
+- Limit review/repair to two loops.
+- Stop when acceptance criteria pass, the loop limit or budget is reached, a new failure appears, or user input or permission is required.
+- Preserve unrelated and pre-existing changes.
+
+### Production safety
+- Begin production workflow adoption in audit-only mode and write only after explicit approval on a clean non-default feature branch or isolated worktree.
+- Record the baseline commit and safe check results before adoption and compare the same checks after adoption.
+- Keep the adoption commit limited to `AGENTS.md` and `.codex` workflow configuration and role profiles; add a canonical memory layer only after separate approval and evidence that the archivist gate passes.
+- Do not modify application code, dependencies, tests, CI, deployment, infrastructure, migrations, generated artifacts, or production data during workflow adoption.
+- Do not push, merge, deploy, release, access production data, or alter production systems without separate explicit authorization.
+- Roll back the isolated adoption commit with `git revert --no-edit` followed by the verified adoption commit hash reported in the adoption handoff.
+- Treat rollback as tracked-file recovery; compare the original safe checks afterward and inspect any generated or ignored artifacts separately.
+- Do not begin product development under the adopted workflow until the user accepts the verified adoption commit. Rollback cannot undo later decisions or commits influenced by these instructions, and later edits can make a revert conflict.
+<!-- adopt-multi-agent-dev:end -->
