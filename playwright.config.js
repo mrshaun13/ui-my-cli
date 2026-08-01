@@ -4,36 +4,30 @@ import { defineConfig, devices } from '@playwright/test';
 /**
  * Playwright configuration for the Codex Dashboard.
  *
- * IMPORTANT: Tests run against the live PM2-managed server.
- * The dashboard must be running before you run tests.
- *
- * Quick start:
- *   pm2 list                     # confirm codex-dashboard is "online"
- *   npm test                     # run all tests
- *   npx playwright test <file>   # run a single test file
- *
- * If the server isn't running, start it:
- *   npm run pm2:start            # builds client + starts PM2
+ * Tests start a processless synthetic dashboard on a dedicated loopback port.
+ * The fixture rejects production providers, databases, PTYs, child processes,
+ * native launchers, and filesystem watchers.
  */
 
-const PORT = process.env.PORT || 7575;
+const PORT = Number(process.env.PLAYWRIGHT_PORT || 4174);
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535 || PORT === 7575) {
+  throw new Error(`Refusing unsafe Playwright port: ${process.env.PLAYWRIGHT_PORT || PORT}`);
+}
 
 export default defineConfig({
   testDir: './tests',
-  // The suite targets one persistent PM2 service and exercises shared PTY
-  // state. Parallel workers race those resources and create false terminal and
-  // navigation failures, so local and CI validation use the same serial model.
+  testMatch: '**/*.spec.js',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  workers: 1,
+  workers: 2,
   reporter: [
     ['list'],
     ['json', { outputFile: 'test-results/results.json' }],
   ],
 
   use: {
-    baseURL: `http://localhost:${PORT}`,
+    baseURL: `http://127.0.0.1:${PORT}`,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'off',
@@ -46,14 +40,14 @@ export default defineConfig({
     },
   ],
 
-  /* Do NOT use webServer — this project runs under PM2.
-   * Tests detect whether the server is reachable and fail fast with a
-   * clear message if it isn't (see tests/helpers.js).
-   *
-   * If you need to start the server manually:
-   *   npm run pm2:start
-   *
-   * Or without PM2:
-   *   npm run build && npm start
-   */
+  webServer: {
+    command: 'node --require ./tests/fixtures/isolation-guard.cjs tests/fixtures/isolated-dashboard-server.js',
+    url: `http://127.0.0.1:${PORT}/api/status`,
+    reuseExistingServer: false,
+    timeout: 30_000,
+    env: {
+      NODE_ENV: 'production',
+      PORT: String(PORT),
+    },
+  },
 });

@@ -305,47 +305,45 @@ module.exports = {
 
   testing: {
     overview:
-      'E2E tests use **Playwright** (Chromium only) and run against the **live PM2-managed server** on port 7575. ' +
-      'There is no `webServer` block in the Playwright config — tests expect the dashboard to already be running. ' +
-      'This matches the real production setup and avoids port conflicts with PM2.',
+      'E2E tests use **Playwright** (Chromium only) against a processless synthetic dashboard on a dedicated loopback port. ' +
+      'Playwright starts and stops the fixture server automatically. The fixture provides deterministic providers, sessions, ' +
+      'analytics, previews, and terminal output without importing production databases, PTYs, provider CLIs, native launchers, ' +
+      'or filesystem watchers.',
 
     prerequisites: [
-      'Dashboard running via PM2: `npm run pm2:start` (or confirm with `pm2 list`)',
-      'At least one Codex CLI session must exist (run `codex` once) — default-provider tests interact with session cards',
+      'Project dependencies installed with `npm ci`',
       'Playwright browsers installed: `npx playwright install chromium` (one-time setup)',
+      'No PM2 service or real Codex/Devin session is required',
     ],
 
     commands: {
-      'npm test':                           'Run the full Playwright test suite',
-      'npm run test:smoke':                 'Run only the smoke tests (fastest sanity check)',
-      'npx playwright test <file>':         'Run a single test file',
-      'npx playwright test --ui':           'Open the interactive Playwright UI',
+      'npm test':                           'Build the client and run the isolated Playwright suite',
+      'npm run test:e2e:isolated':          'Build the client and run the isolated Playwright suite explicitly',
+      'npm run test:smoke':                 'Build the client and run only the isolated smoke tests',
+      'npm run test:e2e:isolated -- --ui':  'Open the isolated suite in Playwright UI mode',
       'npx playwright show-report':         'Open the last HTML test report',
     },
 
     gotchas: [
-      '**Server must be running first.** Tests do NOT start the server — they hit `localhost:7575` ' +
-        'served by PM2. If the server is down, tests fail with a clear message: ' +
-        '"Dashboard not reachable... Start it first: npm run pm2:start".',
+      '**Never point Playwright at port 7575.** The config refuses the production port, starts the fixture with ' +
+        '`reuseExistingServer: false`, and verifies the synthetic runtime marker and fixed session IDs before testing.',
       '**Session cards arrive via WebSocket**, not in the initial HTML. The sidebar renders ' +
         '"No sessions found" until the provider-scoped `/ws/:providerId/status` WebSocket delivers the first `sessions` message ' +
-        '(up to 3 seconds). Use `waitForSessions(page)` from `tests/helpers.js` instead of ' +
+        'from the fixture. Use `waitForSessions(page)` from `tests/helpers.js` instead of ' +
         'a bare `page.goto("/")` when you need session cards.',
-      '**After server code changes**, run `npm run pm2:restart` (not just `npm run build`). ' +
-        'PM2 keeps the old process in memory.',
-      '**Port override:** Set `PORT=XXXX` before running tests if the server is on a non-default port. ' +
-        'The Playwright config and helpers both read `process.env.PORT`.',
+      '**Isolation guards are part of the contract.** The fixture fails if code imports `node-pty`, `better-sqlite3`, ' +
+        'the real provider/PTY/native-launch modules, `child_process`, or filesystem watches.',
+      '**Port override:** Set `PLAYWRIGHT_PORT=XXXX` to change the isolated loopback port. Port 7575 is always rejected.',
       '**Chromium only.** Firefox and WebKit are not installed. The Playwright config has a ' +
         'single `chromium` project. Run `npx playwright install` to add other browsers.',
-      '**Serial live-service tests.** Playwright intentionally uses one worker locally and in CI because ' +
-        'the suite shares one PM2 service and persistent PTY state; parallel workers can race terminal and navigation assertions.',
+      '**Synthetic data only.** Tests must assert fixed synthetic session IDs and terminal output. Never add a fixture fallback ' +
+        'that reads local provider state or resumes a real terminal.',
     ],
 
     writing_tests: [
       'Put test files in `tests/` with the `.spec.js` extension.',
-      'Import helpers: `import { ensureServerRunning, waitForSessions, SELECTORS } from \'./helpers.js\'`',
-      'Always call `test.beforeAll(ensureServerRunning)` — it validates the server is reachable ' +
-        'and fails fast with a helpful message instead of cryptic connection timeouts.',
+      'Import helpers: `import { ensureIsolatedServer, assertIsolationGuards, waitForSessions, SELECTORS } from \'./helpers.js\'`',
+      'Always call `test.beforeAll(ensureIsolatedServer)` and `test.afterAll(assertIsolationGuards)`.',
       'Use `waitForSessions(page)` to navigate and wait for session cards to appear ' +
         '(handles the WebSocket timing automatically).',
       'Use `SELECTORS` from helpers for consistent CSS selectors across all tests. ' +
@@ -354,24 +352,15 @@ module.exports = {
     ],
 
     file_inventory: {
-      'playwright.config.js':    'Playwright config — baseURL, reporter, project (Chromium)',
-      'tests/helpers.js':        'Shared test utilities — `ensureServerRunning`, `waitForSessions`, `SELECTORS`',
+      'playwright.config.js':    'Isolated Playwright server, baseURL, reporters, and Chromium project',
+      'tests/helpers.js':        'Isolation verification, WebSocket session waiting, and shared selectors',
+      'tests/fixtures/':         'Processless providers, terminal transport, launcher, and import/watch guards',
       'tests/smoke.spec.js':     'Smoke tests — server health, sidebar rendering, terminal open, search',
+      'tests/tabs.spec.js':      'Two-session tab behavior, terminal persistence, preview, close, and reload coverage',
     },
 
     ad_hoc_testing:
-      'For quick visual checks without writing a spec file, you can use Playwright\'s ' +
-      'API directly via a one-off Node.js script. This is useful for debugging UI issues:\n\n' +
-      '```js\n' +
-      'import { chromium } from \'playwright\';\n' +
-      'const browser = await chromium.launch({ headless: true });\n' +
-      'const page = await browser.newPage();\n' +
-      'await page.goto(\'http://localhost:7575\');\n' +
-      'await page.waitForSelector(\'.agent-card\', { timeout: 15000 });\n' +
-      'await page.screenshot({ path: \'/tmp/dashboard.png\', fullPage: true });\n' +
-      'await browser.close();\n' +
-      '```\n\n' +
-      'Save as a `.mjs` file and run with `node script.mjs`. Playwright is installed ' +
-      'as a project devDependency so `import \'playwright\'` resolves correctly.',
+      'Use `npm run test:e2e:isolated -- --ui` for interactive visual debugging. This keeps the browser ' +
+      'attached to the guarded synthetic runtime and stores failure artifacts under `test-results/`.',
   },
 };

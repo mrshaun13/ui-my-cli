@@ -101,8 +101,8 @@ Compatibility alias: `/ws/status` uses the default provider.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PORT` | `7575` | HTTP server port |
 | `NODE_ENV` | `—` | Set to `production` to enable static file serving from `client/dist/` |
+| `PORT` | `7575` | HTTP server port |
 | `SHELL` | `—` | Shell binary for the node-pty process (falls back to `/bin/zsh` on macOS, then `/bin/bash`, then `/bin/sh`) |
 | `CODEX_HOME` | `—` | Override the Codex home directory (default: `~/.codex`) |
 | `CODEX_STATE_DB_PATH` | `—` | Override the auto-detected Codex state SQLite database path |

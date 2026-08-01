@@ -1,13 +1,13 @@
 /**
  * Smoke tests — verify the dashboard loads and core UI elements render.
  *
- * These tests run against the live PM2-managed server on port 7575.
- * Prerequisites: `npm run pm2:start` (or `pm2 list` shows "online")
+ * These tests run against the processless synthetic Playwright dashboard.
  */
 import { test, expect } from '@playwright/test';
-import { ensureServerRunning, waitForSessions, SELECTORS } from './helpers.js';
+import { assertIsolationGuards, ensureIsolatedServer, waitForSessions, SELECTORS } from './helpers.js';
 
-test.beforeAll(ensureServerRunning);
+test.beforeAll(ensureIsolatedServer);
+test.afterAll(assertIsolationGuards);
 
 test.describe('Dashboard smoke tests', () => {
 
@@ -19,6 +19,7 @@ test.describe('Dashboard smoke tests', () => {
     expect(body.apiVersion).toBe(5);
     expect(body).toHaveProperty('activePtys');
     expect(body).toHaveProperty('uptime');
+    expect(body.fixtureMode).toBe('isolated-playwright');
   });
 
   test('sessions API returns an array', async ({ request }) => {
@@ -88,9 +89,16 @@ test.describe('Dashboard smoke tests', () => {
     await expect(page.locator(SELECTORS.topbar)).toBeVisible();
   });
 
-  test('new session FAB is visible', async ({ page }) => {
+  test('new session FAB lists synthetic repositories', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator(SELECTORS.newSessionFab)).toBeVisible();
+    const fab = page.locator(SELECTORS.newSessionFab);
+    await expect(fab).toBeVisible();
+    await fab.click();
+
+    const dropdown = page.locator(SELECTORS.newSessionDropdown);
+    await expect(dropdown).toBeVisible();
+    await expect(dropdown.getByRole('button', { name: 'alpha' })).toBeVisible();
+    await expect(dropdown.getByRole('button', { name: 'beta' })).toBeVisible();
   });
 
   test('provider switch toggles dashboard identity', async ({ page }) => {
@@ -153,6 +161,7 @@ test.describe('Dashboard smoke tests', () => {
 
     const terminal = page.locator(SELECTORS.terminal);
     await expect(terminal).toBeVisible({ timeout: 15000 });
+    await expect(terminal).toContainText('Synthetic terminal');
     const initialRows = await page.locator('.xterm-rows > div').count();
     expect(initialRows).toBeGreaterThan(0);
 
@@ -176,7 +185,7 @@ test.describe('Dashboard smoke tests', () => {
     expect(res.ok()).toBeTruthy();
     const stats = await res.json();
     const hasReasoningRows = stats.models.some(row => row.reasoningEffort && row.reasoningEffort !== 'unknown');
-    test.skip(!hasReasoningRows, 'No Codex reasoning telemetry rows available');
+    expect(hasReasoningRows).toBe(true);
 
     await waitForSessions(page);
     await expect(page.locator('.model-usage-table')).toBeVisible({ timeout: 15000 });
@@ -192,6 +201,7 @@ test.describe('Dashboard smoke tests', () => {
     await waitForSessions(page);
     await page.locator(SELECTORS.agentCard).first().click();
     await expect(page.locator(SELECTORS.terminal)).toBeVisible({ timeout: 20000 });
+    await expect(page.locator(SELECTORS.terminal)).toContainText('Synthetic terminal');
   });
 
   test('clicking status icon opens session preview', async ({ page }) => {
@@ -212,12 +222,10 @@ test.describe('Dashboard smoke tests', () => {
 
     const initialCount = await page.locator(SELECTORS.agentCard).count();
     await searchInput.fill('zzz_nonexistent_query_zzz');
-    await page.waitForTimeout(1500);
-    const filteredCount = await page.locator(SELECTORS.agentCard).count();
-    expect(filteredCount).toBeLessThanOrEqual(initialCount);
+    await expect(page.locator(SELECTORS.agentCard)).toHaveCount(0);
 
     // Clear search restores cards
     await searchInput.fill('');
-    await page.waitForTimeout(1500);
+    await expect(page.locator(SELECTORS.agentCard)).toHaveCount(initialCount);
   });
 });
